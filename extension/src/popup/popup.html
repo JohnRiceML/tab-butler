@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tab Butler</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        width: 320px;
+        margin: 0;
+        padding: 14px;
+        font-size: 14px;
+      }
+      h1 { font-size: 15px; font-weight: 500; margin: 0 0 10px; }
+      button {
+        width: 100%;
+        text-align: left;
+        padding: 9px 12px;
+        margin: 4px 0;
+        font-size: 14px;
+        border: 0.5px solid rgba(128, 128, 128, 0.4);
+        border-radius: 9px;
+        background: transparent;
+        cursor: pointer;
+      }
+      button:hover { background: rgba(128, 128, 128, 0.12); }
+      .muted { color: #888; font-size: 12px; margin: 8px 2px; }
+      #out { margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Tab Butler</h1>
+    <button id="group">Group my tabs</button>
+    <button id="advise">Suggest cleanup</button>
+    <button id="archive">Archive idle tabs now</button>
+    <button id="undo">Undo last</button>
+    <div class="muted" id="status">…</div>
+    <div id="out"></div>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

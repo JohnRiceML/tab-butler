@@ -1,0 +1,16 @@
+{
+  "name": "tab-butler-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tab Butler — MV3 Chrome/Edge extension. Local-first tab hygiene with an opt-in Claude smart layer.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
