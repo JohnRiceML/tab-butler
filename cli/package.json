@@ -1,0 +1,10 @@
+{
+  "name": "tab-butler-cli",
+  "version": "0.1.0",
+  "description": "List, kill, and Claude-clean localhost dev servers from the terminal.",
+  "type": "module",
+  "bin": {
+    "tab-butler": "./tab-butler.mjs",
+    "tb": "./tab-butler.mjs"
+  }
+}
