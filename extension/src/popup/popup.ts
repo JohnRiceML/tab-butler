@@ -2,17 +2,11 @@ import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes } from "../lib/heuristics";
 import type { AdviceResult, Message } from "../lib/types";
 
-/* ---------- tiny helpers ---------- */
-
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
-    c === "&" ? "&amp;"
-    : c === "<" ? "&lt;"
-    : c === ">" ? "&gt;"
-    : c === '"' ? "&quot;"
-    : "&#39;",
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
   );
 }
 function idleLabel(min: number | undefined): string {
@@ -33,11 +27,9 @@ const ICON: Record<string, string> = {
   search: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>`,
   sparkles: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6l1.9 5L19 9.4l-5.1 1.8L12 16l-1.9-4.8L5 9.4l5.1-1.8z"/></svg>`,
   undo: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a9 9 0 1 1-2 5.7"/><path d="M3 3v5h5"/></svg>`,
-  lock: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
   archive: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>`,
+  lock: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
 };
-
-/* ---------- view model ---------- */
 
 interface GroupVM { title: string; hex: string; count: number; active: boolean; idle: number | undefined; }
 interface ViewData {
@@ -130,13 +122,6 @@ function memCard(d: ViewData): string {
   </div></div>`;
 }
 
-function actionsRow(d: ViewData): string {
-  const archive = d.idleCount > 0
-    ? `<button class="btn primary" data-action="reclaim">${ICON.archive} Archive ${d.idleCount} idle tab${d.idleCount === 1 ? "" : "s"}</button>`
-    : `<span class="dim" style="align-self:center">No idle tabs to archive yet</span>`;
-  return `<div style="display:flex;gap:8px;align-items:center;margin-top:12px">${archive}<button class="btn" data-action="advise">${ICON.sparkles} Suggest cleanup</button></div>`;
-}
-
 function groupRow(g: GroupVM): string {
   const active = `<span class="status" style="color:var(--green)"><span class="dot" style="background:var(--green)"></span>Active</span>`;
   const idle = g.idle == null
@@ -155,23 +140,31 @@ function render(d: ViewData): string {
   <header class="row-flex between">
     <div class="row-flex gap10"><div class="sq" style="background:var(--blue)">${ICON.layout}</div><div class="brand">Tab Butler</div></div>
     <div class="row-flex gap12">
-      <span class="pill" title="Based on total system memory"><span class="dot" style="background:${d.pressure.color}"></span>${esc(d.pressure.label)}</span>
       <span class="muted" style="font-size:11.5px">Smart</span>
       <label class="switch"><input type="checkbox" id="smart" aria-label="Smart mode — use Claude for grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label>
     </div>
   </header>
+
+  <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search open tabs…" autocomplete="off"/><span class="kbd">↵ open</span></div>
+
+  <div class="toolbar" style="margin-top:10px">
+    <button class="btn" data-action="group">${ICON.layout} ${d.smart ? "Group with Claude" : "Group by site"}</button>
+    <button class="btn" data-action="advise">${ICON.sparkles} Suggest cleanup</button>
+    ${d.idleCount > 0 ? `<button class="btn" data-action="reclaim">${ICON.archive} Archive ${d.idleCount}</button>` : ""}
+  </div>
+
+  <div id="toparea"></div>
+
   ${memCard(d)}
-  ${actionsRow(d)}
-  <div class="sec"><h2>Tab groups</h2><button class="act" data-action="group">${d.smart ? "Group with Claude" : "Group by site"}</button></div>
+
+  <div class="sec"><h2>Tab groups</h2><span class="dim">${d.groups.length} group${d.groups.length === 1 ? "" : "s"}</span></div>
   ${groups}
-  <div class="sec"><h2>Search</h2></div>
-  <div class="search">${ICON.search}<input id="q" placeholder="Search open tabs…" autocomplete="off"/><span class="kbd">↵ open</span></div>
-  <div id="results"></div>
+
   <div class="footer-actions">
     <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
     <button class="btn" data-action="undo">${ICON.undo} Undo</button>
   </div>
-  <div class="note">${ICON.lock}<div>RAM is system-wide here (per-tab is impossible in a browser). For dev-server RAM &amp; kill, use the <code>tab-butler</code> CLI. Smart features are opt-in and send tab titles/URLs only.</div></div>`;
+  <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send tab titles/URLs only.</div></div>`;
 }
 
 /* ---------- actions ---------- */
@@ -184,6 +177,13 @@ function toast(msg: string) {
   toastEl.textContent = msg;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.textContent = ""), 3000) as unknown as number;
+}
+
+function top(): HTMLElement {
+  return document.getElementById("toparea")!;
+}
+function showLoader(msg: string) {
+  top().innerHTML = `<div class="loader"><span class="spin"></span>${esc(msg)}</div>`;
 }
 
 function send<T>(msg: Message): Promise<T> {
@@ -202,14 +202,13 @@ function recVerb(kind: string): string {
 
 function renderRecs(r: AdviceResult) {
   lastRecs = r;
-  const results = document.getElementById("results")!;
   if (!r.recommendations.length) {
-    results.innerHTML = `<div class="empty">${esc(r.summary || "No suggestions right now.")}</div>`;
+    top().innerHTML = `<div class="empty">${esc(r.summary || "No suggestions right now.")}</div>`;
     return;
   }
   const dot = (c: string) => (c === "high" ? "var(--green)" : c === "medium" ? "var(--amber)" : "var(--t2)");
-  results.innerHTML =
-    `<div class="dim" style="margin:8px 4px 6px">${esc(r.summary)}</div><div class="list">` +
+  top().innerHTML =
+    `<div class="dim" style="margin:4px 4px 6px">${esc(r.summary)}</div><div class="list">` +
     r.recommendations
       .map((rec, i) => `<div class="li"><div class="sq" style="background:#1c1f26;color:${dot(rec.confidence)}">${ICON.sparkles}</div>
         <div class="grow"><div class="name">${esc(rec.title)}</div><div class="sub">${esc(rec.detail)}</div></div>
@@ -237,10 +236,9 @@ async function dispatch(el: HTMLElement) {
         break;
       }
       case "advise": {
-        toast("Asking Claude…");
+        showLoader("Asking Claude…");
         const r = await send<AdviceResult>({ type: "ADVISE_NOW" });
         renderRecs(r);
-        toast("");
         break;
       }
       case "undo": {
@@ -251,9 +249,8 @@ async function dispatch(el: HTMLElement) {
       }
       case "archived": {
         const arch = ((await chrome.storage.local.get(CONFIG.ARCHIVE_KEY))[CONFIG.ARCHIVE_KEY] as { title: string }[] | undefined) ?? [];
-        const results = document.getElementById("results")!;
-        results.innerHTML = arch.length
-          ? `<div class="list" style="margin-top:8px">${arch.slice(0, 12).map((a) => `<div class="li"><div class="grow"><div class="name trunc">${esc(a.title || "(untitled)")}</div></div></div>`).join("")}</div>`
+        top().innerHTML = arch.length
+          ? `<div class="list">${arch.slice(0, 12).map((a) => `<div class="li"><div class="grow"><div class="name trunc">${esc(a.title || "(untitled)")}</div></div></div>`).join("")}</div>`
           : `<div class="empty">Nothing archived yet.</div>`;
         break;
       }
@@ -269,7 +266,7 @@ async function dispatch(el: HTMLElement) {
         const i = Number(el.dataset.idx);
         const rec = lastRecs?.recommendations[i];
         if (!rec) return;
-        toast(`Applying: ${rec.title}…`);
+        showLoader(`Applying: ${rec.title}…`);
         const res = await send<{ done: number; label: string }>({ type: "APPLY_REC", kind: rec.kind, tabIds: rec.tabIds });
         lastRecs!.recommendations.splice(i, 1);
         await refresh();
@@ -288,6 +285,7 @@ async function dispatch(el: HTMLElement) {
   } catch (err) {
     console.error("action failed", el.dataset.action, err);
     toast("Something went wrong — try again.");
+    if (el.dataset.action === "advise") top().innerHTML = `<div class="empty">Couldn't reach the suggestion service.</div>`;
   }
 }
 
@@ -296,14 +294,13 @@ async function onInput(e: Event) {
   const target = e.target as HTMLElement;
   if (target.id !== "q" || !IS_EXT) return;
   const q = (target as HTMLInputElement).value.trim().toLowerCase();
-  const results = document.getElementById("results")!;
-  if (!q) { results.innerHTML = ""; return; }
+  if (!q) { top().innerHTML = ""; return; }
   if (!searchTabs.length) searchTabs = await chrome.tabs.query({ currentWindow: true });
   const hits = searchTabs
     .filter((t) => (t.title ?? "").toLowerCase().includes(q) || (t.url ?? "").toLowerCase().includes(q))
     .slice(0, 8);
-  results.innerHTML = hits.length
-    ? `<div class="list" style="margin-top:8px">${hits.map((t) => `<div class="li click" role="button" tabindex="0" data-action="focus-tab" data-id="${t.id}"><div class="grow"><div class="name trunc">${esc(t.title ?? "")}</div><div class="sub trunc">${esc(t.url ?? "")}</div></div></div>`).join("")}</div>`
+  top().innerHTML = hits.length
+    ? `<div class="list">${hits.map((t) => `<div class="li click" role="button" tabindex="0" data-action="focus-tab" data-id="${t.id}"><div class="grow"><div class="name trunc">${esc(t.title ?? "")}</div><div class="sub trunc">${esc(t.url ?? "")}</div></div></div>`).join("")}</div>`
     : `<div class="empty">No matches.</div>`;
 }
 
@@ -324,7 +321,7 @@ function onKeydown(e: KeyboardEvent) {
   if (!IS_EXT) return;
   const target = e.target as HTMLElement;
   if (target.id === "q" && e.key === "Enter") {
-    const first = document.querySelector<HTMLElement>('#results [data-action="focus-tab"]');
+    const first = document.querySelector<HTMLElement>('#toparea [data-action="focus-tab"]');
     if (first) { e.preventDefault(); void dispatch(first); }
     return;
   }
