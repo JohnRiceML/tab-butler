@@ -1,6 +1,6 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, RECALL_SYSTEM } from "./prompts";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
@@ -92,4 +92,25 @@ export async function advise(tabs: chrome.tabs.Tab[]): Promise<AdviceResult> {
   });
   if (!res.ok) throw new Error(`advise: proxy ${res.status}`);
   return (await res.json()) as AdviceResult;
+}
+
+/* ---------- semantic recall (BYO-key) ---------- */
+
+export interface Candidate { title: string; url: string; source: string; }
+export interface RankedResult extends Candidate { why: string; }
+
+/** Claude-ranked search over a candidate set (open tabs + archive + history). */
+export async function recall(query: string, candidates: Candidate[]): Promise<RankedResult[]> {
+  const key = await getKey();
+  if (!key) throw new Error("no-key");
+  const numbered = candidates.map((c, i) => `${i}. ${c.title} | ${c.url}`).join("\n");
+  const raw = await callDirect<{ results: { i: number; why: string }[] }>(
+    key,
+    "claude-haiku-4-5",
+    RECALL_SYSTEM,
+    `Query: ${query}\n\nPages:\n${numbered}`,
+  );
+  return (raw.results || [])
+    .map((r) => (candidates[r.i] ? { ...candidates[r.i], why: r.why } : null))
+    .filter((x): x is RankedResult => x !== null);
 }

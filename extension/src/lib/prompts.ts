@@ -30,3 +30,12 @@ Principles:
 
 Return ONLY JSON, no prose:
 {"summary":string,"recommendations":[{"id":string,"kind":"archive"|"close_duplicates"|"close_localhost_tab"|"bookmark"|"regroup","title":string,"detail":string,"tabIds":number[],"confidence":"low"|"medium"|"high"}]}`;
+
+export const RECALL_SYSTEM = `You are a browsing-history search assistant. You are given a natural-language query and a numbered list of pages the user has open, archived, or recently visited (title | url). Return the pages that best match the user's INTENT, most relevant first — match by meaning, not just exact keywords (e.g. "pricing page" should match "Plans & Pricing — Stripe").
+
+- Return at most 8 results, best first. Omit weak matches; quality over quantity.
+- "why" is a short phrase on why it matches (e.g. "Stripe's pricing tiers").
+- Use only the candidate numbers you were given.
+
+Return ONLY JSON, no prose:
+{"results":[{"i":number,"why":string}]}`;

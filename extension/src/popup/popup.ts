@@ -1,5 +1,6 @@
 import { CONFIG } from "../lib/config";
-import { archivableTabs, idleMinutes } from "../lib/heuristics";
+import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
+import { recall, type RankedResult } from "../lib/claude-client";
 import type { AdviceResult, Message } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -166,7 +167,7 @@ function render(d: ViewData): string {
     </div>
   </header>
 
-  <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search open tabs…" autocomplete="off"/><span class="kbd">↵ open</span></div>
+  <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search tabs, archive &amp; history…" autocomplete="off"/><span class="kbd">↵ search</span></div>
 
   <div class="toolbar" style="margin-top:10px">
     <button class="btn" data-action="group">${ICON.layout} ${d.smart ? "Group with Claude" : "Group by site"}</button>
@@ -192,7 +193,7 @@ function render(d: ViewData): string {
     <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
     <button class="btn" data-action="undo">${ICON.undo} Undo</button>
   </div>
-  <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send tab titles/URLs only.</div></div>`;
+  <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send page titles + URLs to Claude — search also includes recent history.</div></div>`;
 }
 
 /* ---------- actions ---------- */
@@ -244,6 +245,55 @@ function renderRecs(r: AdviceResult) {
         <button class="act" data-action="dismiss-rec" data-idx="${i}" aria-label="Dismiss suggestion">✕</button></div>`)
       .join("") +
     `</div>`;
+}
+
+interface Cand { title: string; url: string; source: string; }
+async function gatherCandidates(): Promise<Cand[]> {
+  const seen = new Set<string>();
+  const out: Cand[] = [];
+  const add = (title: string | undefined, url: string | undefined, source: string) => {
+    if (!url || !url.startsWith("http")) return;
+    const k = normalizeUrl(url);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ title: title || url, url, source });
+  };
+  for (const t of await chrome.tabs.query({})) add(t.title, t.url, "open");
+  const arch = (await chrome.storage.local.get(CONFIG.ARCHIVE_KEY))[CONFIG.ARCHIVE_KEY] as { title: string; url: string }[] | undefined;
+  for (const a of arch ?? []) add(a.title, a.url, "archive");
+  if (chrome.history) {
+    for (const h of await chrome.history.search({ text: "", startTime: Date.now() - 30 * 86400000, maxResults: 120 })) {
+      add(h.title, h.url, "history");
+    }
+  }
+  return out.slice(0, 120);
+}
+
+function renderRecallResults(query: string, results: RankedResult[]) {
+  if (!results.length) {
+    top().innerHTML = `<div class="empty">Nothing found for “${esc(query)}”.</div>`;
+    return;
+  }
+  top().innerHTML =
+    `<div class="dim" style="margin:4px 4px 6px">Results for “${esc(query)}”</div><div class="list">` +
+    results
+      .map((r) => `<div class="li click" role="button" tabindex="0" data-action="open-url" data-url="${esc(r.url)}">
+        <div class="grow"><div class="name trunc">${esc(r.title)}</div><div class="sub trunc">${esc(r.why || r.url)}</div></div>
+        <span class="status muted">${esc(r.source)}</span></div>`)
+      .join("") +
+    `</div>`;
+}
+
+async function doRecall(query: string) {
+  showLoader("Searching everywhere…");
+  try {
+    const candidates = await gatherCandidates();
+    renderRecallResults(query, await recall(query, candidates));
+  } catch (err) {
+    top().innerHTML = (err as Error).message === "no-key"
+      ? `<div class="empty">Add your Anthropic key in Settings to search archive &amp; history.</div>`
+      : `<div class="empty">Search failed — try again.</div>`;
+  }
 }
 
 async function dispatch(el: HTMLElement) {
@@ -324,6 +374,20 @@ async function dispatch(el: HTMLElement) {
         toast("Key removed.");
         break;
       }
+      case "open-url": {
+        const url = el.dataset.url;
+        if (!url) return;
+        const all = await chrome.tabs.query({});
+        const existing = all.find((t) => t.url && normalizeUrl(t.url) === normalizeUrl(url));
+        if (existing?.id != null) {
+          await chrome.tabs.update(existing.id, { active: true });
+          if (existing.windowId != null) await chrome.windows.update(existing.windowId, { focused: true });
+        } else {
+          await chrome.tabs.create({ url });
+        }
+        window.close();
+        break;
+      }
     }
   } catch (err) {
     console.error("action failed", el.dataset.action, err);
@@ -369,8 +433,8 @@ function onKeydown(e: KeyboardEvent) {
   if (!IS_EXT) return;
   const target = e.target as HTMLElement;
   if (target.id === "q" && e.key === "Enter") {
-    const first = document.querySelector<HTMLElement>('#toparea [data-action="focus-tab"]');
-    if (first) { e.preventDefault(); void dispatch(first); }
+    const q = (target as HTMLInputElement).value.trim();
+    if (q) { e.preventDefault(); void doRecall(q); }
     return;
   }
   const el = target.closest<HTMLElement>("[data-action]");
