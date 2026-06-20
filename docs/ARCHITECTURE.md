@@ -2,25 +2,31 @@
 
 ## Goal & scope
 
-A Chrome/Edge extension that auto-bundles tabs, safely auto-archives idle ones
-into a searchable store, and is made *smart* by Claude (semantic naming,
-cleanup recommendations, auto-bookmarking, natural-language recall). The native
-menubar RAM/localhost app is **v1.5** — the differentiator, but not what proves
-the product.
+Two simple pieces: a Chrome/Edge **extension** that auto-bundles tabs, safely
+auto-archives idle ones, and is made *smart* by Claude (semantic naming, ranked
+cleanup); and a zero-dep **CLI** for localhost dev-server hygiene (list / kill /
+Claude-clean). Claude is the brain via plain Messages-API calls — no agent
+framework, no embedded Claude Code.
 
 - **In scope (v1):** trust-core auto-archive · heuristic + Claude grouping ·
-  ⌘K search · cleanup advisor · auto-bookmark · localhost labeling (titles).
-- **Out (v1):** per-process/per-tab RAM widget, the Swift menubar app, mobile,
-  team sync.
+  search · cleanup advisor (extension); `ls` / `kill` / `clean` (CLI).
+- **Out (v1):** always-on per-process RAM widget (was a Swift menubar app —
+  removed in favor of the CLI), mobile, team sync.
 
 ## Components
 
+**Two pieces, both JavaScript, both verifiable.** (Decided 2026-06-19 — collapsed
+from 4 components/3 languages after the localhost-kill logic ended up duplicated
+across a Swift menubar app and a Node native-messaging host. Both removed; the
+CLI does their job more simply. They live in git history if the always-on RAM
+widget is ever wanted.)
+
 | Component | Tech | Role | Ships |
 |---|---|---|---|
-| Extension | MV3, TS, esbuild | The product. Owns tabs, groups, idle-archive, storage, UI; makes the Claude calls | v1 |
+| Extension | MV3, TS, esbuild | The product surface for **browser tabs**: groups, idle-archive, search, Claude cleanup | v1 |
 | Heuristic engine | In the SW, no network | Offline base: group-by-domain/opener, dedupe, idle-detect, archive, undo | v1 |
-| Vercel proxy | Next.js route | Holds the Anthropic key (managed tier), auth, rate-limit | v1 |
-| Menubar app | SwiftUI `MenuBarExtra` | System + per-**process** RAM + localhost node procs; pushes to extension via Native Messaging | **v1.5** |
+| CLI | Zero-dep Node | **Dev servers**: `ls` / `kill <port>` / `clean` (Claude picks stale ones). Lives in the terminal — no native messaging, no Swift | v1 |
+| Proxy | Next.js route | **Parked.** Optional hosted Claude tier for a future paid plan; not required to run (default is local + BYO-key) | later |
 
 ## The honest RAM caveat
 
@@ -28,17 +34,17 @@ Per-*tab* RAM is impossible on stable Chrome: the only API that maps a tab to a
 renderer PID with memory (`chrome.processes`) is Dev-channel only, and Site
 Isolation breaks the one-tab-one-process model anyway (same-site tabs share a
 renderer; one tab spawns many). Chrome's own Task Manager reports
-per-**process**, not per-tab — so do we. The v1 extension shows a system-wide
-number + reclaimable estimate; the v1.5 native app adds real per-process +
-localhost figures.
+per-**process**, not per-tab — so do we. The extension popup shows a system-wide
+number; the **CLI** (`tab-butler ls`) shows real per-process Chrome RAM and
+per-dev-server RAM in the terminal, where it belongs.
 
 ## Privacy tiers
 
 | Tier | Data path | Who sees tabs | MVP? |
 |---|---|---|---|
 | Local | Heuristics only, no network | No one | ✅ default base |
-| Managed | Extension → Vercel proxy → Claude | You (request no-training retention) | ✅ paid "Smart" tier |
-| BYO key | Native app (Keychain) → Claude direct | No one but Anthropic | v1.5 |
+| BYO key | Extension → Claude direct (user's key in storage) | No one but Anthropic | ✅ default smart path |
+| Managed | Extension → parked Vercel proxy → Claude | You (request no-training retention) | later — paid "Smart" tier |
 
 **Hard default: send id/title/url/idle only — never page content.** Full content
 goes up only for the active tab on explicit "summarize/file this" (`activeTab`).
@@ -91,8 +97,10 @@ Endpoints: `POST /api/classify` (tabs→groups, Haiku), `POST /api/advise`
    taxonomy cache, opt-in + privacy policy. *(scaffolded)*
 4. **Week 4 — auto-bookmark + `/label` + `/recall`,** polish, store submissions.
 
-Then **v1.5:** SwiftUI menubar app + Native Messaging → real per-process RAM +
-localhost + BYO-key.
+**Done since:** the `tab-butler` CLI (dev-server `ls`/`kill`/Claude `clean`) —
+this replaced the planned Swift menubar app + native-messaging host (simpler,
+runs anywhere). Next: BYO-key Claude direct from the extension (drops the server
+from the smart path).
 
 **v2 — "Keep safe" shelf (deferred, decided 2026-06-19).** A propose-then-confirm
 surface where Claude periodically flags tabs that look worth keeping ("these N
@@ -109,7 +117,8 @@ tabs look worth keeping → Save?") with a reason and a few **editable** categor
 
 ## Open decisions
 
-- **Managed-first or BYOK-first?** Recommended: Local + Managed in v1 (smoothest
-  UX, existing Vercel infra); BYOK with the native app in v1.5.
+- **Managed-first or BYOK-first?** Decided 2026-06-19: **BYO-key first** — the
+  extension calls Claude directly with the user's key (no server to run). The
+  proxy stays parked for a future hosted paid tier.
 - **Bookmarks vs. own store** for auto-filing — probably both: write to
   `chrome.bookmarks` (portable, user-visible) *and* index locally (tags/search).

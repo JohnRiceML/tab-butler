@@ -4,22 +4,19 @@ Local-first browser tab hygiene with an opt-in Claude smart layer.
 
 - **Auto-bundles** related tabs into named, color-coded groups
 - **Safely archives** idle tabs (archive-not-delete + one-click undo)
-- **Made smart by Claude** (opt-in): semantic group names, ranked cleanup
-  recommendations, localhost awareness
-- **Honest about RAM**: per-tab memory is impossible on stable Chrome, so the
-  (v1.5) native menubar companion reports per-*process* RAM, like Chrome's own
-  Task Manager
+- **Made smart by Claude** (opt-in): semantic group names + ranked cleanup
+- **`tab-butler` CLI**: list / kill / Claude-clean localhost dev servers from
+  the terminal — where dev-server hygiene belongs
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and the
-v1 vs v1.5 split.
+Two simple pieces: a browser **extension** for tabs, and a terminal **CLI** for
+dev servers. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
 ## Layout
 
 ```
-extension/    MV3 Chrome/Edge extension (TypeScript, esbuild)
-proxy/        Next.js managed-tier proxy — holds the Anthropic key, exposes
-              /api/classify (Haiku) and /api/advise (Opus 4.8)
-native-host/  Native messaging helper to list & kill localhost dev servers
+extension/    MV3 Chrome/Edge extension (TypeScript, esbuild) — browser tabs
+cli/          Zero-dep Node CLI — list/kill/Claude-clean localhost dev servers
+proxy/        Next.js proxy (parked) — optional hosted Claude tier; not required
 docs/         Architecture spec
 ```
 
@@ -56,32 +53,22 @@ Vercel URL for production, and add that origin to `manifest.json`
 If a key is exported in your shell it shadows `.env.local` (Next won't override
 `process.env`). Run scrubbed if so: `env -u ANTHROPIC_API_KEY npm run dev`.
 
-## Kill localhost dev servers (native helper)
+## Dev servers — the CLI
 
-The extension can't kill a process — Chrome's sandbox forbids it. The optional
-helper in `native-host/` does it via native messaging (`lsof` + `kill`). Once
-installed, the popup shows a **Servers running** list (filtered to dev runtimes —
-node, python, vite, etc., never system services) with a **Kill** button.
+Killing a process is impossible from a browser extension, and the terminal is
+the natural home for dev-server hygiene anyway. The `cli/` tool handles it:
 
 ```bash
-# 1. Load the extension first (chrome://extensions → Load unpacked → extension/dist)
-# 2. Copy its ID from the extension card, then:
-cd native-host
-./install.sh <extension-id>
-# 3. Fully quit & reopen the browser, then reload the extension.
+node cli/tab-butler.mjs ls          # list listening dev servers (port, RAM, uptime)
+node cli/tab-butler.mjs kill 6006   # SIGTERM whatever listens on :6006
+ANTHROPIC_API_KEY=sk-ant-... \
+  node cli/tab-butler.mjs clean     # Claude picks stale ones, asks before killing
+
+cd cli && npm link                  # optional: global `tb ls` / `tb clean`
 ```
 
-Without the helper, the popup falls back to listing localhost *tabs* with a
-"Close tab" action (which closes the tab but leaves the server running).
-
-Test the helper standalone (lists your listening dev ports):
-
-```bash
-node -e 'const cp=require("child_process");const f=o=>{const m=Buffer.from(JSON.stringify(o)),l=Buffer.alloc(4);l.writeUInt32LE(m.length);return Buffer.concat([l,m])};const p=cp.spawn("node",["native-host/tabbutler-host.mjs"]);const o=[];p.stdout.on("data",d=>o.push(d));p.on("close",()=>{const b=Buffer.concat(o);console.log(b.slice(4,4+b.readUInt32LE(0)).toString())});p.stdin.end(f({action:"list"}))'
-```
-
-Kill sends `SIGTERM` to whatever is *listening* on the given port (dev servers
-only). It never touches non-listening processes.
+Zero dependencies. Only touches processes *listening* on a port, and only dev
+runtimes (node/python/vite/…). See [cli/README.md](cli/README.md).
 
 ## Privacy
 
@@ -93,6 +80,8 @@ nothing off-device.
 
 ## Status
 
-v1 scaffold. Not yet wired: real auth, the settings/opt-in UI, auto-bookmarking,
-the ⌘K palette, and the v1.5 SwiftUI menubar companion (per-process RAM +
-localhost + bring-your-own-key). See the architecture doc.
+v1 scaffold. The extension (tabs) + CLI (dev servers) both work. Not yet wired:
+real auth on the optional proxy, BYO-key Claude direct from the extension (so no
+server is needed), a settings/opt-in UI, auto-bookmarking, and semantic ⌘K
+recall. The Swift menubar app was removed in favor of the CLI (it's in git
+history if the always-on RAM widget is ever wanted). See the architecture doc.

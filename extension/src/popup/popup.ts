@@ -1,4 +1,4 @@
-import { CONFIG, isLocalhost } from "../lib/config";
+import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes } from "../lib/heuristics";
 import type { AdviceResult, Message } from "../lib/types";
 
@@ -15,10 +15,12 @@ function esc(s: string): string {
     : "&#39;",
   );
 }
-/** Human idle label. Returns a no-data sentinel when activity is unknown — never assert "Idle". */
 function idleLabel(min: number | undefined): string {
   if (min == null) return "No activity data";
   return min < 60 ? `Idle ${min}m` : `Idle ${Math.round(min / 60)}h`;
+}
+function gib(bytes: number): number {
+  return Math.round((bytes / 1073741824) * 10) / 10;
 }
 
 const GROUP_HEX: Record<string, string> = {
@@ -28,7 +30,6 @@ const GROUP_HEX: Record<string, string> = {
 
 const ICON: Record<string, string> = {
   layout: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M3 9h18"/></svg>`,
-  terminal: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l4 4-4 4"/><path d="M13 16h6"/></svg>`,
   search: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>`,
   sparkles: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6l1.9 5L19 9.4l-5.1 1.8L12 16l-1.9-4.8L5 9.4l5.1-1.8z"/></svg>`,
   undo: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a9 9 0 1 1-2 5.7"/><path d="M3 3v5h5"/></svg>`,
@@ -39,38 +40,13 @@ const ICON: Record<string, string> = {
 /* ---------- view model ---------- */
 
 interface GroupVM { title: string; hex: string; count: number; active: boolean; idle: number | undefined; }
-interface LocalVM { id: number; port: string; title: string; idle: number | undefined; }
-interface ServerVM { port: number; command: string; hasTab: boolean; }
 interface ViewData {
   smart: boolean;
   pressure: { label: string; color: string };
   mem: { pct: number; used: number; total: number; hasData: boolean };
   idleCount: number;
   groups: GroupVM[];
-  localhost: LocalVM[];
-  servers: ServerVM[];
-  killable: boolean;
   archivedCount: number;
-}
-
-/** Native messaging host that lists/kills dev servers (see native-host/). */
-const NATIVE_HOST = "com.tab_butler.host";
-/** Command prefixes we treat as dev servers — so we never offer to kill macOS
- *  services (Control Center on :5000/:7000), Discord, etc. */
-const DEV_CMDS = ["node", "deno", "bun", "python", "ruby", "php", "rails", "puma", "vite", "next", "webpack", "ng", "cargo", "go", "dotnet", "java", "gradle", "flask", "gunicorn", "uvicorn"];
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function hostCall(msg: { action: string; port?: number }): Promise<any> {
-  return new Promise((resolve) => {
-    if (!IS_EXT || !chrome.runtime?.sendNativeMessage) return resolve(null);
-    try {
-      chrome.runtime.sendNativeMessage(NATIVE_HOST, msg, (r) => {
-        resolve(chrome.runtime.lastError ? null : r);
-      });
-    } catch {
-      resolve(null);
-    }
-  });
 }
 
 const MOCK: ViewData = {
@@ -82,18 +58,6 @@ const MOCK: ViewData = {
     { title: "counsel-post dev", hex: GROUP_HEX.green, count: 6, active: true, idle: 2 },
     { title: "LinkedIn research", hex: GROUP_HEX.blue, count: 9, active: false, idle: 120 },
     { title: "Stripe + billing docs", hex: GROUP_HEX.purple, count: 4, active: true, idle: 5 },
-  ],
-  localhost: [
-    { id: 1, port: "3007", title: "counsel-post", idle: 1 },
-    { id: 2, port: "3000", title: "healing-tides", idle: 4 },
-    { id: 3, port: "6006", title: "Storybook", idle: 60 },
-  ],
-  killable: true,
-  servers: [
-    { port: 3007, command: "node", hasTab: true },
-    { port: 3000, command: "node", hasTab: true },
-    { port: 6006, command: "node", hasTab: true },
-    { port: 8787, command: "python", hasTab: false },
   ],
   archivedCount: 6,
 };
@@ -124,14 +88,6 @@ async function getData(): Promise<ViewData> {
     return { title: g.title ?? "Group", hex: GROUP_HEX[g.color] ?? GROUP_HEX.grey, count: inGroup.length, active, idle: minIdle };
   });
 
-  const localhost: LocalVM[] = tabs
-    .filter((t) => t.url && isLocalhost(t.url) && t.id != null)
-    .map((t) => {
-      let port = "";
-      try { port = new URL(t.url!).port || "80"; } catch { /* ignore */ }
-      return { id: t.id!, port, title: t.title ?? "", idle: idleMinutes(t, now) };
-    });
-
   const m = await memInfo();
   const hasMem = !!m && m.capacity > 0;
   const mem = hasMem
@@ -146,19 +102,7 @@ async function getData(): Promise<ViewData> {
   const archive = (await chrome.storage.local.get(CONFIG.ARCHIVE_KEY))[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
   const smart = Boolean((await chrome.storage.local.get(CONFIG.SMART_ENABLED_KEY))[CONFIG.SMART_ENABLED_KEY]);
 
-  const hostList = await hostCall({ action: "list" });
-  const killable = !!hostList?.ok;
-  const servers: ServerVM[] = killable
-    ? (hostList.servers as { port: number; command: string }[])
-        .filter((s) => localhost.some((l) => Number(l.port) === s.port) || DEV_CMDS.some((c) => (s.command || "").toLowerCase().startsWith(c)))
-        .map((s) => ({ port: s.port, command: s.command, hasTab: localhost.some((l) => Number(l.port) === s.port) }))
-    : [];
-
-  return { smart, pressure, mem, idleCount: archivableTabs(tabs, now).length, groups, localhost, servers, killable, archivedCount: archive?.length ?? 0 };
-}
-
-function gib(bytes: number): number {
-  return Math.round((bytes / 1073741824) * 10) / 10;
+  return { smart, pressure, mem, idleCount: archivableTabs(tabs, now).length, groups, archivedCount: archive?.length ?? 0 };
 }
 
 /* ---------- render ---------- */
@@ -174,8 +118,6 @@ function ring(pct: number): string {
   </svg><div class="pct"><b>${pct}%</b><span>used</span></div></div>`;
 }
 
-/** Memory card = system memory ONLY. No tab actions here, to avoid implying that
- *  closing tabs moves the system-memory number (it may not, on stable Chrome). */
 function memCard(d: ViewData): string {
   const left = d.mem.hasData ? ring(d.mem.pct) : `<div class="ring"><div class="pct"><b>—</b><span>mem</span></div></div>`;
   const headRight = d.mem.hasData ? `<div class="dim">${d.mem.used} / ${d.mem.total} GB</div>` : "";
@@ -188,7 +130,6 @@ function memCard(d: ViewData): string {
   </div></div>`;
 }
 
-/** Tab-cleanup actions, kept separate from the memory gauge. */
 function actionsRow(d: ViewData): string {
   const archive = d.idleCount > 0
     ? `<button class="btn primary" data-action="reclaim">${ICON.archive} Archive ${d.idleCount} idle tab${d.idleCount === 1 ? "" : "s"}</button>`
@@ -206,33 +147,10 @@ function groupRow(g: GroupVM): string {
     ${g.active ? active : idle}</div>`;
 }
 
-function localRow(l: LocalVM): string {
-  const active = l.idle != null && l.idle < 30;
-  const status = active
-    ? `<span class="status" style="color:var(--green)"><span class="dot" style="background:var(--green)"></span>Active</span>`
-    : `<span class="status muted">${esc(idleLabel(l.idle))}</span>`;
-  return `<div class="li"><div class="sq" style="background:#1c1f26;color:var(--green)">${ICON.terminal}</div>
-    <div class="grow click" role="button" tabindex="0" data-action="focus-tab" data-id="${l.id}" style="cursor:pointer">
-      <div class="name trunc">localhost:${esc(l.port)}${l.title ? " · " + esc(l.title) : ""}</div>
-      <div class="sub">dev server tab</div></div>
-    ${status}<button class="act danger" data-action="close-tab" data-id="${l.id}">Close tab</button></div>`;
-}
-
-function serverRow(s: ServerVM): string {
-  return `<div class="li"><div class="sq" style="background:#1c1f26;color:var(--green)">${ICON.terminal}</div>
-    <div class="grow"><div class="name trunc">localhost:${s.port}${s.command ? " · " + esc(s.command) : ""}</div><div class="sub">${s.hasTab ? "running · open in a tab" : "running · no tab"}</div></div>
-    <button class="act danger" data-action="kill-server" data-port="${s.port}">Kill</button></div>`;
-}
-
 function render(d: ViewData): string {
   const groups = d.groups.length
     ? `<div class="list">${d.groups.map(groupRow).join("")}</div>`
     : `<div class="list"><div class="empty">No groups yet — hit “Group ${d.smart ? "with Claude" : "by site"}”.</div></div>`;
-  const local = d.killable && d.servers.length
-    ? `<div class="sec"><h2>Localhost · servers running</h2><span class="dim">${d.servers.length} running</span></div><div class="list">${d.servers.map(serverRow).join("")}</div>`
-    : d.localhost.length
-      ? `<div class="sec"><h2>Localhost · dev servers</h2><span class="dim">${d.localhost.length} open · run install.sh to kill</span></div><div class="list">${d.localhost.map(localRow).join("")}</div>`
-      : "";
   return `
   <header class="row-flex between">
     <div class="row-flex gap10"><div class="sq" style="background:var(--blue)">${ICON.layout}</div><div class="brand">Tab Butler</div></div>
@@ -246,7 +164,6 @@ function render(d: ViewData): string {
   ${actionsRow(d)}
   <div class="sec"><h2>Tab groups</h2><button class="act" data-action="group">${d.smart ? "Group with Claude" : "Group by site"}</button></div>
   ${groups}
-  ${local}
   <div class="sec"><h2>Search</h2></div>
   <div class="search">${ICON.search}<input id="q" placeholder="Search open tabs…" autocomplete="off"/><span class="kbd">↵ open</span></div>
   <div id="results"></div>
@@ -254,7 +171,7 @@ function render(d: ViewData): string {
     <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
     <button class="btn" data-action="undo">${ICON.undo} Undo</button>
   </div>
-  <div class="note">${ICON.lock}<div>RAM is reported at the process level — browsers can't split memory cleanly per tab. Closing tabs won't necessarily move the system gauge. Smart features are opt-in and send tab titles/URLs only.</div></div>`;
+  <div class="note">${ICON.lock}<div>RAM is system-wide here (per-tab is impossible in a browser). For dev-server RAM &amp; kill, use the <code>tab-butler</code> CLI. Smart features are opt-in and send tab titles/URLs only.</div></div>`;
 }
 
 /* ---------- actions ---------- */
@@ -275,6 +192,31 @@ function send<T>(msg: Message): Promise<T> {
 
 async function refresh() {
   app.innerHTML = render(await getData());
+}
+
+let lastRecs: AdviceResult | null = null;
+
+function recVerb(kind: string): string {
+  return kind === "archive" ? "Archive" : kind === "bookmark" ? "Save" : kind === "regroup" ? "Regroup" : "Close";
+}
+
+function renderRecs(r: AdviceResult) {
+  lastRecs = r;
+  const results = document.getElementById("results")!;
+  if (!r.recommendations.length) {
+    results.innerHTML = `<div class="empty">${esc(r.summary || "No suggestions right now.")}</div>`;
+    return;
+  }
+  const dot = (c: string) => (c === "high" ? "var(--green)" : c === "medium" ? "var(--amber)" : "var(--t2)");
+  results.innerHTML =
+    `<div class="dim" style="margin:8px 4px 6px">${esc(r.summary)}</div><div class="list">` +
+    r.recommendations
+      .map((rec, i) => `<div class="li"><div class="sq" style="background:#1c1f26;color:${dot(rec.confidence)}">${ICON.sparkles}</div>
+        <div class="grow"><div class="name">${esc(rec.title)}</div><div class="sub">${esc(rec.detail)}</div></div>
+        <button class="btn" data-action="apply-rec" data-idx="${i}" style="padding:6px 12px;font-size:12px">${recVerb(rec.kind)}</button>
+        <button class="act" data-action="dismiss-rec" data-idx="${i}" aria-label="Dismiss suggestion">✕</button></div>`)
+      .join("") +
+    `</div>`;
 }
 
 async function dispatch(el: HTMLElement) {
@@ -323,31 +265,6 @@ async function dispatch(el: HTMLElement) {
         window.close();
         break;
       }
-      case "close-tab": {
-        if (id == null) return;
-        await chrome.tabs.remove(id);
-        await refresh();
-        break;
-      }
-      case "kill-server": {
-        const port = el.dataset.port ? Number(el.dataset.port) : NaN;
-        if (!Number.isFinite(port)) return;
-        toast(`Killing :${port}…`);
-        const res = await hostCall({ action: "kill", port });
-        if (res?.ok) {
-          const all = await chrome.tabs.query({});
-          for (const t of all) {
-            try {
-              if (t.id != null && t.url && new URL(t.url).port === String(port)) await chrome.tabs.remove(t.id);
-            } catch { /* ignore */ }
-          }
-          await refresh();
-          toast(`Killed :${port} (${res.killed?.length ?? 0} process).`);
-        } else {
-          toast(res?.error ? `Couldn't kill :${port}: ${res.error}` : "Killer helper not installed — run native-host/install.sh.");
-        }
-        break;
-      }
       case "apply-rec": {
         const i = Number(el.dataset.idx);
         const rec = lastRecs?.recommendations[i];
@@ -372,31 +289,6 @@ async function dispatch(el: HTMLElement) {
     console.error("action failed", el.dataset.action, err);
     toast("Something went wrong — try again.");
   }
-}
-
-let lastRecs: AdviceResult | null = null;
-
-function recVerb(kind: string): string {
-  return kind === "archive" ? "Archive" : kind === "bookmark" ? "Save" : kind === "regroup" ? "Regroup" : "Close";
-}
-
-function renderRecs(r: AdviceResult) {
-  lastRecs = r;
-  const results = document.getElementById("results")!;
-  if (!r.recommendations.length) {
-    results.innerHTML = `<div class="empty">${esc(r.summary || "No suggestions right now.")}</div>`;
-    return;
-  }
-  const dot = (c: string) => (c === "high" ? "var(--green)" : c === "medium" ? "var(--amber)" : "var(--t2)");
-  results.innerHTML =
-    `<div class="dim" style="margin:8px 4px 6px">${esc(r.summary)}</div><div class="list">` +
-    r.recommendations
-      .map((rec, i) => `<div class="li"><div class="sq" style="background:#1c1f26;color:${dot(rec.confidence)}">${ICON.sparkles}</div>
-        <div class="grow"><div class="name">${esc(rec.title)}</div><div class="sub">${esc(rec.detail)}</div></div>
-        <button class="btn" data-action="apply-rec" data-idx="${i}" style="padding:6px 12px;font-size:12px">${recVerb(rec.kind)}</button>
-        <button class="act" data-action="dismiss-rec" data-idx="${i}" aria-label="Dismiss suggestion">✕</button></div>`)
-      .join("") +
-    `</div>`;
 }
 
 let searchTabs: chrome.tabs.Tab[] = [];
@@ -431,13 +323,11 @@ function onClick(e: Event) {
 function onKeydown(e: KeyboardEvent) {
   if (!IS_EXT) return;
   const target = e.target as HTMLElement;
-  // Enter in the search box → open the first result.
   if (target.id === "q" && e.key === "Enter") {
     const first = document.querySelector<HTMLElement>('#results [data-action="focus-tab"]');
     if (first) { e.preventDefault(); void dispatch(first); }
     return;
   }
-  // Enter/Space on a focusable role=button row (real <button>s fire via click).
   const el = target.closest<HTMLElement>("[data-action]");
   if (el && el.tagName !== "BUTTON" && (e.key === "Enter" || e.key === " ")) {
     e.preventDefault();
