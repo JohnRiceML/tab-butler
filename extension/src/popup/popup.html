@@ -5,39 +5,141 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tab Butler</title>
     <style>
-      :root { color-scheme: light dark; }
+      :root {
+        --bg: #0b0d11;
+        --card: #15181e;
+        --row: #1b1f27;
+        --row-hover: #232834;
+        --line: rgba(255, 255, 255, 0.07);
+        --line-strong: rgba(255, 255, 255, 0.12);
+        --t1: #f2f4f7;
+        --t2: #9aa1ac;
+        --t3: #8a909c;
+        --blue: #0a84ff;
+        --green: #30d158;
+        --amber: #ff9f0a;
+        --red: #ff453a;
+        --radius-card: 16px;
+        --radius-row: 12px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
       body {
+        width: 560px;
+        background: var(--bg);
+        color: var(--t1);
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-        width: 320px;
-        margin: 0;
-        padding: 14px;
-        font-size: 14px;
+        font-size: 13px;
+        line-height: 1.4;
+        -webkit-font-smoothing: antialiased;
       }
-      h1 { font-size: 15px; font-weight: 500; margin: 0 0 10px; }
-      button {
-        width: 100%;
-        text-align: left;
-        padding: 9px 12px;
-        margin: 4px 0;
-        font-size: 14px;
-        border: 0.5px solid rgba(128, 128, 128, 0.4);
-        border-radius: 9px;
-        background: transparent;
-        cursor: pointer;
+      .wrap { padding: 14px; max-height: 600px; overflow-y: auto; }
+      .wrap::-webkit-scrollbar { width: 8px; }
+      .wrap::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
+
+      .row-flex { display: flex; align-items: center; }
+      .between { justify-content: space-between; }
+      .gap8 { gap: 8px; } .gap10 { gap: 10px; } .gap12 { gap: 12px; }
+      .grow { flex: 1; min-width: 0; }
+      .trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .muted { color: var(--t2); } .dim { color: var(--t3); }
+
+      .sq { width: 34px; height: 34px; border-radius: 9px; display: flex;
+            align-items: center; justify-content: center; color: #fff; flex: none; }
+      .sq svg { width: 19px; height: 19px; }
+
+      /* header */
+      header { margin-bottom: 14px; }
+      .brand { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+      .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+              color: var(--t2); background: var(--card); border: 0.5px solid var(--line);
+              padding: 4px 9px; border-radius: 999px; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+
+      /* smart toggle */
+      .switch { position: relative; width: 38px; height: 22px; flex: none; cursor: pointer; }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .track { position: absolute; inset: 0; background: #3a3f4a; border-radius: 999px; transition: background .15s; }
+      .knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #fff;
+              border-radius: 50%; transition: transform .15s; }
+      .switch input:checked + .track { background: var(--blue); }
+      .switch input:checked + .track .knob { transform: translateX(16px); }
+
+      /* cards */
+      .card { background: var(--card); border: 0.5px solid var(--line);
+              border-radius: var(--radius-card); padding: 16px; }
+      .list { background: var(--card); border: 0.5px solid var(--line);
+              border-radius: 14px; overflow: hidden; }
+      .li { display: flex; align-items: center; gap: 12px; padding: 9px 13px; cursor: default; }
+      .li + .li { border-top: 0.5px solid var(--line); }
+      .li.click { cursor: pointer; }
+      .li.click:hover { background: var(--row-hover); }
+      .li .name { font-size: 13.5px; font-weight: 500; }
+      .li .sub { font-size: 11.5px; color: var(--t3); margin-top: 1px; }
+
+      .sec { display: flex; align-items: center; justify-content: space-between;
+             margin: 18px 4px 8px; }
+      .sec h2 { font-size: 11px; font-weight: 600; letter-spacing: .04em;
+                text-transform: uppercase; color: var(--t3); margin: 0; }
+
+      /* memory */
+      .mem { display: flex; align-items: center; gap: 16px; }
+      .ring { position: relative; width: 92px; height: 92px; flex: none; }
+      .ring .pct { position: absolute; inset: 0; display: flex; flex-direction: column;
+                   align-items: center; justify-content: center; }
+      .ring .pct b { font-size: 20px; font-weight: 600; }
+      .ring .pct span { font-size: 10px; color: var(--t3); }
+      .mem-meta .big { font-size: 14px; font-weight: 500; }
+      .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 11.5px; color: var(--t2); }
+      .legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+      /* buttons */
+      button { font-family: inherit; cursor: pointer; }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+             font-size: 13px; font-weight: 500; border-radius: 11px; padding: 9px 14px;
+             border: 0.5px solid var(--line-strong); background: var(--row); color: var(--t1);
+             transition: background .12s; }
+      .btn:hover { background: var(--row-hover); }
+      .btn svg { width: 16px; height: 16px; }
+      .btn.primary { background: var(--blue); border-color: transparent; color: #fff; }
+      .btn.primary:hover { filter: brightness(1.08); }
+      .btn.ghost { background: transparent; }
+      .chip { font-size: 11.5px; font-weight: 500; padding: 3px 8px; border-radius: 999px; }
+
+      .status { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; flex: none; }
+      .act { font-size: 12.5px; font-weight: 500; color: var(--blue); background: none;
+             border: none; padding: 4px 6px; }
+      .act.danger { color: var(--red); }
+      .chev { color: var(--t3); display: flex; }
+      .chev svg { width: 16px; height: 16px; }
+
+      /* search */
+      .search { display: flex; align-items: center; gap: 9px; background: var(--card);
+                border: 0.5px solid var(--line); border-radius: 11px; padding: 9px 12px; }
+      .search svg { width: 17px; height: 17px; color: var(--t3); flex: none; }
+      .search input { flex: 1; background: transparent; border: none; outline: none;
+                      color: var(--t1); font-family: inherit; font-size: 13px; }
+      .search input::placeholder { color: var(--t3); }
+      .kbd { font-size: 10.5px; color: var(--t2); background: var(--row); border: 0.5px solid var(--line);
+             border-radius: 5px; padding: 1px 6px; }
+
+      .footer-actions { display: flex; gap: 8px; margin-top: 12px; }
+      .footer-actions .btn { flex: 1; }
+      .note { display: flex; gap: 7px; align-items: flex-start; margin-top: 12px;
+              font-size: 11px; color: var(--t3); line-height: 1.5; }
+      .note svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+      .empty { padding: 16px 13px; font-size: 12.5px; color: var(--t3); text-align: center; }
+      .toast { font-size: 12px; color: var(--green); margin: 8px 4px 0; min-height: 16px; }
+
+      /* keyboard focus — visible on the dark theme */
+      .btn:focus-visible, .act:focus-visible, .click:focus-visible {
+        outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 10px;
       }
-      button:hover { background: rgba(128, 128, 128, 0.12); }
-      .muted { color: #888; font-size: 12px; margin: 8px 2px; }
-      #out { margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
+      .switch input:focus-visible + .track { outline: 2px solid var(--blue); outline-offset: 2px; }
     </style>
   </head>
   <body>
-    <h1>Tab Butler</h1>
-    <button id="group">Group my tabs</button>
-    <button id="advise">Suggest cleanup</button>
-    <button id="archive">Archive idle tabs now</button>
-    <button id="undo">Undo last</button>
-    <div class="muted" id="status">…</div>
-    <div id="out"></div>
+    <div class="wrap"><div id="app"></div><div class="toast" id="toast"></div></div>
     <script type="module" src="./popup.js"></script>
   </body>
 </html>

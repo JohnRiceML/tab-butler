@@ -21,7 +21,7 @@ export interface ClassifyResult {
 export type RecommendationKind =
   | "archive"
   | "close_duplicates"
-  | "stop_localhost"
+  | "close_localhost_tab"
   | "bookmark"
   | "regroup";
 
@@ -54,4 +54,5 @@ export type Message =
   | { type: "ADVISE_NOW" }
   | { type: "ARCHIVE_IDLE_NOW" }
   | { type: "UNDO_LAST" }
+  | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
   | { type: "GET_STATE" };

@@ -4,9 +4,9 @@
   "private": true,
   "description": "Managed-tier proxy: holds the Anthropic key and exposes /classify and /advise to the Tab Butler extension.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3210",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3210",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

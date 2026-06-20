@@ -94,6 +94,19 @@ Endpoints: `POST /api/classify` (tabs→groups, Haiku), `POST /api/advise`
 Then **v1.5:** SwiftUI menubar app + Native Messaging → real per-process RAM +
 localhost + BYO-key.
 
+**v2 — "Keep safe" shelf (deferred, decided 2026-06-19).** A propose-then-confirm
+surface where Claude periodically flags tabs that look worth keeping ("these N
+tabs look worth keeping → Save?") with a reason and a few **editable** categories
+(Tools, References, Reading). Constraints, non-negotiable:
+- **No silent auto-save.** Suggested-and-confirmed only — silent background
+  collection makes a "we caught your important tab" promise the model can't keep,
+  over-collects, and adds privacy surface. The real safety net stays
+  archive-not-delete.
+- Importance from title+URL alone is weak; doing it well needs visit-frequency
+  (`history` permission) or page content (privacy cost) — gate behind opt-in.
+- **No affiliate-specific detection** (considered + dropped 2026-06-19).
+- Build only after the v1 core (trust-archive + grouping + cleanup) is validated.
+
 ## Open decisions
 
 - **Managed-first or BYOK-first?** Recommended: Local + Managed in v1 (smoothest

@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast, getArchive } from "../lib/archive";
 import { advise, classify, isSmartEnabled } from "../lib/claude-client";
 import { archivableTabs, groupByDomain } from "../lib/heuristics";
-import type { AdviceResult, ClassifyResult, GroupSuggestion, Message } from "../lib/types";
+import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
   "blue",
@@ -109,6 +109,50 @@ async function adviseNow(): Promise<AdviceResult> {
   }
 }
 
+async function ensureBookmarkFolder(): Promise<chrome.bookmarks.BookmarkTreeNode> {
+  const found = await chrome.bookmarks.search({ title: "Tab Butler" });
+  const folder = found.find((b) => !b.url);
+  return folder ?? chrome.bookmarks.create({ title: "Tab Butler" });
+}
+
+/**
+ * Execute one Claude recommendation. Everything is reversible: http(s) tabs are
+ * archived (restorable via Undo), throwaway pages (chrome://newtab) are closed,
+ * bookmarks are filed before the tab is cleared. We never stop a dev server.
+ */
+async function applyRec(
+  kind: RecommendationKind,
+  tabIds: number[],
+): Promise<{ done: number; label: string }> {
+  if (kind === "regroup") {
+    const r = await groupNow();
+    return { done: r.applied, label: "regrouped" };
+  }
+
+  const tabs = (
+    await Promise.all(tabIds.map((id) => chrome.tabs.get(id).catch(() => null)))
+  ).filter((t): t is chrome.tabs.Tab => !!t && !t.pinned);
+
+  if (kind === "bookmark") {
+    const folder = await ensureBookmarkFolder();
+    for (const t of tabs) {
+      if (t.url?.startsWith("http")) {
+        await chrome.bookmarks.create({ parentId: folder.id, title: t.title ?? t.url, url: t.url });
+      }
+    }
+  }
+
+  // Clear the tabs: archive the restorable ones, close throwaway pages.
+  const restorable = tabs.filter((t) => t.url?.startsWith("http"));
+  const throwaway = tabs.filter((t) => t.id != null && !t.url?.startsWith("http")).map((t) => t.id!);
+  let done = 0;
+  if (restorable.length) done += await archiveAndClose(restorable);
+  if (throwaway.length) { await chrome.tabs.remove(throwaway); done += throwaway.length; }
+
+  const label = kind === "bookmark" ? "saved" : kind === "archive" ? "archived" : "closed";
+  return { done, label };
+}
+
 /* ---------- popup messaging ---------- */
 
 chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
@@ -125,6 +169,9 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "UNDO_LAST":
         sendResponse({ restored: await undoLast() });
+        break;
+      case "APPLY_REC":
+        sendResponse(await applyRec(msg.kind, msg.tabIds));
         break;
       case "GET_STATE":
         sendResponse({

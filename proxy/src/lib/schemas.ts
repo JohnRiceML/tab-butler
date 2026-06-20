@@ -70,7 +70,7 @@ export const Recommendation = z.object({
   kind: z.enum([
     "archive",
     "close_duplicates",
-    "stop_localhost",
+    "close_localhost_tab",
     "bookmark",
     "regroup",
   ]),

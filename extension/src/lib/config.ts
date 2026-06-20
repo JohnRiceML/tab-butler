@@ -8,8 +8,9 @@ export const CONFIG = {
   /** chrome.alarms minimum is 0.5 min; we scan every few minutes. */
   SCAN_PERIOD_MIN: 5,
 
-  /** Your deployed proxy. Defaults to local dev. */
-  PROXY_BASE_URL: "http://localhost:3000",
+  /** Your deployed proxy. Defaults to local dev (dedicated port to avoid the
+   *  common :3000 collision — keep in sync with proxy's `dev` script + manifest). */
+  PROXY_BASE_URL: "http://localhost:3210",
 
   // storage.local keys
   SMART_ENABLED_KEY: "smartEnabled", // privacy opt-in — Claude calls are gated on this

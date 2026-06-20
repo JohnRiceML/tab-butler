@@ -3,9 +3,9 @@
   "name": "Tab Butler",
   "version": "0.1.0",
   "description": "Auto-bundles tabs, safely archives idle ones, and is made smart by Claude. Local-first; Claude is opt-in.",
-  "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks"],
+  "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "nativeMessaging"],
   "host_permissions": [
-    "http://localhost:3000/*",
+    "http://localhost:3210/*",
     "https://YOUR-PROXY.vercel.app/*"
   ],
   "background": {
@@ -15,5 +15,8 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "Tab Butler"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 }
