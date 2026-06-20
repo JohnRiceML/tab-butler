@@ -5,6 +5,7 @@
   "description": "Auto-bundles tabs, safely archives idle ones, and is made smart by Claude. Local-first; Claude is opt-in.",
   "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory"],
   "host_permissions": [
+    "https://api.anthropic.com/*",
     "http://localhost:3210/*",
     "https://YOUR-PROXY.vercel.app/*"
   ],

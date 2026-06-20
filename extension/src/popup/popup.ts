@@ -39,6 +39,8 @@ interface ViewData {
   idleCount: number;
   groups: GroupVM[];
   archivedCount: number;
+  dedupe: boolean;
+  hasKey: boolean;
 }
 
 const MOCK: ViewData = {
@@ -52,6 +54,8 @@ const MOCK: ViewData = {
     { title: "Stripe + billing docs", hex: GROUP_HEX.purple, count: 4, active: true, idle: 5 },
   ],
   archivedCount: 6,
+  dedupe: true,
+  hasKey: false,
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -91,10 +95,19 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const archive = (await chrome.storage.local.get(CONFIG.ARCHIVE_KEY))[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const smart = Boolean((await chrome.storage.local.get(CONFIG.SMART_ENABLED_KEY))[CONFIG.SMART_ENABLED_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY]);
+  const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
-  return { smart, pressure, mem, idleCount: archivableTabs(tabs, now).length, groups, archivedCount: archive?.length ?? 0 };
+  return {
+    smart: Boolean(store[CONFIG.SMART_ENABLED_KEY]),
+    pressure,
+    mem,
+    idleCount: archivableTabs(tabs, now).length,
+    groups,
+    archivedCount: archive?.length ?? 0,
+    dedupe: store[CONFIG.AUTO_DEDUPE_KEY] !== false,
+    hasKey: Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]),
+  };
 }
 
 /* ---------- render ---------- */
@@ -132,6 +145,14 @@ function groupRow(g: GroupVM): string {
     ${g.active ? active : idle}</div>`;
 }
 
+function keyRow(d: ViewData): string {
+  if (d.hasKey) {
+    return `<div class="li"><div class="grow"><div class="name">Anthropic key</div><div class="sub">✓ stored locally · Smart runs with no proxy</div></div><button class="act" data-action="clear-key">Change</button></div>`;
+  }
+  return `<div class="li" style="display:block"><div class="name" style="margin-bottom:6px">Anthropic key <span class="dim" style="font-weight:400">— optional, runs Smart with no proxy</span></div>
+    <div style="display:flex;gap:8px"><input id="keyinput" type="password" placeholder="sk-ant-..." autocomplete="off" style="flex:1;background:var(--row);border:0.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px 10px;font-family:inherit;font-size:12px;outline:none"/><button class="btn" data-action="save-key" style="padding:7px 12px">Save</button></div></div>`;
+}
+
 function render(d: ViewData): string {
   const groups = d.groups.length
     ? `<div class="list">${d.groups.map(groupRow).join("")}</div>`
@@ -159,6 +180,13 @@ function render(d: ViewData): string {
 
   <div class="sec"><h2>Tab groups</h2><span class="dim">${d.groups.length} group${d.groups.length === 1 ? "" : "s"}</span></div>
   ${groups}
+
+  <div class="sec"><h2>Settings</h2></div>
+  <div class="list">
+    <div class="li"><div class="grow"><div class="name">Auto-merge duplicate tabs</div><div class="sub">switch to the open tab instead of a copy</div></div>
+      <label class="switch"><input type="checkbox" id="dedupe" aria-label="Auto-merge duplicate tabs" ${d.dedupe ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
+    ${d.smart ? keyRow(d) : ""}
+  </div>
 
   <div class="footer-actions">
     <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
@@ -281,6 +309,21 @@ async function dispatch(el: HTMLElement) {
         renderRecs(lastRecs);
         break;
       }
+      case "save-key": {
+        const input = document.getElementById("keyinput") as HTMLInputElement | null;
+        const val = input?.value.trim();
+        if (!val) return;
+        await chrome.storage.local.set({ [CONFIG.ANTHROPIC_KEY_KEY]: val });
+        await refresh();
+        toast("Key saved — Smart now runs with no proxy.");
+        break;
+      }
+      case "clear-key": {
+        await chrome.storage.local.remove(CONFIG.ANTHROPIC_KEY_KEY);
+        await refresh();
+        toast("Key removed.");
+        break;
+      }
     }
   } catch (err) {
     console.error("action failed", el.dataset.action, err);
@@ -305,11 +348,16 @@ async function onInput(e: Event) {
 }
 
 async function onChange(e: Event) {
+  if (!IS_EXT) return;
   const target = e.target as HTMLInputElement;
-  if (target.id !== "smart" || !IS_EXT) return;
-  await chrome.storage.local.set({ [CONFIG.SMART_ENABLED_KEY]: target.checked });
-  await refresh();
-  toast(target.checked ? "Smart mode on — Claude will group & advise." : "Smart mode off — local only.");
+  if (target.id === "smart") {
+    await chrome.storage.local.set({ [CONFIG.SMART_ENABLED_KEY]: target.checked });
+    await refresh();
+    toast(target.checked ? "Smart mode on — Claude will group & advise." : "Smart mode off — local only.");
+  } else if (target.id === "dedupe") {
+    await chrome.storage.local.set({ [CONFIG.AUTO_DEDUPE_KEY]: target.checked });
+    toast(target.checked ? "Auto-merge duplicates on." : "Auto-merge off.");
+  }
 }
 
 function onClick(e: Event) {

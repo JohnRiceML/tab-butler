@@ -16,6 +16,8 @@ export const CONFIG = {
   SMART_ENABLED_KEY: "smartEnabled", // privacy opt-in — Claude calls are gated on this
   ARCHIVE_KEY: "archive", // ArchivedTab[]
   UNDO_KEY: "lastArchiveBatch", // ArchivedTab[] from the most recent archive pass
+  AUTO_DEDUPE_KEY: "autoDedupe", // background duplicate-tab merge (default on)
+  ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — lets Smart run with no proxy
 } as const;
 
 /**

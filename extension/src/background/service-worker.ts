@@ -1,7 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast, getArchive } from "../lib/archive";
 import { advise, classify, isSmartEnabled } from "../lib/claude-client";
-import { archivableTabs, groupByDomain } from "../lib/heuristics";
+import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -25,6 +25,28 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === CONFIG.SCAN_ALARM) void runIdleArchive();
+});
+
+/**
+ * Auto-dedupe: when a tab finishes loading and an OLDER tab in the same window
+ * already points at the same URL, switch to the older one and close the new
+ * copy. Low-regret (the original stays open). Default on; toggle in the popup.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" || tab.pinned || !tab.url || !tab.url.startsWith("http")) return;
+  void (async () => {
+    const enabled = (await chrome.storage.local.get(CONFIG.AUTO_DEDUPE_KEY))[CONFIG.AUTO_DEDUPE_KEY];
+    if (enabled === false) return; // default on
+    const key = normalizeUrl(tab.url!);
+    const tabs = await chrome.tabs.query({ windowId: tab.windowId });
+    const twin = tabs.find(
+      (t) => t.id != null && t.id !== tabId && t.id < tabId && !t.pinned && t.url && normalizeUrl(t.url) === key,
+    );
+    if (twin?.id != null) {
+      await chrome.tabs.update(twin.id, { active: true });
+      await chrome.tabs.remove(tabId);
+    }
+  })();
 });
 
 /* ---------- core actions ---------- */
