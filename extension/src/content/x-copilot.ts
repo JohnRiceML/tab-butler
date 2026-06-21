@@ -384,6 +384,32 @@ function likePost(el: HTMLElement | null): void {
   (btns.find((b) => !b.closest('[role="link"]')) || btns[0])?.click();
 }
 
+/** Authors we've followed (or confirmed already-followed) this session. */
+const followed = new Set<string>();
+
+function closeMenu(): void {
+  document.querySelector<HTMLElement>('[data-testid="mask"]')?.click();
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+}
+
+/** Follow the OUTER post's author via its "•••" menu (the only reliable in-DOM
+ *  path on a timeline post). The menu shows "Follow @x" ONLY when not already
+ *  following — so this can only follow, never unfollow. Best-effort. */
+async function followAuthor(el: HTMLElement | null): Promise<"followed" | "already" | "failed"> {
+  if (!el?.isConnected) return "failed";
+  const caret = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="caret"]')).find((c) => !c.closest('[role="link"]'));
+  if (!caret) return "failed";
+  caret.click();
+  const menu = await waitFor('[role="menu"]', 1500);
+  if (!menu) return "failed";
+  const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+  const follow = items.find((it) => /^follow\b/i.test(it.textContent?.trim() || ""));
+  if (follow) { follow.click(); return "followed"; }
+  const already = items.some((it) => /^unfollow\b/i.test(it.textContent?.trim() || ""));
+  closeMenu();
+  return already ? "already" : "failed";
+}
+
 /** Locate a post by status id, falling back to matching its text (for the dock,
  *  where the original element may have been recycled by virtualization). */
 function findPost(id: string, text?: string): HTMLElement | null {
@@ -619,10 +645,11 @@ const DOCK_CSS = `
 .ir { color:#8c7d68; font-size:11px; }
 .cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
        padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT}; }
-.ib { display:flex; gap:6px; margin-top:6px; }
+.ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
 .bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; }
+.bt:disabled { opacity:.55; cursor:default; }
 .empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
 `;
 
@@ -671,11 +698,22 @@ function renderList(list: HTMLElement) {
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
     draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar);
+    const follow = document.createElement("button"); follow.className = "bt";
+    const isFollowed = followed.has(o.author);
+    follow.textContent = isFollowed ? "Following ✓" : "Follow";
+    follow.disabled = isFollowed;
+    follow.onclick = async () => {
+      follow.disabled = true; follow.textContent = "Following…";
+      const r = await followAuthor(findPost(o.id, o.text));
+      if (r === "followed") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Followed @${o.author}.`); }
+      else if (r === "already") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Already following @${o.author}.`); }
+      else { follow.disabled = false; follow.textContent = "Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
+    };
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
     dismiss.onclick = () => { opps.delete(o.id); renderDock(); };
-    ib.append(draft, open, dismiss);
+    ib.append(draft, follow, open, dismiss);
     it.append(ia, ix);
     if (meta) { const im = document.createElement("div"); im.className = "im"; im.textContent = meta; it.append(im); }
     it.append(ir, ib);
