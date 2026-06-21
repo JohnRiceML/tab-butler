@@ -23,6 +23,12 @@ let noKeyNotified = false;
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
 const seen = new Map<string, { score: number; reason: string }>();
 
+/** Collected reply-worthy posts, surfaced in the always-on dock. */
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; }
+const opps = new Map<string, Opp>();
+let dockOpen = false;
+let dockFilter = "";
+
 interface Queued { id: string; author: string; text: string; el: HTMLElement; }
 const queue: Queued[] = [];
 
@@ -122,13 +128,19 @@ async function flush() {
     return;
   }
   if (!resp || resp.error) return; // transient error — back off; the cap bounds retries
+  let added = false;
   for (const s of resp.scores ?? []) {
     const b = batch[s.i];
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
     seen.set(b.id, { score: s.score, reason });
-    if (s.score >= THRESHOLD && statusInfo(b.el)?.id === b.id) badge(b.el, reason);
+    if (s.score >= THRESHOLD) {
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined });
+      added = true;
+      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason);
+    }
   }
+  if (added) renderDock();
   if (queue.length) scheduleFlush();
 }
 
@@ -194,17 +206,17 @@ function ensurePanel(): ShadowRoot {
 }
 function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = null; }
 
-async function openDraftFromEl(el: HTMLElement) {
-  const info = statusInfo(el);
-  const author = info?.author || outerText(el).slice(0, 0) || "this post";
-  const text = outerText(el);
-  const context = quotedText(el);
+async function draftFor(author: string, text: string, context?: string) {
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context });
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies." });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: "Couldn't draft a reply — try again." });
   else paintPanel(root, author, text, { draft: resp.reply ?? "" });
+}
+function openDraftFromEl(el: HTMLElement) {
+  const info = statusInfo(el);
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el));
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string }) {
@@ -246,11 +258,115 @@ function toast(msg: string) {
   setTimeout(() => host.remove(), 6000);
 }
 
+/* ---------- opportunities dock (always-on, ranked top posts) ---------- */
+
+const DOCK_CSS = `
+.l { background:${ACCENT}; color:${INK}; border:0; border-radius:999px; cursor:pointer;
+     font:600 12px -apple-system,system-ui,sans-serif; padding:8px 14px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+.d { width:340px; max-width:calc(100vw - 36px); max-height:70vh; display:flex; flex-direction:column;
+     background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:14px;
+     font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+.dh { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 8px; }
+.dt { font-weight:600; } .dt b { color:${ACCENT}; }
+.dx { background:none; border:0; color:#8c7d68; font-size:14px; cursor:pointer; }
+.df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:9px;
+      color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
+.dl { overflow:auto; padding:0 8px 10px; }
+.it { padding:9px 8px; border-top:.5px solid rgba(214,154,92,.10); }
+.ia { font-weight:600; font-size:12.5px; } .ia .sc { color:${ACCENT}; margin-left:6px; }
+.ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.ir { color:#8c7d68; font-size:11px; }
+.ib { display:flex; gap:6px; margin-top:6px; }
+.bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
+      border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
+.bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; }
+.empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
+`;
+
+let dockHost: HTMLElement | null = null;
+let dockRoot: ShadowRoot | null = null;
+function ensureDock(): ShadowRoot {
+  if (dockHost?.isConnected && dockRoot) return dockRoot;
+  dockHost = document.createElement("div");
+  Object.assign(dockHost.style, { position: "fixed", bottom: "18px", left: "18px", zIndex: "2147483646" } as Partial<CSSStyleDeclaration>);
+  dockRoot = dockHost.attachShadow({ mode: "closed" });
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(DOCK_CSS);
+  dockRoot.adoptedStyleSheets = [sheet];
+  document.documentElement.appendChild(dockHost);
+  return dockRoot;
+}
+
+function topOpps(): Opp[] {
+  const f = dockFilter.toLowerCase();
+  return [...opps.values()]
+    .filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 25);
+}
+
+function renderList(list: HTMLElement) {
+  list.replaceChildren();
+  const items = topOpps();
+  if (!items.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = opps.size ? "No matches." : "Scroll your feed — reply-worthy posts collect here.";
+    list.appendChild(e);
+    return;
+  }
+  for (const o of items) {
+    const it = document.createElement("div"); it.className = "it";
+    const ia = document.createElement("div"); ia.className = "ia";
+    ia.append(document.createTextNode(`@${o.author}`));
+    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
+    const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
+    const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
+    const ib = document.createElement("div"); ib.className = "ib";
+    const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
+    draft.onclick = () => void draftFor(o.author, o.text, o.context);
+    const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
+    open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
+    ib.append(draft, open);
+    it.append(ia, ix, ir, ib);
+    list.appendChild(it);
+  }
+}
+
+function renderDock() {
+  if (!enabled) return;
+  const root = ensureDock();
+  root.replaceChildren();
+  const n = opps.size;
+  if (!dockOpen) {
+    const l = document.createElement("button");
+    l.className = "l";
+    l.textContent = n ? `✦ ${n} reply ${n === 1 ? "spot" : "spots"}` : "✦ Tab Butler";
+    l.onclick = () => { dockOpen = true; renderDock(); };
+    root.appendChild(l);
+    return;
+  }
+  const d = document.createElement("div"); d.className = "d";
+  const h = document.createElement("div"); h.className = "dh";
+  const t = document.createElement("div"); t.className = "dt";
+  const tb = document.createElement("b"); tb.textContent = String(n);
+  t.append(document.createTextNode("Reply opportunities "), tb);
+  const x = document.createElement("button"); x.className = "dx"; x.textContent = "✕"; x.onclick = () => { dockOpen = false; renderDock(); };
+  h.append(t, x);
+  const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter opportunities…"; f.value = dockFilter;
+  const list = document.createElement("div"); list.className = "dl";
+  f.oninput = () => { dockFilter = f.value; renderList(list); };
+  d.append(h, f, list);
+  root.appendChild(d);
+  renderList(list);
+}
+
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
   enabled = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false; // default on
   if (!enabled) return;
+  renderDock();
   new MutationObserver(() => requestScan()).observe(document.body, { childList: true, subtree: true });
 
   // Content scripts can't intercept the page's history.pushState, so poll the URL.
@@ -259,9 +375,10 @@ async function boot() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
     dismissPanel();
-    if (seen.size > 600) seen.clear(); // bound memory across long sessions
+    if (seen.size > 600) { seen.clear(); opps.clear(); } // bound memory across long sessions
     selfHandle = "";
     requestScan();
+    renderDock();
   }, 700);
 
   scan();
