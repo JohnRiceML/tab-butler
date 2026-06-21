@@ -235,22 +235,54 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Put text into X's rich-text editor. A simulated paste is what its editor
- *  reliably registers; execCommand is the fallback. */
-async function typeInto(editor: HTMLElement, text: string): Promise<boolean> {
-  editor.focus();
-  await sleep(100);
-  try { const s = window.getSelection(); s?.selectAllChildren(editor); s?.collapseToEnd(); } catch { /* ignore */ }
+/** The actual contenteditable inside X's composer (the testid node may wrap it). */
+function editableOf(node: HTMLElement): HTMLElement {
+  if (node.getAttribute("contenteditable") === "true") return node;
+  return node.querySelector<HTMLElement>('[contenteditable="true"]') || node;
+}
+function placeCaretEnd(ce: HTMLElement) {
+  try {
+    const r = document.createRange();
+    r.selectNodeContents(ce);
+    r.collapse(false);
+    const s = window.getSelection();
+    s?.removeAllRanges();
+    s?.addRange(r);
+  } catch { /* ignore */ }
+}
+
+/** Put text into X's DraftJS editor. Tries execCommand, then a simulated paste,
+ *  then beforeinput — verifying after each, since DraftJS silently drops inputs
+ *  that don't align with its internal selection. */
+async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
+  const ce = editableOf(node);
+  const filled = () => (ce.textContent || "").replace(/​/g, "").trim().length > 0;
+
+  ce.focus();
+  await sleep(120);
+  placeCaretEnd(ce);
+  document.execCommand("insertText", false, text);
+  await sleep(50);
+  if (filled()) return true;
+
+  ce.focus();
+  placeCaretEnd(ce);
   try {
     const dt = new DataTransfer();
     dt.setData("text/plain", text);
-    editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    ce.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
   } catch { /* ignore */ }
-  await sleep(90);
-  if ((editor.textContent || "").trim()) return true;
-  editor.focus();
-  if (document.execCommand("insertText", false, text)) return true;
-  return (editor.textContent || "").trim().length > 0;
+  await sleep(70);
+  if (filled()) return true;
+
+  ce.focus();
+  placeCaretEnd(ce);
+  try {
+    ce.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
+    ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
+  } catch { /* ignore */ }
+  await sleep(50);
+  return filled();
 }
 
 /** Best-effort: open the post's reply box and type the draft into it. Never submits. */
