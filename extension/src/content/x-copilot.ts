@@ -233,6 +233,26 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
   });
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Put text into X's rich-text editor. A simulated paste is what its editor
+ *  reliably registers; execCommand is the fallback. */
+async function typeInto(editor: HTMLElement, text: string): Promise<boolean> {
+  editor.focus();
+  await sleep(100);
+  try { const s = window.getSelection(); s?.selectAllChildren(editor); s?.collapseToEnd(); } catch { /* ignore */ }
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  } catch { /* ignore */ }
+  await sleep(90);
+  if ((editor.textContent || "").trim()) return true;
+  editor.focus();
+  if (document.execCommand("insertText", false, text)) return true;
+  return (editor.textContent || "").trim().length > 0;
+}
+
 /** Best-effort: open the post's reply box and type the draft into it. Never submits. */
 async function insertReply(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "blocked"> {
   // Target the REPLY DIALOG's composer — never the page's main "what's happening"
@@ -251,10 +271,7 @@ async function insertReply(text: string, postEl: HTMLElement | null): Promise<"o
       (location.pathname.includes("/status/") ? await waitFor('[data-testid^="tweetTextarea_"]', 600) : null);
   }
   if (!editor) return "no-composer";
-  editor.focus();
-  try { const s = window.getSelection(); s?.selectAllChildren(editor); s?.collapseToEnd(); } catch { /* ignore */ }
-  // execCommand('insertText') fires the input events X's rich-text editor listens for.
-  return document.execCommand("insertText", false, text) ? "ok" : "blocked";
+  return (await typeInto(editor, text)) ? "ok" : "blocked";
 }
 
 async function doInsert(text: string) {
