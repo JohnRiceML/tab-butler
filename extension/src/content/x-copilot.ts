@@ -397,30 +397,43 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
   const ce = editableOf(node);
   const filled = () => (ce.textContent || "").replace(/​/g, "").trim().length > 0;
 
-  ce.focus();
-  await sleep(120);
-  placeCaretEnd(ce);
-  document.execCommand("insertText", false, text);
-  await sleep(50);
-  if (filled()) return true;
+  // Poll for success so a slow-but-successful method is detected BEFORE the next
+  // one runs — otherwise two methods both land and the text doubles in the box.
+  const settled = async (): Promise<boolean> => {
+    for (let i = 0; i < 12; i++) { if (filled()) return true; await sleep(40); }
+    return filled();
+  };
+  const clear = () => {
+    try {
+      ce.focus();
+      const r = document.createRange(); r.selectNodeContents(ce);
+      const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r);
+      document.execCommand("delete", false);
+    } catch { /* ignore */ }
+  };
+  const exec = () => { placeCaretEnd(ce); document.execCommand("insertText", false, text); };
+  const paste = () => {
+    try {
+      const dt = new DataTransfer(); dt.setData("text/plain", text);
+      ce.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    } catch { /* ignore */ }
+  };
+  const beforeInput = () => {
+    try {
+      ce.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
+      ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
+    } catch { /* ignore */ }
+  };
 
-  ce.focus();
-  placeCaretEnd(ce);
-  try {
-    const dt = new DataTransfer();
-    dt.setData("text/plain", text);
-    ce.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-  } catch { /* ignore */ }
-  await sleep(70);
-  if (filled()) return true;
-
-  ce.focus();
-  placeCaretEnd(ce);
-  try {
-    ce.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
-    ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
-  } catch { /* ignore */ }
-  await sleep(50);
+  await sleep(80);
+  for (const method of [exec, paste, beforeInput]) {
+    ce.focus();
+    if (filled()) clear();      // never stack onto a prior (slow) insert
+    await sleep(20);
+    placeCaretEnd(ce);
+    method();
+    if (await settled()) return true;
+  }
   return filled();
 }
 
@@ -445,11 +458,18 @@ async function insertReply(text: string, postEl: HTMLElement | null): Promise<"o
   return (await typeInto(editor, text)) ? "ok" : "blocked";
 }
 
+let inserting = false;
 async function doInsert(text: string) {
-  const r = await insertReply(text, draftGetEl?.() ?? null);
-  if (r === "ok") { if (draftOppId) { opps.delete(draftOppId); renderDock(); } toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
-  else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
-  else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
+  if (inserting) return; // ignore re-clicks while an insert is in flight (avoids doubling)
+  inserting = true;
+  try {
+    const r = await insertReply(text, draftGetEl?.() ?? null);
+    if (r === "ok") { if (draftOppId) { opps.delete(draftOppId); renderDock(); } toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
+    else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
+    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
+  } finally {
+    inserting = false;
+  }
 }
 
 async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string, avatar?: string) {
