@@ -1,5 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
+import type { ProductItem } from "../lib/types";
 
 /**
  * Tab Butler — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
@@ -21,11 +22,25 @@ let enabled = true;
 let selfHandle = "";
 let noKeyNotified = false;
 
+/** The user's products (relevance-tagged promotion) + legacy single-product fallback.
+ *  Read from storage on boot and kept fresh via storage.onChanged. */
+let xProducts: ProductItem[] = [];
+let legacyProduct = "";
+
+/** The product context string sent to the drafter: the tagged product for a
+ *  promote opp, else all products (the drafter picks if a post invites it). */
+function productContext(productIndex?: number): string | undefined {
+  const fmt = (p: ProductItem) => `${p.name}${p.blurb ? ` — ${p.blurb}` : ""}${p.url ? ` (${p.url})` : ""}`;
+  if (!xProducts.length) return legacyProduct.trim() || undefined;
+  if (productIndex != null && xProducts[productIndex]) return fmt(xProducts[productIndex]);
+  return xProducts.map(fmt).join("\n");
+}
+
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; productIndex?: number }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; productIndex?: number; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -229,7 +244,7 @@ async function flush() {
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
   batch.forEach((b) => inFlight.add(b.id));
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; product?: number }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
@@ -246,10 +261,11 @@ async function flush() {
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
     const category = catId(s.category);
+    const productIndex = category === "promote" && typeof s.product === "number" && xProducts[s.product] ? s.product : undefined;
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category });
+    seen.set(b.id, { score: s.score, reason, category, productIndex });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, productIndex, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
     } else {
@@ -369,7 +385,7 @@ let draftOppId: string | null = null;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; }
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; product?: string; }
 let lastDraft: DraftReq | null = null;
 
 /** Posts already liked this session, so re-drafts / angle switches don't re-toggle. */
@@ -535,15 +551,15 @@ async function doInsert(text: string) {
   }
 }
 
-async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string, avatar?: string) {
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string, avatar?: string, product?: string) {
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
-  lastDraft = { author, text, context, getEl, oppId, angle, avatar };
+  lastDraft = { author, text, context, getEl, oppId, angle, avatar, product };
   // Like the post you're engaging with — once per post, on the first draft.
   if (oppId && !liked.has(oppId)) { liked.add(oppId); likePost(getEl?.() ?? null); }
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, angle, avatar });
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle });
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle, avatar });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle, avatar });
   else paintPanel(root, author, text, { draft: resp.reply ?? "", angle, avatar });
@@ -561,7 +577,7 @@ function angleRow(active?: string): HTMLElement {
     c.onclick = () => {
       const d = lastDraft;
       if (!d) return;
-      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id, d.avatar);
+      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id, d.avatar, d.product);
     };
     row.appendChild(c);
   }
@@ -570,8 +586,8 @@ function angleRow(active?: string): HTMLElement {
 
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  const category = info ? (opps.get(info.id)?.category ?? seen.get(info.id)?.category) : undefined;
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, category, avatarUrl(el));
+  const meta = info ? (opps.get(info.id) ?? seen.get(info.id)) : undefined;
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, meta?.category, avatarUrl(el), productContext(meta?.productIndex));
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string }) {
@@ -599,7 +615,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
     copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
     const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle, d.avatar); };
+    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle, d.avatar, d.product); };
     row.append(copy, regen);
     const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
     p.append(ta, insert, row, foot);
@@ -690,14 +706,19 @@ function renderList(list: HTMLElement) {
     const ia = document.createElement("div"); ia.className = "ia";
     if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
     ia.append(document.createTextNode(`@${o.author}`));
-    if (o.category) { const cc = document.createElement("span"); cc.className = "cat"; cc.textContent = catLabel(o.category); ia.append(cc); }
+    if (o.category) {
+      const cc = document.createElement("span"); cc.className = "cat";
+      const pname = o.category === "promote" && o.productIndex != null ? xProducts[o.productIndex]?.name : undefined;
+      cc.textContent = pname ? `${catLabel(o.category)} · ${pname}` : catLabel(o.category);
+      ia.append(cc);
+    }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
     const meta = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar);
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar, productContext(o.productIndex));
     const follow = document.createElement("button"); follow.className = "bt";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "Following ✓" : "Follow";
@@ -759,6 +780,14 @@ function renderDock() {
 async function boot() {
   enabled = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false; // default on
   if (!enabled) return;
+  const storedProducts = await getLocal(CONFIG.X_PRODUCTS_KEY);
+  xProducts = Array.isArray(storedProducts) ? (storedProducts as ProductItem[]) : [];
+  legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes[CONFIG.X_PRODUCTS_KEY]) xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || [];
+    if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
+  });
   renderDock();
   new MutationObserver(() => requestScan()).observe(document.body, { childList: true, subtree: true });
 

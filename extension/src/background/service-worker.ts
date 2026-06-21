@@ -198,7 +198,8 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       case "SCORE_POSTS":
         try {
           const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          sendResponse({ scores: await scorePosts(msg.posts, niche) });
+          const products = ((await chrome.storage.local.get(CONFIG.X_PRODUCTS_KEY))[CONFIG.X_PRODUCTS_KEY] as { name: string; blurb?: string }[]) || [];
+          sendResponse({ scores: await scorePosts(msg.posts, niche, products) });
         } catch (e) {
           sendResponse({ scores: [], error: (e as Error).message });
         }
@@ -206,7 +207,8 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       case "DRAFT_REPLY":
         try {
           const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
-          const product = ((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "";
+          // The content script resolves the relevant product(s) and sends them; fall back to the legacy single-product string.
+          const product = msg.product ?? (((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "");
           sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });

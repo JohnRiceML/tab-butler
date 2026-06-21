@@ -1,7 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
-import type { AdviceResult, Message } from "../lib/types";
+import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
 
@@ -9,6 +9,29 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
   );
+}
+
+/** Favicon for a product URL, via Google's S2 service (works on extension pages). */
+function faviconUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const host = new URL(url.startsWith("http") ? url : `https://${url}`).hostname;
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
+  } catch { return undefined; }
+}
+/** One product per line: "Name | url | one-liner" (url + blurb optional). */
+function parseProducts(text: string): ProductItem[] {
+  return text.split("\n").map((line) => {
+    const parts = line.split("|").map((s) => s.trim());
+    return { name: parts[0] || "", url: parts[1] || undefined, blurb: parts.slice(2).join(" | ").trim() || undefined };
+  }).filter((p) => p.name);
+}
+function serializeProducts(items: ProductItem[]): string {
+  return items.map((p) => {
+    const parts = [p.name, p.url || "", p.blurb || ""];
+    while (parts.length > 1 && !parts[parts.length - 1]) parts.pop();
+    return parts.join(" | ");
+  }).join("\n");
 }
 function idleLabel(min: number | undefined): string {
   if (min == null) return "No activity data";
@@ -45,7 +68,8 @@ interface ViewData {
   xEnabled: boolean;
   xNiche: string;
   xVoice: string;
-  xProduct: string;
+  xProductsText: string;
+  products: ProductItem[];
 }
 
 const MOCK: ViewData = {
@@ -64,7 +88,8 @@ const MOCK: ViewData = {
   xEnabled: true,
   xNiche: "",
   xVoice: "",
-  xProduct: "",
+  xProductsText: "",
+  products: [],
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -104,7 +129,8 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY]);
+  const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
   return {
@@ -119,7 +145,8 @@ async function getData(): Promise<ViewData> {
     xEnabled: store[CONFIG.X_COPILOT_KEY] !== false,
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
-    xProduct: (store[CONFIG.X_PRODUCT_KEY] as string) || "",
+    xProductsText: productsArr.length ? serializeProducts(productsArr) : ((store[CONFIG.X_PRODUCT_KEY] as string) || ""),
+    products: productsArr,
   };
 }
 
@@ -217,8 +244,10 @@ function render(d: ViewData): string {
       <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
     </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">What you're building <span class="dim" style="font-weight:400">— promoted when a post invites it</span></div>
-      <textarea id="xproduct" rows="3" placeholder="Product name + one-liner: what it does, who it's for, the problem it solves. Optional link.&#10;e.g. Tab Butler — a Claude-powered tab manager for people who keep 80 tabs open. Auto-groups, cleans up, and drafts X replies." style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xProduct)}</textarea>
+      <div class="name" style="margin-bottom:6px">Your products <span class="dim" style="font-weight:400">— one per line: Name | url | one-liner</span></div>
+      <textarea id="xproducts" rows="4" placeholder="Tab Butler | https://tabbutler.app | Claude-powered tab manager for people who keep 80 tabs open&#10;AI Peekaboo | https://aipeekaboo.com | playful AI photo tool" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xProductsText)}</textarea>
+      ${d.products.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${d.products.map((p) => { const fav = faviconUrl(p.url); return `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--row);border:.5px solid var(--line-strong);border-radius:999px;padding:3px 9px;font-size:11px">${fav ? `<img src="${esc(fav)}" width="14" height="14" style="border-radius:3px" alt=""/>` : "✦"} ${esc(p.name)}</span>`; }).join("")}</div>` : ""}
+      <div class="dim" style="font-size:10.5px;margin-top:6px">On a "drop your product" post, the copilot tags the best-fit product and drafts with it.</div>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -432,9 +461,10 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
-        const product = (document.getElementById("xproduct") as HTMLTextAreaElement | null)?.value ?? "";
-        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCT_KEY]: product });
-        toast("Copilot settings saved.");
+        const products = parseProducts((document.getElementById("xproducts") as HTMLTextAreaElement | null)?.value ?? "");
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCTS_KEY]: products });
+        toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
+        await refresh(); // re-render so the product favicon previews update
         break;
       }
     }

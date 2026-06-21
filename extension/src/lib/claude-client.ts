@@ -129,18 +129,23 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 /* ---------- X reply copilot (BYO-key) ---------- */
 
 export interface XPost { i: number; author: string; text: string; meta?: string; }
-export interface XScore { i: number; score: number; reason: string; category?: string; }
+export interface XScore { i: number; score: number; reason: string; category?: string; product?: number; }
 
-/** Score posts for reply-worthiness given the user's niche. Cheap (Haiku). */
-export async function scorePosts(posts: XPost[], niche: string): Promise<XScore[]> {
+/** Score posts for reply-worthiness given the user's niche. Cheap (Haiku).
+ *  When products are supplied, the scorer also tags each PROMOTE post with the
+ *  best-fit product index. */
+export async function scorePosts(posts: XPost[], niche: string, products: { name: string; blurb?: string }[] = []): Promise<XScore[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p) => `${p.i}. @${p.author}${p.meta ? ` [${p.meta}]` : ""}: ${p.text}`).join("\n");
+  const prods = products.length
+    ? `\n\nThe user's products (for a post you categorize "promote", also set "product" to the 0-based index of the single best-fit product; omit if none clearly fits):\n${products.map((p, i) => `${i}. ${p.name}${p.blurb ? ` — ${p.blurb}` : ""}`).join("\n")}`
+    : "";
   const raw = await callDirect<{ scores: XScore[] }>(
     key,
     "claude-haiku-4-5",
     X_SCORE_SYSTEM,
-    `User niche / what's worth replying to:\n${niche || "(not set — only flag posts clearly answerable with specific expertise; be extra strict)"}\n\nPosts:\n${list}`,
+    `User niche / what's worth replying to:\n${niche || "(not set — only flag posts clearly answerable with specific expertise; be extra strict)"}\n\nPosts:\n${list}${prods}`,
     1024,
   );
   return raw.scores || [];

@@ -21,7 +21,8 @@ export const CONFIG = {
   X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (default on)
   X_NICHE_KEY: "xNiche", // what posts are worth replying to
   X_VOICE_KEY: "xVoice", // reply voice / examples
-  X_PRODUCT_KEY: "xProduct", // the user's product/work, to promote when a post invites it
+  X_PRODUCT_KEY: "xProduct", // legacy single-product string (fallback)
+  X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
 } as const;
 
 /**
