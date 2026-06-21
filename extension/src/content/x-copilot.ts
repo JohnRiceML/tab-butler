@@ -144,6 +144,19 @@ async function flush() {
   if (queue.length) scheduleFlush();
 }
 
+/** Manual rescan (dock button). Lifts the per-session cost cap and forgets prior
+ *  scores so every post currently on screen is re-evaluated fresh. Keeps the
+ *  opportunities already collected from scrolling — this refreshes, never wipes. */
+function rescan() {
+  if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to enable scanning."); return; }
+  scoreCalls = 0;        // user explicitly asked for more — reset the guard
+  seen.clear();          // re-evaluate the visible feed from scratch
+  queue.length = 0;      // drop anything half-queued
+  for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
+  toast("Rescanning the page for reply spots…");
+  scan();
+}
+
 /* ---------- badge (idempotent; survives X re-renders via cache re-apply) ---------- */
 
 function badge(el: HTMLElement, reason: string) {
@@ -382,6 +395,10 @@ const DOCK_CSS = `
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.5); }
 .dh { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 8px; }
 .dt { font-weight:600; } .dt b { color:${ACCENT}; }
+.da { display:flex; align-items:center; gap:8px; }
+.re { background:none; border:.5px solid rgba(214,154,92,.28); color:${ACCENT}; border-radius:999px;
+      font:600 11px -apple-system,system-ui,sans-serif; padding:3px 9px; cursor:pointer; line-height:1.4; }
+.re:hover { background:rgba(214,154,92,.10); }
 .dx { background:none; border:0; color:#8c7d68; font-size:14px; cursor:pointer; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:9px;
       color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
@@ -467,8 +484,13 @@ function renderDock() {
   const t = document.createElement("div"); t.className = "dt";
   const tb = document.createElement("b"); tb.textContent = String(n);
   t.append(document.createTextNode("Reply opportunities "), tb);
+  const acts = document.createElement("div"); acts.className = "da";
+  const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
+  re.title = "Rescan the page — re-check every visible post for new reply spots";
+  re.onclick = () => rescan();
   const x = document.createElement("button"); x.className = "dx"; x.textContent = "✕"; x.onclick = () => { dockOpen = false; renderDock(); };
-  h.append(t, x);
+  acts.append(re, x);
+  h.append(t, acts);
   const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter opportunities…"; f.value = dockFilter;
   const list = document.createElement("div"); list.className = "dl";
   f.oninput = () => { dockFilter = f.value; renderList(list); };
