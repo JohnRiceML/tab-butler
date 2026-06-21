@@ -235,11 +235,20 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
 
 /** Best-effort: open the post's reply box and type the draft into it. Never submits. */
 async function insertReply(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "blocked"> {
-  let editor = document.querySelector<HTMLElement>('[data-testid="tweetTextarea_0"]');
-  if (!editor && postEl?.isConnected) {
+  // Target the REPLY DIALOG's composer — never the page's main "what's happening"
+  // box (which is also a tweetTextarea and would post to everyone).
+  let editor = document.querySelector<HTMLElement>('[role="dialog"] [data-testid^="tweetTextarea_"]');
+  if (!editor) {
+    if (!postEl?.isConnected) return "no-composer";
     postEl.scrollIntoView({ block: "center" });
-    postEl.querySelector<HTMLElement>('[data-testid="reply"]')?.click();
-    editor = await waitFor('[data-testid="tweetTextarea_0"]', 2500);
+    const btn = postEl.querySelector<HTMLElement>('[data-testid="reply"]');
+    if (!btn) return "no-composer";
+    btn.click();
+    // The reply composer opens inside a modal dialog (feed). Fall back to an
+    // inline composer only on a post page, where there is no "everyone" box.
+    editor =
+      (await waitFor('[role="dialog"] [data-testid^="tweetTextarea_"]', 2500)) ||
+      (location.pathname.includes("/status/") ? await waitFor('[data-testid^="tweetTextarea_"]', 600) : null);
   }
   if (!editor) return "no-composer";
   editor.focus();
