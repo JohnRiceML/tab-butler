@@ -56,8 +56,8 @@ Also CATEGORIZE each post with the single best reply angle for the user — exac
 - connect: a chance to relate personally and build rapport
 - joke: best met with a witty, on-point one-liner
 
-Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string,"category":"promote"|"value"|"ask"|"support"|"connect"|"joke","product":number}]}
-("product" is OPTIONAL — include it only for promote posts when a product list is given.)`;
+Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string,"category":"promote"|"value"|"ask"|"support"|"connect"|"joke","product"?:number}]}
+("product" is OPTIONAL — omit it entirely for every non-promote post, and for promote posts when no product list was given or none clearly fits.)`;
 
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
 

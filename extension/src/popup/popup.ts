@@ -13,10 +13,10 @@ function esc(s: string): string {
 
 /** Favicon for a product URL, via Google's S2 service (works on extension pages). */
 function faviconUrl(url?: string): string | undefined {
-  if (!url) return undefined;
+  if (!url || /^(javascript|data|blob|vbscript):/i.test(url.trim())) return undefined; // reject dangerous schemes
   try {
     const host = new URL(url.startsWith("http") ? url : `https://${url}`).hostname;
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
+    return host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32` : undefined;
   } catch { return undefined; }
 }
 /** One product per line: "Name | url | one-liner" (url + blurb optional). */
@@ -463,6 +463,7 @@ async function dispatch(el: HTMLElement) {
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
         const products = parseProducts((document.getElementById("xproducts") as HTMLTextAreaElement | null)?.value ?? "");
         await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCTS_KEY]: products });
+        await chrome.storage.local.remove(CONFIG.X_PRODUCT_KEY); // clean migration off the legacy single-product string
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
         await refresh(); // re-render so the product favicon previews update
         break;

@@ -27,20 +27,21 @@ let noKeyNotified = false;
 let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 
-/** The product context string sent to the drafter: the tagged product for a
- *  promote opp, else all products (the drafter picks if a post invites it). */
-function productContext(productIndex?: number): string | undefined {
+/** The product context string sent to the drafter: the (snapshotted) tagged
+ *  product for a promote opp, else all current products (the drafter picks if a
+ *  post invites it), else the legacy single-product fallback. */
+function productContext(product?: ProductItem): string | undefined {
   const fmt = (p: ProductItem) => `${p.name}${p.blurb ? ` — ${p.blurb}` : ""}${p.url ? ` (${p.url})` : ""}`;
-  if (!xProducts.length) return legacyProduct.trim() || undefined;
-  if (productIndex != null && xProducts[productIndex]) return fmt(xProducts[productIndex]);
-  return xProducts.map(fmt).join("\n");
+  if (product) return fmt(product);
+  if (xProducts.length) return xProducts.map(fmt).join("\n");
+  return legacyProduct.trim() || undefined;
 }
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string; productIndex?: number }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; product?: ProductItem }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; productIndex?: number; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; product?: ProductItem; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -261,11 +262,13 @@ async function flush() {
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
     const category = catId(s.category);
-    const productIndex = category === "promote" && typeof s.product === "number" && xProducts[s.product] ? s.product : undefined;
+    // Snapshot the resolved product OBJECT (not the index) so a later product
+    // edit can't make a stored index point at the wrong/missing product.
+    const product = category === "promote" && typeof s.product === "number" ? xProducts[s.product] : undefined;
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category, productIndex });
+    seen.set(b.id, { score: s.score, reason, category, product });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, productIndex, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, product, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
     } else {
@@ -587,7 +590,7 @@ function angleRow(active?: string): HTMLElement {
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
   const meta = info ? (opps.get(info.id) ?? seen.get(info.id)) : undefined;
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, meta?.category, avatarUrl(el), productContext(meta?.productIndex));
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, meta?.category, avatarUrl(el), productContext(meta?.product));
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string }) {
@@ -708,7 +711,7 @@ function renderList(list: HTMLElement) {
     ia.append(document.createTextNode(`@${o.author}`));
     if (o.category) {
       const cc = document.createElement("span"); cc.className = "cat";
-      const pname = o.category === "promote" && o.productIndex != null ? xProducts[o.productIndex]?.name : undefined;
+      const pname = o.product?.name;
       cc.textContent = pname ? `${catLabel(o.category)} · ${pname}` : catLabel(o.category);
       ia.append(cc);
     }
@@ -718,7 +721,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar, productContext(o.productIndex));
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar, productContext(o.product));
     const follow = document.createElement("button"); follow.className = "bt";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "Following ✓" : "Follow";
