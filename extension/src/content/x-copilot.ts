@@ -240,7 +240,7 @@ async function flush() {
     return;
   }
   if (!resp || resp.error) return; // transient error — back off; the cap bounds retries
-  let added = false;
+  let changed = false;
   for (const s of resp.scores ?? []) {
     const b = batch[s.i];
     if (!b) continue;
@@ -250,11 +250,15 @@ async function flush() {
     seen.set(b.id, { score: s.score, reason, category });
     if (s.score >= THRESHOLD) {
       opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
-      added = true;
+      changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
+    } else {
+      // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
+      if (opps.delete(b.id)) changed = true;
+      if (b.el.isConnected) b.el.querySelector("[data-tbx-badge]")?.remove();
     }
   }
-  if (added) renderDock();
+  if (changed) renderDock();
   if (queue.length) scheduleFlush();
 }
 
@@ -283,7 +287,17 @@ function catLabel(id?: string): string {
 }
 
 function badge(el: HTMLElement, reason: string, category?: string) {
-  if (el.querySelector("[data-tbx-badge]")) return;
+  const existing = el.querySelector<HTMLElement>("[data-tbx-badge]");
+  if (existing) {
+    // Already badged — refresh the label/tooltip only if the category changed
+    // (e.g. a Rescan re-categorized it), so it never gets stuck on a stale value.
+    if (existing.dataset.tbxCat !== (category || "")) {
+      existing.dataset.tbxCat = category || "";
+      existing.textContent = `✦ ${catLabel(category)}`;
+      existing.title = reason;
+    }
+    return;
+  }
   el.style.borderLeft = `3px solid ${ACCENT}`;
   el.style.borderTopLeftRadius = "4px";
   el.style.borderBottomLeftRadius = "4px";
@@ -291,6 +305,7 @@ function badge(el: HTMLElement, reason: string, category?: string) {
 
   const b = document.createElement("button");
   b.setAttribute("data-tbx-badge", "1");
+  b.dataset.tbxCat = category || "";
   b.textContent = `✦ ${catLabel(category)}`;
   b.title = reason;
   Object.assign(b.style, {
