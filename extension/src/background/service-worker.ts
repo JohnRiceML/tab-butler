@@ -206,7 +206,8 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       case "DRAFT_REPLY":
         try {
           const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
-          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle) });
+          const product = ((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "";
+          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }

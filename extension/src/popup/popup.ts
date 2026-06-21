@@ -45,6 +45,7 @@ interface ViewData {
   xEnabled: boolean;
   xNiche: string;
   xVoice: string;
+  xProduct: string;
 }
 
 const MOCK: ViewData = {
@@ -63,6 +64,7 @@ const MOCK: ViewData = {
   xEnabled: true,
   xNiche: "",
   xVoice: "",
+  xProduct: "",
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -102,7 +104,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY]);
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
   return {
@@ -117,6 +119,7 @@ async function getData(): Promise<ViewData> {
     xEnabled: store[CONFIG.X_COPILOT_KEY] !== false,
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
+    xProduct: (store[CONFIG.X_PRODUCT_KEY] as string) || "",
   };
 }
 
@@ -212,6 +215,10 @@ function render(d: ViewData): string {
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— your niche/goals</span></div>
       <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
+    </div>
+    <div class="li" style="display:block">
+      <div class="name" style="margin-bottom:6px">What you're building <span class="dim" style="font-weight:400">— promoted when a post invites it</span></div>
+      <textarea id="xproduct" rows="3" placeholder="Product name + one-liner: what it does, who it's for, the problem it solves. Optional link.&#10;e.g. Tab Butler — a Claude-powered tab manager for people who keep 80 tabs open. Auto-groups, cleans up, and drafts X replies." style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xProduct)}</textarea>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -425,7 +432,8 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
-        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice });
+        const product = (document.getElementById("xproduct") as HTMLTextAreaElement | null)?.value ?? "";
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCT_KEY]: product });
         toast("Copilot settings saved.");
         break;
       }
