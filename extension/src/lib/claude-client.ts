@@ -1,6 +1,6 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, RECALL_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, RECALL_SYSTEM, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
@@ -113,4 +113,36 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
   return (raw.results || [])
     .map((r) => (candidates[r.i] ? { ...candidates[r.i], why: r.why } : null))
     .filter((x): x is RankedResult => x !== null);
+}
+
+/* ---------- X reply copilot (BYO-key) ---------- */
+
+export interface XPost { i: number; author: string; text: string; }
+export interface XScore { i: number; score: number; reason: string; }
+
+/** Score posts for reply-worthiness given the user's niche. Cheap (Haiku). */
+export async function scorePosts(posts: XPost[], niche: string): Promise<XScore[]> {
+  const key = await getKey();
+  if (!key) throw new Error("no-key");
+  const list = posts.map((p) => `${p.i}. @${p.author}: ${p.text}`).join("\n");
+  const raw = await callDirect<{ scores: XScore[] }>(
+    key,
+    "claude-haiku-4-5",
+    X_SCORE_SYSTEM,
+    `User niche / what's worth replying to:\n${niche || "(not set — use general professional-growth judgment)"}\n\nPosts:\n${list}`,
+  );
+  return raw.scores || [];
+}
+
+/** Draft a reply in the user's voice. Quality matters → Sonnet. */
+export async function draftReply(post: { author: string; text: string }, voice: string): Promise<string> {
+  const key = await getKey();
+  if (!key) throw new Error("no-key");
+  const raw = await callDirect<{ reply: string }>(
+    key,
+    "claude-sonnet-4-6",
+    X_DRAFT_SYSTEM,
+    `User voice:\n${voice || "(not set — write concise, specific, friendly; no fluff, no hashtags, no emojis)"}\n\nReply to @${post.author}'s post:\n${post.text}`,
+  );
+  return (raw.reply || "").trim();
 }

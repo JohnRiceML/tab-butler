@@ -18,6 +18,9 @@ export const CONFIG = {
   UNDO_KEY: "lastArchiveBatch", // ArchivedTab[] from the most recent archive pass
   AUTO_DEDUPE_KEY: "autoDedupe", // background duplicate-tab merge (default on)
   ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — lets Smart run with no proxy
+  X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (default on)
+  X_NICHE_KEY: "xNiche", // what posts are worth replying to
+  X_VOICE_KEY: "xVoice", // reply voice / examples
 } as const;
 
 /**

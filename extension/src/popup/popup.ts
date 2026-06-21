@@ -42,6 +42,9 @@ interface ViewData {
   archivedCount: number;
   dedupe: boolean;
   hasKey: boolean;
+  xEnabled: boolean;
+  xNiche: string;
+  xVoice: string;
 }
 
 const MOCK: ViewData = {
@@ -57,6 +60,9 @@ const MOCK: ViewData = {
   archivedCount: 6,
   dedupe: true,
   hasKey: false,
+  xEnabled: true,
+  xNiche: "",
+  xVoice: "",
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -96,7 +102,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY]);
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
   return {
@@ -108,6 +114,9 @@ async function getData(): Promise<ViewData> {
     archivedCount: archive?.length ?? 0,
     dedupe: store[CONFIG.AUTO_DEDUPE_KEY] !== false,
     hasKey: Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]),
+    xEnabled: store[CONFIG.X_COPILOT_KEY] !== false,
+    xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
+    xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
   };
 }
 
@@ -196,6 +205,19 @@ function render(d: ViewData): string {
     <div class="li"><div class="grow"><div class="name">Auto-merge duplicate tabs</div><div class="sub">switch to the open tab instead of a copy</div></div>
       <label class="switch"><input type="checkbox" id="dedupe" aria-label="Auto-merge duplicate tabs" ${d.dedupe ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
     ${d.smart ? keyRow(d) : ""}
+  </div>
+
+  <div class="sec"><h2>X reply copilot</h2><label class="switch"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
+  <div class="list">
+    <div class="li" style="display:block">
+      <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— your niche/goals</span></div>
+      <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
+    </div>
+    <div class="li" style="display:block">
+      <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
+      <textarea id="xvoice" rows="3" placeholder="Paste a few replies you're proud of, or describe your tone…" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xVoice)}</textarea>
+      <button class="btn primary" data-action="save-x" style="margin-top:8px;padding:7px 12px">Save copilot settings</button>
+    </div>
   </div>
 
   <div class="footer-actions">
@@ -399,6 +421,13 @@ async function dispatch(el: HTMLElement) {
       }
       case "expand": { expanded = true; await refresh(); break; }
       case "collapse": { expanded = false; await refresh(); break; }
+      case "save-x": {
+        const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
+        const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice });
+        toast("Copilot settings saved.");
+        break;
+      }
     }
   } catch (err) {
     console.error("action failed", el.dataset.action, err);
@@ -432,6 +461,9 @@ async function onChange(e: Event) {
   } else if (target.id === "dedupe") {
     await chrome.storage.local.set({ [CONFIG.AUTO_DEDUPE_KEY]: target.checked });
     toast(target.checked ? "Auto-merge duplicates on." : "Auto-merge off.");
+  } else if (target.id === "xon") {
+    await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: target.checked });
+    toast(target.checked ? "X copilot on — reload x.com to apply." : "X copilot off — reload x.com.");
   }
 }
 

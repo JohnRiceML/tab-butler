@@ -15,6 +15,16 @@ await build({
   logLevel: "info",
 });
 
+// Content script: classic IIFE (content_scripts are not ES modules).
+await build({
+  entryPoints: { "x-copilot": "src/content/x-copilot.ts" },
+  bundle: true,
+  format: "iife",
+  target: "es2022",
+  outdir: "dist",
+  logLevel: "info",
+});
+
 cpSync("manifest.json", "dist/manifest.json");
 cpSync("src/popup/popup.html", "dist/popup.html");
 

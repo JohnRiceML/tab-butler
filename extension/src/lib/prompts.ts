@@ -39,3 +39,9 @@ export const RECALL_SYSTEM = `You are a browsing-history search assistant. You a
 
 Return ONLY JSON, no prose:
 {"results":[{"i":number,"why":string}]}`;
+
+export const X_SCORE_SYSTEM = `You score X (Twitter) posts for how worth-it it is for THIS user to REPLY, to grow their presence. You get the user's niche/goals and a numbered list of posts (author, text). Score each 0–1 for reply-worthiness with a 3–5 word reason. HIGH: relevant to the user's niche, answerable with genuine value/insight, good engagement upside, recent, from an account where a thoughtful reply could get seen. LOW: off-topic, low-effort, ragebait, pure broadcast/ads, or so huge the reply drowns. Be selective — most posts are not worth replying to.
+Return ONLY JSON, no prose: {"scores":[{"i":number,"score":number,"reason":string}]}`;
+
+export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given below). The reply MUST add genuine value — a specific insight, a sharp take, a useful question, or a real experience. NEVER generic praise ("great post!", "so true", "love this"), no hashtags, no emojis unless the voice clearly uses them. Keep it tight — aim under ~240 characters unless the voice runs longer. Sound human and like the user, not like an AI. Do not use em-dashes if the voice doesn't.
+Return ONLY JSON, no prose: {"reply":string}`;
