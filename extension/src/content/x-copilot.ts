@@ -807,8 +807,15 @@ function renderDock() {
   const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
   re.title = "Rescan the page — re-check every visible post for new reply spots";
   re.onclick = () => rescan();
+  acts.append(re);
+  if (n) {
+    const clr = document.createElement("button"); clr.className = "re"; clr.textContent = "Clear all";
+    clr.title = "Clear every collected reply spot";
+    clr.onclick = () => { opps.clear(); renderDock(); toast("Cleared all reply spots."); };
+    acts.append(clr);
+  }
   const x = document.createElement("button"); x.className = "dx"; x.textContent = "✕"; x.onclick = () => { dockOpen = false; renderDock(); };
-  acts.append(re, x);
+  acts.append(x);
   h.append(t, acts);
   const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter opportunities…"; f.value = dockFilter;
   const list = document.createElement("div"); list.className = "dl";
