@@ -208,11 +208,16 @@ function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = nul
 
 let draftGetEl: (() => HTMLElement | null) | null = null;
 
-function findPostEl(id: string): HTMLElement | null {
+/** Locate a post by status id, falling back to matching its text (for the dock,
+ *  where the original element may have been recycled by virtualization). */
+function findPost(id: string, text?: string): HTMLElement | null {
+  let byText: HTMLElement | null = null;
+  const needle = text?.slice(0, 60);
   for (const a of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) {
-    if (statusInfo(a)?.id === id) return a;
+    if (statusInfo(a)?.id === id) return a; // id match wins
+    if (needle && !byText && outerText(a).startsWith(needle)) byText = a;
   }
-  return null;
+  return byText;
 }
 
 function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
@@ -232,6 +237,7 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
 async function insertReply(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "blocked"> {
   let editor = document.querySelector<HTMLElement>('[data-testid="tweetTextarea_0"]');
   if (!editor && postEl?.isConnected) {
+    postEl.scrollIntoView({ block: "center" });
     postEl.querySelector<HTMLElement>('[data-testid="reply"]')?.click();
     editor = await waitFor('[data-testid="tweetTextarea_0"]', 2500);
   }
@@ -372,7 +378,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPostEl(o.id));
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text));
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     ib.append(draft, open);
