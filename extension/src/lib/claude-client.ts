@@ -38,11 +38,8 @@ function tabsToText(tabs: TabInput[]): string {
   return tabs.map((t) => `#${t.id} | idle ${t.lastAccessedMinutes ?? "?"}m | ${t.title} | ${t.url}`).join("\n");
 }
 
-/** A user-message content block: plain text, or `string` shorthand for one. */
-type ContentBlock = string | unknown[];
-
-/** Direct Anthropic call (BYO-key). Returns the joined text, or throws. */
-async function rawCall(key: string, model: string, system: string, userContent: ContentBlock, maxTokens: number): Promise<string> {
+/** Direct Anthropic call (BYO-key). Returns parsed JSON, or throws. */
+async function rawCall(key: string, model: string, system: string, userContent: string, maxTokens: number): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -163,27 +160,20 @@ function stripDashes(s: string): string {
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
  *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
-export async function draftReply(post: { author: string; text: string; context?: string; images?: string[] }, voice: string, angle?: string, product?: string): Promise<string> {
+export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
   const prod = product?.trim() ? `\n\nThe user's own product/work (mention ONLY if this post invites it or it genuinely adds value):\n${product.trim()}` : "";
   const def = angle ? REPLY_ANGLES.find((a) => a.id === angle) : undefined;
   const angleLine = def ? `\n\n${def.directive}` : "";
-  const prompt = `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${prod}${angleLine}`;
-  // If the post has images, pass them so the model SEES the post (Sonnet is
-  // multimodal). URL source → Anthropic fetches the public pbs.twimg.com media.
-  const imgs = (post.images || []).filter((u) => /^https?:\/\//.test(u)).slice(0, 4);
-  const content = imgs.length
-    ? [{ type: "text", text: prompt }, ...imgs.map((url) => ({ type: "image", source: { type: "url", url } }))]
-    : prompt;
   // Plain text, not JSON — free-form reply prose is fragile to JSON-wrap/parse.
-  let reply: string;
-  try {
-    reply = await rawCall(key, "claude-sonnet-4-6", X_DRAFT_SYSTEM, content, 400);
-  } catch (e) {
-    if (!imgs.length) throw e;
-    reply = await rawCall(key, "claude-sonnet-4-6", X_DRAFT_SYSTEM, prompt, 400); // image fetch failed → text-only
-  }
+  const reply = await rawCall(
+    key,
+    "claude-sonnet-4-6",
+    X_DRAFT_SYSTEM,
+    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${prod}${angleLine}`,
+    400,
+  );
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
 }

@@ -25,7 +25,7 @@ let noKeyNotified = false;
 const seen = new Map<string, { score: number; reason: string }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; images?: string[]; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -94,18 +94,6 @@ function avatarUrl(el: HTMLElement): string | undefined {
     if (m) return m[1];
   }
   return undefined;
-}
-
-/** The OUTER post's image URLs (photos), so the drafter can SEE the post, not
- *  just its text. Skips the quoted tweet's media (role=link). Capped for cost. */
-function postImages(el: HTMLElement): string[] {
-  const out: string[] = [];
-  for (const im of el.querySelectorAll<HTMLImageElement>('[data-testid="tweetPhoto"] img')) {
-    if (im.closest('[role="link"]')) continue; // skip quoted-tweet media
-    const src = im.getAttribute("src");
-    if (src && /^https?:\/\//.test(src)) out.push(src);
-  }
-  return [...new Set(out)].slice(0, 4);
 }
 
 /* ---------- post stats: freshness + engagement ---------- */
@@ -238,7 +226,7 @@ async function flush() {
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
   scoreCalls++;
-  const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, images: b.el.isConnected ? postImages(b.el) : undefined }));
+  const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
   batch.forEach((b) => inFlight.add(b.id));
   const resp = await send<{ scores?: { i: number; score: number; reason: string }[]; error?: string }>({
@@ -260,7 +248,7 @@ async function flush() {
     const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, images: stat.images });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
       added = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason);
     }
@@ -356,7 +344,7 @@ let draftOppId: string | null = null;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; images?: string[]; }
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; }
 let lastDraft: DraftReq | null = null;
 
 /** Locate a post by status id, falling back to matching its text (for the dock,
@@ -484,14 +472,13 @@ async function doInsert(text: string) {
   }
 }
 
-async function draftFor(req: DraftReq) {
-  const { author, text, context, getEl, oppId, angle, avatar, images } = req;
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string, avatar?: string) {
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
-  lastDraft = req;
+  lastDraft = { author, text, context, getEl, oppId, angle, avatar };
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, angle, avatar });
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, images });
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle });
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle, avatar });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle, avatar });
   else paintPanel(root, author, text, { draft: resp.reply ?? "", angle, avatar });
@@ -509,7 +496,7 @@ function angleRow(active?: string): HTMLElement {
     c.onclick = () => {
       const d = lastDraft;
       if (!d) return;
-      void draftFor({ ...d, angle: active === a.id ? undefined : a.id });
+      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id, d.avatar);
     };
     row.appendChild(c);
   }
@@ -518,7 +505,7 @@ function angleRow(active?: string): HTMLElement {
 
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), getEl: () => el, oppId: info?.id, avatar: avatarUrl(el), images: postImages(el) });
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, undefined, avatarUrl(el));
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string }) {
@@ -546,7 +533,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
     copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
     const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => { if (lastDraft) void draftFor(lastDraft); };
+    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle, d.avatar); };
     row.append(copy, regen);
     const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
     p.append(ta, insert, row, foot);
@@ -640,7 +627,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text), oppId: o.id, avatar: o.avatar, images: o.images });
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, undefined, o.avatar);
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
