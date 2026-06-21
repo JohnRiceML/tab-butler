@@ -676,7 +676,8 @@ const DOCK_CSS = `
 .im { color:#9b8d76; font-size:11px; margin:0 0 4px; letter-spacing:.1px; }
 .ir { color:#8c7d68; font-size:11px; }
 .cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
-       padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT}; }
+       padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT};
+       max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:0 1 auto; }
 .ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }

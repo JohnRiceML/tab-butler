@@ -19,19 +19,19 @@ function faviconUrl(url?: string): string | undefined {
     return host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32` : undefined;
   } catch { return undefined; }
 }
-/** One product per line: "Name | url | one-liner" (url + blurb optional). */
-function parseProducts(text: string): ProductItem[] {
-  return text.split("\n").map((line) => {
-    const parts = line.split("|").map((s) => s.trim());
-    return { name: parts[0] || "", url: parts[1] || undefined, blurb: parts.slice(2).join(" | ").trim() || undefined };
-  }).filter((p) => p.name);
-}
-function serializeProducts(items: ProductItem[]): string {
-  return items.map((p) => {
-    const parts = [p.name, p.url || "", p.blurb || ""];
-    while (parts.length > 1 && !parts[parts.length - 1]) parts.pop();
-    return parts.join(" | ");
-  }).join("\n");
+/** One editable product row: separate Name / URL / Description fields. */
+function productRow(p?: ProductItem): string {
+  const ist = "width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:8px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none";
+  const fav = faviconUrl(p?.url);
+  return `<div class="prodrow" style="border:.5px solid var(--line-strong);border-radius:10px;padding:8px;margin-bottom:8px">
+    <div style="display:flex;gap:6px;align-items:center">
+      ${fav ? `<img src="${esc(fav)}" width="16" height="16" style="border-radius:4px;flex:0 0 auto" alt=""/>` : `<span style="flex:0 0 auto;width:16px;text-align:center;color:#c68a4e">✦</span>`}
+      <input class="pname" placeholder="Product name" value="${esc(p?.name ?? "")}" style="${ist}"/>
+      <button data-action="del-product" title="Remove product" style="flex:0 0 auto;background:none;border:0;color:#8c7d68;font-size:14px;cursor:pointer;padding:0 4px">✕</button>
+    </div>
+    <input class="purl" placeholder="https://yourproduct.com (optional)" value="${esc(p?.url ?? "")}" style="${ist};margin-top:6px"/>
+    <input class="pdesc" placeholder="One-liner: what it does, who it's for" value="${esc(p?.blurb ?? "")}" style="${ist};margin-top:6px"/>
+  </div>`;
 }
 function idleLabel(min: number | undefined): string {
   if (min == null) return "No activity data";
@@ -68,7 +68,6 @@ interface ViewData {
   xEnabled: boolean;
   xNiche: string;
   xVoice: string;
-  xProductsText: string;
   products: ProductItem[];
 }
 
@@ -88,7 +87,6 @@ const MOCK: ViewData = {
   xEnabled: true,
   xNiche: "",
   xVoice: "",
-  xProductsText: "",
   products: [],
 };
 
@@ -145,8 +143,7 @@ async function getData(): Promise<ViewData> {
     xEnabled: store[CONFIG.X_COPILOT_KEY] !== false,
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
-    xProductsText: productsArr.length ? serializeProducts(productsArr) : ((store[CONFIG.X_PRODUCT_KEY] as string) || ""),
-    products: productsArr,
+    products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
   };
 }
 
@@ -244,9 +241,9 @@ function render(d: ViewData): string {
       <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
     </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">Your products <span class="dim" style="font-weight:400">— one per line: Name | url | one-liner</span></div>
-      <textarea id="xproducts" rows="4" placeholder="Tab Butler | https://tabbutler.app | Claude-powered tab manager for people who keep 80 tabs open&#10;AI Peekaboo | https://aipeekaboo.com | playful AI photo tool" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xProductsText)}</textarea>
-      ${d.products.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${d.products.map((p) => { const fav = faviconUrl(p.url); return `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--row);border:.5px solid var(--line-strong);border-radius:999px;padding:3px 9px;font-size:11px">${fav ? `<img src="${esc(fav)}" width="14" height="14" style="border-radius:3px" alt=""/>` : "✦"} ${esc(p.name)}</span>`; }).join("")}</div>` : ""}
+      <div class="name" style="margin-bottom:6px">Your products <span class="dim" style="font-weight:400">— name, link &amp; a one-liner each</span></div>
+      <div id="prodrows">${(d.products.length ? d.products : [undefined]).map((p) => productRow(p)).join("")}</div>
+      <button class="btn" data-action="add-product" style="padding:6px 11px;font-size:12px">+ Add product</button>
       <div class="dim" style="font-size:10.5px;margin-top:6px">On a "drop your product" post, the copilot tags the best-fit product and drafts with it.</div>
     </div>
     <div class="li" style="display:block">
@@ -461,11 +458,24 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
-        const products = parseProducts((document.getElementById("xproducts") as HTMLTextAreaElement | null)?.value ?? "");
+        const products = Array.from(document.querySelectorAll<HTMLElement>(".prodrow")).map((r) => ({
+          name: (r.querySelector(".pname") as HTMLInputElement | null)?.value.trim() || "",
+          url: (r.querySelector(".purl") as HTMLInputElement | null)?.value.trim() || undefined,
+          blurb: (r.querySelector(".pdesc") as HTMLInputElement | null)?.value.trim() || undefined,
+        })).filter((p) => p.name);
         await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCTS_KEY]: products });
         await chrome.storage.local.remove(CONFIG.X_PRODUCT_KEY); // clean migration off the legacy single-product string
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
         await refresh(); // re-render so the product favicon previews update
+        break;
+      }
+      case "add-product": {
+        document.getElementById("prodrows")?.insertAdjacentHTML("beforeend", productRow());
+        (document.querySelector("#prodrows .prodrow:last-child .pname") as HTMLInputElement | null)?.focus();
+        break;
+      }
+      case "del-product": {
+        el.closest(".prodrow")?.remove();
         break;
       }
     }
