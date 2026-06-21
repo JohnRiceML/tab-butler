@@ -39,7 +39,7 @@ function tabsToText(tabs: TabInput[]): string {
 }
 
 /** Direct Anthropic call (BYO-key). Returns parsed JSON, or throws. */
-async function callDirect<T>(key: string, model: string, system: string, userContent: string, maxTokens = 4096): Promise<T> {
+async function rawCall(key: string, model: string, system: string, userContent: string, maxTokens: number): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -52,10 +52,15 @@ async function callDirect<T>(key: string, model: string, system: string, userCon
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}`);
   const data = await res.json();
-  const text = ((data.content || []) as { type: string; text?: string }[])
+  return ((data.content || []) as { type: string; text?: string }[])
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("");
+}
+
+/** For structured (JSON) responses — scoring, grouping, recall, advice. */
+async function callDirect<T>(key: string, model: string, system: string, userContent: string, maxTokens = 4096): Promise<T> {
+  const text = await rawCall(key, model, system, userContent, maxTokens);
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("bad-output");
@@ -146,12 +151,13 @@ export async function draftReply(post: { author: string; text: string; context?:
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
-  const raw = await callDirect<{ reply: string }>(
+  // Plain text, not JSON — free-form reply prose is fragile to JSON-wrap/parse.
+  const reply = await rawCall(
     key,
     "claude-sonnet-4-6",
     X_DRAFT_SYSTEM,
     `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}`,
     400,
   );
-  return (raw.reply || "").trim();
+  return reply.trim().replace(/^["']|["']$/g, "").trim();
 }

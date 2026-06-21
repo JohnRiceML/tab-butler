@@ -52,4 +52,4 @@ The reply MUST add genuine value: a specific insight, a sharp take, a useful que
 NEVER: generic praise ("great post", "so true", "love this"), hashtags, or emojis unless the voice clearly uses them.
 Avoid AI tells (they out you as a bot): em-dashes (—) — use a period or comma instead; "it's not just X, it's Y"; rule-of-three lists; "here's the thing / the kicker"; rhetorical-question openers; restating the post back. Write the way a sharp person types a quick reply on their phone — usually one or two sentences, tight, under ~240 characters unless the voice runs longer.
 
-Return ONLY JSON, no prose, no markdown fences: {"reply":string}`;
+Output ONLY the reply text itself — no JSON, no surrounding quotes, no preamble or sign-off, just the words to post.`;

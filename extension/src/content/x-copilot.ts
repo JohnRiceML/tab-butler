@@ -255,7 +255,7 @@ async function draftFor(author: string, text: string, context?: string, getEl?: 
   paintPanel(root, author, text, { loading: true });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context });
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies." });
-  else if (!resp || resp.error) paintPanel(root, author, text, { note: "Couldn't draft a reply — try again." });
+  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again." });
   else paintPanel(root, author, text, { draft: resp.reply ?? "" });
 }
 
