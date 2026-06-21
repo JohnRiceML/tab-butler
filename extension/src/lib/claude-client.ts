@@ -39,7 +39,7 @@ function tabsToText(tabs: TabInput[]): string {
 }
 
 /** Direct Anthropic call (BYO-key). Returns parsed JSON, or throws. */
-async function callDirect<T>(key: string, model: string, system: string, userContent: string): Promise<T> {
+async function callDirect<T>(key: string, model: string, system: string, userContent: string, maxTokens = 4096): Promise<T> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -48,12 +48,18 @@ async function callDirect<T>(key: string, model: string, system: string, userCon
       "anthropic-dangerous-direct-browser-access": "true",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model, max_tokens: 4096, system, messages: [{ role: "user", content: userContent }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] }),
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}`);
   const data = await res.json();
-  const text = (data.content || []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("");
-  return JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as T;
+  const text = ((data.content || []) as { type: string; text?: string }[])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("");
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("bad-output");
+  return JSON.parse(text.slice(start, end + 1)) as T;
 }
 
 export async function classify(tabs: chrome.tabs.Tab[]): Promise<ClassifyResult> {
@@ -129,20 +135,23 @@ export async function scorePosts(posts: XPost[], niche: string): Promise<XScore[
     key,
     "claude-haiku-4-5",
     X_SCORE_SYSTEM,
-    `User niche / what's worth replying to:\n${niche || "(not set — use general professional-growth judgment)"}\n\nPosts:\n${list}`,
+    `User niche / what's worth replying to:\n${niche || "(not set — only flag posts clearly answerable with specific expertise; be extra strict)"}\n\nPosts:\n${list}`,
+    1024,
   );
   return raw.scores || [];
 }
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. */
-export async function draftReply(post: { author: string; text: string }, voice: string): Promise<string> {
+export async function draftReply(post: { author: string; text: string; context?: string }, voice: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
+  const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
   const raw = await callDirect<{ reply: string }>(
     key,
     "claude-sonnet-4-6",
     X_DRAFT_SYSTEM,
-    `User voice:\n${voice || "(not set — write concise, specific, friendly; no fluff, no hashtags, no emojis)"}\n\nReply to @${post.author}'s post:\n${post.text}`,
+    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}`,
+    400,
   );
   return (raw.reply || "").trim();
 }

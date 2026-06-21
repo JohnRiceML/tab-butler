@@ -219,6 +219,7 @@ function render(d: ViewData): string {
       <button class="btn primary" data-action="save-x" style="margin-top:8px;padding:7px 12px">Save copilot settings</button>
     </div>
   </div>
+  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, the text of timeline posts is sent to Claude to score &amp; draft. Draft-only — it never posts for you.</div></div>
 
   <div class="footer-actions">
     <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>

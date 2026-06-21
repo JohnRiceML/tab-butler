@@ -56,5 +56,5 @@ export type Message =
   | { type: "UNDO_LAST" }
   | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
   | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string }[] }
-  | { type: "DRAFT_REPLY"; author: string; text: string }
+  | { type: "DRAFT_REPLY"; author: string; text: string; context?: string }
   | { type: "GET_STATE" };
