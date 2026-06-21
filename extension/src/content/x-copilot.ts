@@ -206,7 +206,51 @@ function ensurePanel(): ShadowRoot {
 }
 function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = null; }
 
-async function draftFor(author: string, text: string, context?: string) {
+let draftGetEl: (() => HTMLElement | null) | null = null;
+
+function findPostEl(id: string): HTMLElement | null {
+  for (const a of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) {
+    if (statusInfo(a)?.id === id) return a;
+  }
+  return null;
+}
+
+function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
+  return new Promise((res) => {
+    const now = document.querySelector<HTMLElement>(sel);
+    if (now) return res(now);
+    const obs = new MutationObserver(() => {
+      const f = document.querySelector<HTMLElement>(sel);
+      if (f) { clearTimeout(t); obs.disconnect(); res(f); }
+    });
+    const t = setTimeout(() => { obs.disconnect(); res(document.querySelector<HTMLElement>(sel)); }, ms);
+    obs.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+/** Best-effort: open the post's reply box and type the draft into it. Never submits. */
+async function insertReply(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "blocked"> {
+  let editor = document.querySelector<HTMLElement>('[data-testid="tweetTextarea_0"]');
+  if (!editor && postEl?.isConnected) {
+    postEl.querySelector<HTMLElement>('[data-testid="reply"]')?.click();
+    editor = await waitFor('[data-testid="tweetTextarea_0"]', 2500);
+  }
+  if (!editor) return "no-composer";
+  editor.focus();
+  try { const s = window.getSelection(); s?.selectAllChildren(editor); s?.collapseToEnd(); } catch { /* ignore */ }
+  // execCommand('insertText') fires the input events X's rich-text editor listens for.
+  return document.execCommand("insertText", false, text) ? "ok" : "blocked";
+}
+
+async function doInsert(text: string) {
+  const r = await insertReply(text, draftGetEl?.() ?? null);
+  if (r === "ok") { toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
+  else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
+  else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
+}
+
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null) {
+  draftGetEl = getEl ?? null;
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context });
@@ -214,9 +258,10 @@ async function draftFor(author: string, text: string, context?: string) {
   else if (!resp || resp.error) paintPanel(root, author, text, { note: "Couldn't draft a reply — try again." });
   else paintPanel(root, author, text, { draft: resp.reply ?? "" });
 }
+
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el));
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el);
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string }) {
@@ -234,14 +279,17 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const n = document.createElement("div"); n.className = "load"; n.textContent = opts.note; p.append(n);
   } else {
     const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = 5; ta.value = opts.draft ?? "";
+    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = "Insert into reply box";
+    insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
+    insert.onclick = () => void doInsert(ta.value);
     const row = document.createElement("div"); row.className = "row";
-    const copy = document.createElement("button"); copy.className = "b primary"; copy.textContent = "Copy reply";
-    copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy reply"), 1500); } catch { /* ignore */ } };
+    const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
     const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => { const root2 = ensurePanel(); paintPanel(root2, author, text, { loading: true }); void send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context: undefined }).then((r) => paintPanel(root2, author, text, r?.reply ? { draft: r.reply } : { note: "Couldn't draft — try again." })); };
+    regen.onclick = () => void draftFor(author, text, undefined, draftGetEl ?? undefined);
     row.append(copy, regen);
-    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Drafted by Claude in your voice — edit, then post it yourself.";
-    p.append(ta, row, foot);
+    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
+    p.append(ta, insert, row, foot);
   }
   root.appendChild(p);
 }
@@ -324,7 +372,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context);
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPostEl(o.id));
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     ib.append(draft, open);
