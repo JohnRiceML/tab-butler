@@ -207,6 +207,7 @@ function ensurePanel(): ShadowRoot {
 function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = null; }
 
 let draftGetEl: (() => HTMLElement | null) | null = null;
+let draftOppId: string | null = null;
 
 /** Locate a post by status id, falling back to matching its text (for the dock,
  *  where the original element may have been recycled by virtualization). */
@@ -308,13 +309,14 @@ async function insertReply(text: string, postEl: HTMLElement | null): Promise<"o
 
 async function doInsert(text: string) {
   const r = await insertReply(text, draftGetEl?.() ?? null);
-  if (r === "ok") { toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
+  if (r === "ok") { if (draftOppId) { opps.delete(draftOppId); renderDock(); } toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
   else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
   else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
 }
 
-async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null) {
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string) {
   draftGetEl = getEl ?? null;
+  draftOppId = oppId ?? null;
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context });
@@ -325,7 +327,7 @@ async function draftFor(author: string, text: string, context?: string, getEl?: 
 
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el);
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id);
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string }) {
@@ -436,10 +438,12 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text));
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id);
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
-    ib.append(draft, open);
+    const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
+    dismiss.onclick = () => { opps.delete(o.id); renderDock(); };
+    ib.append(draft, open, dismiss);
     it.append(ia, ix, ir, ib);
     list.appendChild(it);
   }
