@@ -1,4 +1,5 @@
 import { CONFIG } from "../lib/config";
+import { REPLY_ANGLES } from "../lib/prompts";
 
 /**
  * Tab Butler — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
@@ -292,6 +293,11 @@ const PANEL_CSS = `
 .t { font-weight: 600; } .x { background: none; border: 0; color: #8c7d68; font-size: 14px; cursor: pointer; }
 .ctx { font-size: 12px; color: #b6a892; max-height: 60px; overflow: auto; margin-bottom: 10px;
        border-left: 2px solid rgba(214,154,92,.25); padding-left: 8px; }
+.angles { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.ang { font: inherit; font-size: 11px; font-weight: 500; border-radius: 999px; padding: 4px 10px; cursor: pointer;
+       border: .5px solid rgba(214,154,92,.28); background: #221c15; color: #cbb89c; }
+.ang:hover { background: rgba(214,154,92,.10); }
+.ang.on { background: ${ACCENT}; color: ${INK}; border-color: transparent; font-weight: 600; }
 .load { color: #b6a892; font-size: 12.5px; padding: 6px 0; }
 .ta { width: 100%; box-sizing: border-box; background: #221c15; color: #f3ead9;
       border: .5px solid rgba(214,154,92,.18); border-radius: 9px; padding: 9px; font: inherit; resize: vertical; }
@@ -319,6 +325,11 @@ function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = nul
 
 let draftGetEl: (() => HTMLElement | null) | null = null;
 let draftOppId: string | null = null;
+
+/** The current draft request, so the angle chips and Regenerate can re-draft
+ *  with the SAME post/context/oppId (and switch only the angle). */
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; }
+let lastDraft: DraftReq | null = null;
 
 /** Locate a post by status id, falling back to matching its text (for the dock,
  *  where the original element may have been recycled by virtualization). */
@@ -425,15 +436,35 @@ async function doInsert(text: string) {
   else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
 }
 
-async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string) {
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string) {
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
+  lastDraft = { author, text, context, getEl, oppId, angle };
   const root = ensurePanel();
-  paintPanel(root, author, text, { loading: true });
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context });
-  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies." });
-  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again." });
-  else paintPanel(root, author, text, { draft: resp.reply ?? "" });
+  paintPanel(root, author, text, { loading: true, angle });
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle });
+  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle });
+  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle });
+  else paintPanel(root, author, text, { draft: resp.reply ?? "", angle });
+}
+
+/** The angle chips. Clicking re-drafts with that steer; clicking the active one
+ *  toggles it back off (neutral). Reuses lastDraft so post/context are kept. */
+function angleRow(active?: string): HTMLElement {
+  const row = document.createElement("div"); row.className = "angles";
+  for (const a of REPLY_ANGLES) {
+    const c = document.createElement("button");
+    c.className = "ang" + (active === a.id ? " on" : "");
+    c.textContent = a.label;
+    c.title = a.directive;
+    c.onclick = () => {
+      const d = lastDraft;
+      if (!d) return;
+      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id);
+    };
+    row.appendChild(c);
+  }
+  return row;
 }
 
 function openDraftFromEl(el: HTMLElement) {
@@ -441,7 +472,7 @@ function openDraftFromEl(el: HTMLElement) {
   void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id);
 }
 
-function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string }) {
+function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
   const h = document.createElement("div"); h.className = "h";
@@ -449,7 +480,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
   const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.onclick = dismissPanel;
   h.append(t, x);
   const ctx = document.createElement("div"); ctx.className = "ctx"; ctx.textContent = text;
-  p.append(h, ctx);
+  p.append(h, ctx, angleRow(opts.angle));
   if (opts.loading) {
     const l = document.createElement("div"); l.className = "load"; l.textContent = "Drafting in your voice…"; p.append(l);
   } else if (opts.note) {
@@ -463,7 +494,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
     copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
     const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => void draftFor(author, text, undefined, draftGetEl ?? undefined);
+    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle); };
     row.append(copy, regen);
     const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
     p.append(ta, insert, row, foot);

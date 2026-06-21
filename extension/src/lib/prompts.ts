@@ -55,3 +55,41 @@ NEVER: generic praise ("great post", "so true", "love this"), hashtags, or emoji
 Avoid AI tells (they out you as a bot): em-dashes (—) — use a period or comma instead; "it's not just X, it's Y"; rule-of-three lists; "here's the thing / the kicker"; rhetorical-question openers; restating the post back. Write the way a sharp person types a quick reply on their phone — usually one or two sentences, tight, under ~240 characters unless the voice runs longer.
 
 Output ONLY the reply text itself — no JSON, no surrounding quotes, no preamble or sign-off, just the words to post.`;
+
+export interface ReplyAngle { id: string; label: string; directive: string; }
+
+/** Optional steer the user picks in the draft panel. Appended to the draft
+ *  request — each reinforces (never overrides) the anti-AI-tell and
+ *  no-empty-praise rules in X_DRAFT_SYSTEM above. */
+export const REPLY_ANGLES: ReplyAngle[] = [
+  {
+    id: "connect",
+    label: "Connect",
+    directive:
+      "Angle: genuinely connect with this person. Warm, human, peer to peer. Reference something specific they said and respond like someone who relates to it from real experience. Make them feel seen, not flattered.",
+  },
+  {
+    id: "value",
+    label: "Add value",
+    directive:
+      "Angle: add real value. Contribute ONE specific insight, concrete tip, useful resource, or sharp counter-point they didn't already say. Teach or sharpen the thread — do not merely agree.",
+  },
+  {
+    id: "ask",
+    label: "Ask",
+    directive:
+      "Angle: ask ONE genuine, specific question that moves the conversation forward and invites a real answer. Not a softball, not leading, not rhetorical — something you'd actually want to know.",
+  },
+  {
+    id: "joke",
+    label: "Joke",
+    directive:
+      "Angle: be funny. One dry, clever, or playful line that fits the post. Wit over silliness, never corny or forced. If humor would land flat or read as insensitive to the topic, keep it light but skip the joke.",
+  },
+  {
+    id: "support",
+    label: "Support",
+    directive:
+      "Angle: back them up with substance. Affirm their point AND add a specific reason, example, or experience that reinforces why they're right. Never empty praise ('great post', 'so true', 'love this') — earn the agreement.",
+  },
+];
