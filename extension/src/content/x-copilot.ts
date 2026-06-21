@@ -25,7 +25,7 @@ let noKeyNotified = false;
 const seen = new Map<string, { score: number; reason: string }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -80,6 +80,20 @@ function isPromoted(el: HTMLElement): boolean {
 function getSelf(): string {
   const a = document.querySelector<HTMLAnchorElement>('[data-testid="AppTabBar_Profile_Link"]');
   return (a?.getAttribute("href") || "").replace(/^\//, "").toLowerCase();
+}
+
+/** The OUTER author's avatar URL — skip the quoted tweet's avatar (role=link). */
+function avatarUrl(el: HTMLElement): string | undefined {
+  const cs = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="Tweet-User-Avatar"], [data-testid^="UserAvatar-Container"]'));
+  const c = cs.find((n) => !n.closest('[role="link"]')) || cs[0];
+  if (!c) return undefined;
+  const src = c.querySelector<HTMLImageElement>("img")?.getAttribute("src");
+  if (src?.startsWith("http")) return src;
+  for (const n of c.querySelectorAll<HTMLElement>("[style*='background-image']")) {
+    const m = n.style.backgroundImage.match(/url\("?(https?:[^")]+)"?\)/);
+    if (m) return m[1];
+  }
+  return undefined;
 }
 
 /* ---------- post stats: freshness + engagement ---------- */
@@ -212,7 +226,7 @@ async function flush() {
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
   scoreCalls++;
-  const snap = batch.map((b) => snapStats(b.el));
+  const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
   batch.forEach((b) => inFlight.add(b.id));
   const resp = await send<{ scores?: { i: number; score: number; reason: string }[]; error?: string }>({
@@ -234,7 +248,7 @@ async function flush() {
     const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
       added = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason);
     }
@@ -290,6 +304,8 @@ const PANEL_CSS = `
      font: 13px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
      box-shadow: 0 12px 40px rgba(0,0,0,.5); }
 .h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.th { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pav { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
 .t { font-weight: 600; } .x { background: none; border: 0; color: #8c7d68; font-size: 14px; cursor: pointer; }
 .ctx { font-size: 12px; color: #b6a892; max-height: 60px; overflow: auto; margin-bottom: 10px;
        border-left: 2px solid rgba(214,154,92,.25); padding-left: 8px; }
@@ -328,7 +344,7 @@ let draftOppId: string | null = null;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; }
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; }
 let lastDraft: DraftReq | null = null;
 
 /** Locate a post by status id, falling back to matching its text (for the dock,
@@ -436,16 +452,16 @@ async function doInsert(text: string) {
   else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
 }
 
-async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string) {
+async function draftFor(author: string, text: string, context?: string, getEl?: () => HTMLElement | null, oppId?: string, angle?: string, avatar?: string) {
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
-  lastDraft = { author, text, context, getEl, oppId, angle };
+  lastDraft = { author, text, context, getEl, oppId, angle, avatar };
   const root = ensurePanel();
-  paintPanel(root, author, text, { loading: true, angle });
+  paintPanel(root, author, text, { loading: true, angle, avatar });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle });
-  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle });
-  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle });
-  else paintPanel(root, author, text, { draft: resp.reply ?? "", angle });
+  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle, avatar });
+  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle, avatar });
+  else paintPanel(root, author, text, { draft: resp.reply ?? "", angle, avatar });
 }
 
 /** The angle chips. Clicking re-drafts with that steer; clicking the active one
@@ -460,7 +476,7 @@ function angleRow(active?: string): HTMLElement {
     c.onclick = () => {
       const d = lastDraft;
       if (!d) return;
-      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id);
+      void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, active === a.id ? undefined : a.id, d.avatar);
     };
     row.appendChild(c);
   }
@@ -469,16 +485,19 @@ function angleRow(active?: string): HTMLElement {
 
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id);
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, undefined, avatarUrl(el));
 }
 
-function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string }) {
+function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
   const h = document.createElement("div"); h.className = "h";
+  const th = document.createElement("div"); th.className = "th";
+  if (opts.avatar) { const av = document.createElement("img"); av.className = "pav"; av.src = opts.avatar; av.alt = ""; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); th.append(av); }
   const t = document.createElement("div"); t.className = "t"; t.textContent = `Reply to @${author}`;
+  th.append(t);
   const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.onclick = dismissPanel;
-  h.append(t, x);
+  h.append(th, x);
   const ctx = document.createElement("div"); ctx.className = "ctx"; ctx.textContent = text;
   p.append(h, ctx, angleRow(opts.angle));
   if (opts.loading) {
@@ -494,7 +513,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
     copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
     const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle); };
+    regen.onclick = () => { const d = lastDraft; if (d) void draftFor(d.author, d.text, d.context, d.getEl, d.oppId, d.angle, d.avatar); };
     row.append(copy, regen);
     const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
     p.append(ta, insert, row, foot);
@@ -533,7 +552,8 @@ const DOCK_CSS = `
       color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
 .dl { overflow:auto; padding:0 8px 10px; }
 .it { padding:9px 8px; border-top:.5px solid rgba(214,154,92,.10); }
-.ia { font-weight:600; font-size:12.5px; } .ia .sc { color:${ACCENT}; margin-left:6px; }
+.ia { font-weight:600; font-size:12.5px; display:flex; align-items:center; } .ia .sc { color:${ACCENT}; margin-left:auto; }
+.av { width:18px; height:18px; border-radius:50%; object-fit:cover; margin-right:7px; flex:0 0 auto; }
 .ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .im { color:#9b8d76; font-size:11px; margin:0 0 4px; letter-spacing:.1px; }
 .ir { color:#8c7d68; font-size:11px; }
@@ -579,6 +599,7 @@ function renderList(list: HTMLElement) {
   for (const o of items) {
     const it = document.createElement("div"); it.className = "it";
     const ia = document.createElement("div"); ia.className = "ia";
+    if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
     ia.append(document.createTextNode(`@${o.author}`));
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
@@ -586,7 +607,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id);
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, undefined, o.avatar);
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
