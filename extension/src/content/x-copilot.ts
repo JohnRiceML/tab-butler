@@ -24,7 +24,7 @@ let noKeyNotified = false;
 const seen = new Map<string, { score: number; reason: string }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -78,6 +78,87 @@ function getSelf(): string {
   return (a?.getAttribute("href") || "").replace(/^\//, "").toLowerCase();
 }
 
+/* ---------- post stats: freshness + engagement ---------- */
+
+/** Exact post time (epoch ms) from the article's <time datetime>. */
+function postedAtMs(el: HTMLElement): number | undefined {
+  const dt = el.querySelector<HTMLElement>('a[href*="/status/"] time')?.getAttribute("datetime");
+  const ts = dt ? Date.parse(dt) : NaN;
+  return Number.isNaN(ts) ? undefined : ts;
+}
+
+/** "1.2K" / "3,400" / "2 345" / "2M" -> integer. */
+function parseCount(s: string): number | undefined {
+  const m = s.replace(/[,\s]/g, "").match(/([\d.]+)\s*([KMB])?/i);
+  if (!m) return undefined;
+  const base = parseFloat(m[1]);
+  if (!Number.isFinite(base)) return undefined;
+  const mult = { k: 1e3, m: 1e6, b: 1e9 }[(m[2] || "").toLowerCase()] ?? 1;
+  return Math.round(base * mult);
+}
+
+interface PostStats { postedAt?: number; likes?: number; replies?: number; reposts?: number; views?: number; }
+
+/** Engagement counts. The action-bar's aria-label carries EXACT totals
+ *  ("45 replies, 12 reposts, 678 likes, 9,001 views"); fall back to the
+ *  abbreviated per-button text ("1.2K") when the label is absent. */
+function engagement(el: HTMLElement): PostStats {
+  const label = el.querySelector('[role="group"][aria-label]')?.getAttribute("aria-label") || "";
+  // Letters in the label act as firewalls, so the count token captured before
+  // each keyword is just that metric's number; parseCount strips any leading
+  // separators and honors a K/M/B suffix if X ever abbreviates in the label.
+  const fromLabel = (re: RegExp): number | undefined => {
+    const m = label.match(re);
+    return m ? parseCount(m[1]) : undefined;
+  };
+  const fromButton = (testid: string): number | undefined => {
+    const txt = el.querySelector<HTMLElement>(`[data-testid="${testid}"]`)?.textContent?.trim();
+    return txt ? parseCount(txt) : undefined;
+  };
+  return {
+    replies: fromLabel(/([\d.,\s]*\d[KMB]?)\s*(?:repl|comment)/i) ?? fromButton("reply"),
+    reposts: fromLabel(/([\d.,\s]*\d[KMB]?)\s*(?:repost|retweet)/i) ?? fromButton("retweet"),
+    likes: fromLabel(/([\d.,\s]*\d[KMB]?)\s*likes?\b/i) ?? fromButton("like") ?? fromButton("unlike"),
+    views: fromLabel(/([\d.,\s]*\d[KMB]?)\s*views?\b/i),
+  };
+}
+
+/** Snapshot a post's stats at capture time (counts can't be re-read once X
+ *  recycles the node; the timestamp is absolute so age stays accurate). */
+function snapStats(el: HTMLElement): PostStats {
+  if (!el.isConnected) return {};
+  return { postedAt: postedAtMs(el), ...engagement(el) };
+}
+
+/** "now" | "5m" | "3h" | "2d" | "4w" | "6mo" from an epoch-ms timestamp. */
+function fmtAge(ms?: number): string | undefined {
+  if (!ms) return undefined;
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return "now";
+  const m = Math.round(s / 60); if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}h`;
+  const d = Math.round(h / 24); if (d < 7) return `${d}d`;
+  const w = Math.round(d / 7); if (w < 5) return `${w}w`;
+  return `${Math.round(d / 30)}mo`;
+}
+
+/** 1234 -> "1.2k", 1200000 -> "1.2m". */
+function fmtCount(n?: number): string | undefined {
+  if (n === undefined) return undefined;
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k`.replace(".0k", "k");
+  return `${(n / 1e6).toFixed(1)}m`.replace(".0m", "m");
+}
+
+/** Compact, human stats line shared by the dock display and the scorer prompt. */
+function metaLine(s: PostStats): string | undefined {
+  const parts: string[] = [];
+  const age = fmtAge(s.postedAt); if (age) parts.push(`${age} old`);
+  if (s.likes !== undefined) parts.push(`${fmtCount(s.likes)} likes`);
+  if (s.replies !== undefined) parts.push(`${fmtCount(s.replies)} replies`);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
 /* ---------- scan / score ---------- */
 
 let scanPending = false;
@@ -117,7 +198,8 @@ async function flush() {
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
   scoreCalls++;
-  const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text }));
+  const snap = batch.map((b) => snapStats(b.el));
+  const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
   const resp = await send<{ scores?: { i: number; score: number; reason: string }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
@@ -133,9 +215,10 @@ async function flush() {
     const b = batch[s.i];
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
+    const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies });
       added = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason);
     }
@@ -406,6 +489,7 @@ const DOCK_CSS = `
 .it { padding:9px 8px; border-top:.5px solid rgba(214,154,92,.10); }
 .ia { font-weight:600; font-size:12.5px; } .ia .sc { color:${ACCENT}; margin-left:6px; }
 .ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.im { color:#9b8d76; font-size:11px; margin:0 0 4px; letter-spacing:.1px; }
 .ir { color:#8c7d68; font-size:11px; }
 .ib { display:flex; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
@@ -452,6 +536,7 @@ function renderList(list: HTMLElement) {
     ia.append(document.createTextNode(`@${o.author}`));
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
+    const meta = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
@@ -461,7 +546,9 @@ function renderList(list: HTMLElement) {
     const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
     dismiss.onclick = () => { opps.delete(o.id); renderDock(); };
     ib.append(draft, open, dismiss);
-    it.append(ia, ix, ir, ib);
+    it.append(ia, ix);
+    if (meta) { const im = document.createElement("div"); im.className = "im"; im.textContent = meta; it.append(im); }
+    it.append(ir, ib);
     list.appendChild(it);
   }
 }

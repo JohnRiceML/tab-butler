@@ -128,14 +128,14 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 
 /* ---------- X reply copilot (BYO-key) ---------- */
 
-export interface XPost { i: number; author: string; text: string; }
+export interface XPost { i: number; author: string; text: string; meta?: string; }
 export interface XScore { i: number; score: number; reason: string; }
 
 /** Score posts for reply-worthiness given the user's niche. Cheap (Haiku). */
 export async function scorePosts(posts: XPost[], niche: string): Promise<XScore[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
-  const list = posts.map((p) => `${p.i}. @${p.author}: ${p.text}`).join("\n");
+  const list = posts.map((p) => `${p.i}. @${p.author}${p.meta ? ` [${p.meta}]` : ""}: ${p.text}`).join("\n");
   const raw = await callDirect<{ scores: XScore[] }>(
     key,
     "claude-haiku-4-5",

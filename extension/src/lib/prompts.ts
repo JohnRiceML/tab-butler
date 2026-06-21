@@ -44,6 +44,8 @@ export const X_SCORE_SYSTEM = `You score X (Twitter) posts for how worth-it it i
 
 Calibrate hard — be selective: across a normal timeline only about 1 in 8–10 posts should score >= 0.6. Reserve 0.8+ for posts where the user has a genuinely differentiated take AND there's clear engagement upside. Score <= 0.3 for: pure broadcast/announcements, ads/promos, ragebait, vague platitudes, posts already saturated with replies, or anything a reply adds nothing to. HIGH = on the user's niche, answerable with specific value/insight, and recent.
 
+Each post may include bracketed metadata after the handle, e.g. [3h old · 1.2k likes · 45 replies]. Use it: favor RECENT posts (a reply lands while the thread is still live and seen) and posts with traction but NOT yet buried — a high reply-to-like ratio or hundreds of existing replies means the user's reply gets lost, so lower those. An older post (a day+) is a weaker reply target even if on-topic.
+
 Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string}]}`;
 
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
