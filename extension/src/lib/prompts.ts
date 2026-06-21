@@ -48,7 +48,15 @@ Each post may include bracketed metadata after the handle, e.g. [3h old · 1.2k 
 
 Open-call posts that invite sharing (a roll call, build in public, "what are you building", "drop your project", "who's hiring", "show your work") are HIGH value to reply to when the user has something relevant to share: the reply is invited, not spam, and these threads drive real engagement. Score them 0.7+ when they fit the user's niche.
 
-Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string}]}`;
+Also CATEGORIZE each post with the single best reply angle for the user — exactly one id:
+- promote: an open call to share what you're building or your product ("drop your startup", "what are you building", build in public, show your work). The user can drop one of their products here.
+- value: you can add a specific insight, tip, or piece of expertise
+- ask: a good place to ask one sharp, genuine question
+- support: worth backing with a substantive, specific endorsement
+- connect: a chance to relate personally and build rapport
+- joke: best met with a witty, on-point one-liner
+
+Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string,"category":"promote"|"value"|"ask"|"support"|"connect"|"joke"}]}`;
 
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
 

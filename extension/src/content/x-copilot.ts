@@ -22,10 +22,10 @@ let selfHandle = "";
 let noKeyNotified = false;
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string }>();
+const seen = new Map<string, { score: number; reason: string; category?: string }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -203,7 +203,7 @@ function scan() {
     if (!info) return;
     if (inFlight.has(info.id)) return; // sent to Claude, awaiting its score
     const cached = seen.get(info.id);
-    if (cached) { if (cached.score >= THRESHOLD) badge(el, cached.reason); return; }
+    if (cached) { if (cached.score >= THRESHOLD) badge(el, cached.reason, cached.category); return; }
     if (el.dataset.tbx === "q") return; // this node already queued
     if (isPromoted(el)) return;
     if (selfHandle && info.author.toLowerCase() === selfHandle) return;
@@ -229,7 +229,7 @@ async function flush() {
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
   batch.forEach((b) => inFlight.add(b.id));
-  const resp = await send<{ scores?: { i: number; score: number; reason: string }[]; error?: string }>({
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
@@ -245,12 +245,13 @@ async function flush() {
     const b = batch[s.i];
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
+    const category = catId(s.category);
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason });
+    seen.set(b.id, { score: s.score, reason, category });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar });
       added = true;
-      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason);
+      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
     }
   }
   if (added) renderDock();
@@ -272,7 +273,16 @@ function rescan() {
 
 /* ---------- badge (idempotent; survives X re-renders via cache re-apply) ---------- */
 
-function badge(el: HTMLElement, reason: string) {
+/** Validate a model-returned category against the known angle ids. */
+function catId(id?: string): string | undefined {
+  return id && REPLY_ANGLES.some((a) => a.id === id) ? id : undefined;
+}
+/** Human label for a category id (the angle's label), or "Reply" fallback. */
+function catLabel(id?: string): string {
+  return REPLY_ANGLES.find((a) => a.id === id)?.label || "Reply";
+}
+
+function badge(el: HTMLElement, reason: string, category?: string) {
   if (el.querySelector("[data-tbx-badge]")) return;
   el.style.borderLeft = `3px solid ${ACCENT}`;
   el.style.borderTopLeftRadius = "4px";
@@ -281,7 +291,7 @@ function badge(el: HTMLElement, reason: string) {
 
   const b = document.createElement("button");
   b.setAttribute("data-tbx-badge", "1");
-  b.textContent = "✦ Reply";
+  b.textContent = `✦ ${catLabel(category)}`;
   b.title = reason;
   Object.assign(b.style, {
     position: "absolute", top: "10px", right: "12px", zIndex: "9999",
@@ -519,7 +529,8 @@ function angleRow(active?: string): HTMLElement {
 
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
-  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, undefined, avatarUrl(el));
+  const category = info ? (opps.get(info.id)?.category ?? seen.get(info.id)?.category) : undefined;
+  void draftFor(info?.author || "this post", outerText(el), quotedText(el), () => el, info?.id, category, avatarUrl(el));
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string }) {
@@ -591,6 +602,8 @@ const DOCK_CSS = `
 .ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .im { color:#9b8d76; font-size:11px; margin:0 0 4px; letter-spacing:.1px; }
 .ir { color:#8c7d68; font-size:11px; }
+.cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
+       padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT}; }
 .ib { display:flex; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
@@ -635,13 +648,14 @@ function renderList(list: HTMLElement) {
     const ia = document.createElement("div"); ia.className = "ia";
     if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
     ia.append(document.createTextNode(`@${o.author}`));
+    if (o.category) { const cc = document.createElement("span"); cc.className = "cat"; cc.textContent = catLabel(o.category); ia.append(cc); }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
     const meta = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, undefined, o.avatar);
+    draft.onclick = () => void draftFor(o.author, o.text, o.context, () => findPost(o.id, o.text), o.id, o.category, o.avatar);
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
     const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
