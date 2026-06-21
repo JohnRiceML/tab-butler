@@ -347,6 +347,18 @@ let draftOppId: string | null = null;
 interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; }
 let lastDraft: DraftReq | null = null;
 
+/** Posts already liked this session, so re-drafts / angle switches don't re-toggle. */
+const liked = new Set<string>();
+
+/** Heart the OUTER post (skip the quoted tweet's bar). X's button is testid
+ *  "like" only while UNliked — once liked it becomes "unlike", so a click here
+ *  can only ever like, never un-like. No-op if the post is already liked. */
+function likePost(el: HTMLElement | null): void {
+  if (!el?.isConnected) return;
+  const btns = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="like"]'));
+  (btns.find((b) => !b.closest('[role="link"]')) || btns[0])?.click();
+}
+
 /** Locate a post by status id, falling back to matching its text (for the dock,
  *  where the original element may have been recycled by virtualization). */
 function findPost(id: string, text?: string): HTMLElement | null {
@@ -476,6 +488,8 @@ async function draftFor(author: string, text: string, context?: string, getEl?: 
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
   lastDraft = { author, text, context, getEl, oppId, angle, avatar };
+  // Like the post you're engaging with — once per post, on the first draft.
+  if (oppId && !liked.has(oppId)) { liked.add(oppId); likePost(getEl?.() ?? null); }
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, angle, avatar });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle });
