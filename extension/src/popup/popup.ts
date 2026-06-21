@@ -33,6 +33,21 @@ function productRow(p?: ProductItem): string {
     <input class="pdesc" placeholder="One-liner: what it does, who it's for" value="${esc(p?.blurb ?? "")}" style="${ist};margin-top:6px"/>
   </div>`;
 }
+/** Read the current product rows from the DOM (named rows only). */
+function collectProducts(): ProductItem[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(".prodrow")).map((r) => ({
+    name: (r.querySelector(".pname") as HTMLInputElement | null)?.value.trim() || "",
+    url: (r.querySelector(".purl") as HTMLInputElement | null)?.value.trim() || undefined,
+    blurb: (r.querySelector(".pdesc") as HTMLInputElement | null)?.value.trim() || undefined,
+  })).filter((p) => p.name);
+}
+/** Persist the current product rows (and clear the legacy single-product key). */
+async function saveProducts(): Promise<ProductItem[]> {
+  const products = collectProducts();
+  await chrome.storage.local.set({ [CONFIG.X_PRODUCTS_KEY]: products });
+  await chrome.storage.local.remove(CONFIG.X_PRODUCT_KEY);
+  return products;
+}
 function idleLabel(min: number | undefined): string {
   if (min == null) return "No activity data";
   return min < 60 ? `Idle ${min}m` : `Idle ${Math.round(min / 60)}h`;
@@ -458,13 +473,8 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
-        const products = Array.from(document.querySelectorAll<HTMLElement>(".prodrow")).map((r) => ({
-          name: (r.querySelector(".pname") as HTMLInputElement | null)?.value.trim() || "",
-          url: (r.querySelector(".purl") as HTMLInputElement | null)?.value.trim() || undefined,
-          blurb: (r.querySelector(".pdesc") as HTMLInputElement | null)?.value.trim() || undefined,
-        })).filter((p) => p.name);
-        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_PRODUCTS_KEY]: products });
-        await chrome.storage.local.remove(CONFIG.X_PRODUCT_KEY); // clean migration off the legacy single-product string
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice });
+        const products = await saveProducts();
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
         await refresh(); // re-render so the product favicon previews update
         break;
@@ -476,6 +486,8 @@ async function dispatch(el: HTMLElement) {
       }
       case "del-product": {
         el.closest(".prodrow")?.remove();
+        await saveProducts(); // persist immediately so it can't reappear on reopen
+        toast("Product removed.");
         break;
       }
     }
