@@ -31,6 +31,9 @@ let dockFilter = "";
 
 interface Queued { id: string; author: string; text: string; el: HTMLElement; }
 const queue: Queued[] = [];
+/** Posts sent to Claude and awaiting a score — guards against re-queueing the
+ *  same post during the request window (e.g. a Rescan mid-flight). */
+const inFlight = new Set<string>();
 
 function getLocal(key: string): Promise<unknown> {
   return new Promise((res) => chrome.storage.local.get(key, (o) => res(o[key])));
@@ -80,16 +83,20 @@ function getSelf(): string {
 
 /* ---------- post stats: freshness + engagement ---------- */
 
-/** Exact post time (epoch ms) from the article's <time datetime>. */
+/** Exact post time (epoch ms) from the article's <time datetime>. Prefers the
+ *  OUTER post's time, not a nested quoted tweet's (role=link) — mirrors
+ *  outerText()/quotedText() so quote-tweets report their own age, not the quote's. */
 function postedAtMs(el: HTMLElement): number | undefined {
-  const dt = el.querySelector<HTMLElement>('a[href*="/status/"] time')?.getAttribute("datetime");
+  const times = Array.from(el.querySelectorAll<HTMLElement>('a[href*="/status/"] time'));
+  const t = times.find((n) => !n.closest('[role="link"]')) || times[0];
+  const dt = t?.getAttribute("datetime");
   const ts = dt ? Date.parse(dt) : NaN;
   return Number.isNaN(ts) ? undefined : ts;
 }
 
-/** "1.2K" / "3,400" / "2 345" / "2M" -> integer. */
+/** "1.2K" / "3,400" / "2 345" / "2M" -> integer. Rejects malformed (.1, 1.2.3). */
 function parseCount(s: string): number | undefined {
-  const m = s.replace(/[,\s]/g, "").match(/([\d.]+)\s*([KMB])?/i);
+  const m = s.replace(/[,\s]/g, "").match(/(\d+(?:\.\d+)?)\s*([KMB])?/i);
   if (!m) return undefined;
   const base = parseFloat(m[1]);
   if (!Number.isFinite(base)) return undefined;
@@ -103,7 +110,12 @@ interface PostStats { postedAt?: number; likes?: number; replies?: number; repos
  *  ("45 replies, 12 reposts, 678 likes, 9,001 views"); fall back to the
  *  abbreviated per-button text ("1.2K") when the label is absent. */
 function engagement(el: HTMLElement): PostStats {
-  const label = el.querySelector('[role="group"][aria-label]')?.getAttribute("aria-label") || "";
+  // Resolve the OUTER post's action bar, not a nested quoted tweet's (role=link);
+  // scope the button fallbacks to that same bar so quote-tweets don't bleed.
+  const groups = Array.from(el.querySelectorAll<HTMLElement>('[role="group"][aria-label]'));
+  const group = groups.find((g) => !g.closest('[role="link"]')) || groups[0] || null;
+  const scope = group || el;
+  const label = group?.getAttribute("aria-label") || "";
   // Letters in the label act as firewalls, so the count token captured before
   // each keyword is just that metric's number; parseCount strips any leading
   // separators and honors a K/M/B suffix if X ever abbreviates in the label.
@@ -112,7 +124,7 @@ function engagement(el: HTMLElement): PostStats {
     return m ? parseCount(m[1]) : undefined;
   };
   const fromButton = (testid: string): number | undefined => {
-    const txt = el.querySelector<HTMLElement>(`[data-testid="${testid}"]`)?.textContent?.trim();
+    const txt = scope.querySelector<HTMLElement>(`[data-testid="${testid}"]`)?.textContent?.trim();
     return txt ? parseCount(txt) : undefined;
   };
   return {
@@ -174,6 +186,7 @@ function scan() {
   document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]').forEach((el) => {
     const info = statusInfo(el);
     if (!info) return;
+    if (inFlight.has(info.id)) return; // sent to Claude, awaiting its score
     const cached = seen.get(info.id);
     if (cached) { if (cached.score >= THRESHOLD) badge(el, cached.reason); return; }
     if (el.dataset.tbx === "q") return; // this node already queued
@@ -200,10 +213,12 @@ async function flush() {
   scoreCalls++;
   const snap = batch.map((b) => snapStats(b.el));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
+  batch.forEach((b) => inFlight.add(b.id));
   const resp = await send<{ scores?: { i: number; score: number; reason: string }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
+  batch.forEach((b) => inFlight.delete(b.id));
   if (resp?.error === "no-key") {
     if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Tab Butler popup to enable reply suggestions."); }
     enabled = false; // stop hammering until reload
