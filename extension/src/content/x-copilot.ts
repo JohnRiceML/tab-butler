@@ -304,6 +304,12 @@ function catId(id?: string): string | undefined {
 function catLabel(id?: string): string {
   return REPLY_ANGLES.find((a) => a.id === id)?.label || "Reply";
 }
+/** "3 Value · 2 Promote · 1 Ask" — top categories across the collected opps. */
+function catSummary(): string {
+  const counts = new Map<string, number>();
+  for (const o of opps.values()) if (o.category) counts.set(o.category, (counts.get(o.category) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, c]) => `${c} ${catLabel(id)}`).join(" · ");
+}
 
 function badge(el: HTMLElement, reason: string, category?: string) {
   const existing = el.querySelector<HTMLElement>("[data-tbx-badge]");
@@ -641,8 +647,15 @@ function toast(msg: string) {
 /* ---------- opportunities dock (always-on, ranked top posts) ---------- */
 
 const DOCK_CSS = `
-.l { background:${ACCENT}; color:${INK}; border:0; border-radius:999px; cursor:pointer;
-     font:600 12px -apple-system,system-ui,sans-serif; padding:8px 14px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+.l { display:flex; align-items:center; gap:10px; background:${ACCENT}; color:${INK}; border:0; border-radius:14px;
+     cursor:pointer; text-align:left; font:600 12px -apple-system,system-ui,sans-serif; padding:8px 14px;
+     box-shadow:0 8px 28px rgba(0,0,0,.45); }
+.lav { display:inline-flex; flex:0 0 auto; }
+.lavi { width:22px; height:22px; border-radius:50%; object-fit:cover; border:2px solid ${ACCENT}; margin-left:-9px; background:#1d1812; }
+.lav .lavi:first-child { margin-left:0; }
+.ltext { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
+.ll1 { font-weight:700; }
+.ll2 { font-size:10px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; opacity:.78; margin-top:1px; }
 .d { width:340px; max-width:calc(100vw - 36px); max-height:70vh; display:flex; flex-direction:column;
      background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:14px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.5); }
@@ -753,8 +766,21 @@ function renderDock() {
   if (!dockOpen) {
     const l = document.createElement("button");
     l.className = "l";
-    l.textContent = n ? `✦ ${n} reply ${n === 1 ? "spot" : "spots"}` : "✦ Tab Butler";
     l.onclick = () => { dockOpen = true; renderDock(); };
+    if (!n) { l.textContent = "✦ Tab Butler"; root.appendChild(l); return; }
+    // Overlapped avatars from the top few spots (pbs.twimg.com loads under x.com CSP).
+    const faces = topOpps().filter((o) => o.avatar).slice(0, 3);
+    if (faces.length) {
+      const av = document.createElement("span"); av.className = "lav";
+      for (const o of faces) { const im = document.createElement("img"); im.className = "lavi"; im.src = o.avatar!; im.alt = ""; im.referrerPolicy = "no-referrer"; im.onerror = () => im.remove(); av.append(im); }
+      l.append(av);
+    }
+    const txt = document.createElement("span"); txt.className = "ltext";
+    const l1 = document.createElement("span"); l1.className = "ll1"; l1.textContent = `✦ ${n} reply ${n === 1 ? "spot" : "spots"}`;
+    txt.append(l1);
+    const summary = catSummary();
+    if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
+    l.append(txt);
     root.appendChild(l);
     return;
   }
