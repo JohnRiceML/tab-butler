@@ -146,6 +146,18 @@ export async function scorePosts(posts: XPost[], niche: string): Promise<XScore[
   return raw.scores || [];
 }
 
+/** Enforce the user's hard rule for replies: no em/en dashes, no hyphenated
+ *  compound words. A deterministic safety net on top of the prompt instruction.
+ *  Digit hyphens (ranges, negatives) and bullet hyphens are left alone. */
+function stripDashes(s: string): string {
+  return s
+    .replace(/\s*[—–]\s*/g, ", ")          // em/en dash -> comma
+    .replace(/(\p{L})-+(\p{L})/gu, "$1 $2") // hyphenated compound -> two words
+    .replace(/\s+,/g, ",")                  // tidy any " ," produced
+    .replace(/\s{2,}/g, " ")                // collapse doubled spaces
+    .trim();
+}
+
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
  *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
 export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string): Promise<string> {
@@ -162,5 +174,5 @@ export async function draftReply(post: { author: string; text: string; context?:
     `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${angleLine}`,
     400,
   );
-  return reply.trim().replace(/^["']|["']$/g, "").trim();
+  return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
 }

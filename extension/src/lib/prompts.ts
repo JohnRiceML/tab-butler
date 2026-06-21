@@ -52,7 +52,8 @@ export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Mat
 
 The reply MUST add genuine value: a specific insight, a sharp take, a useful question, or a real experience.
 NEVER: generic praise ("great post", "so true", "love this"), hashtags, or emojis unless the voice clearly uses them.
-Avoid AI tells (they out you as a bot): em-dashes (—) — use a period or comma instead; "it's not just X, it's Y"; rule-of-three lists; "here's the thing / the kicker"; rhetorical-question openers; restating the post back. Write the way a sharp person types a quick reply on their phone — usually one or two sentences, tight, under ~240 characters unless the voice runs longer.
+Hard rules you must NEVER break: never use an em dash or en dash (the — or – characters); use a period or a comma instead. Never use hyphenated compound words. Write them as separate words or one word: "long term" not "long-term", "value add" not "value-add", "peer to peer" not "peer-to-peer", "follow up" not "follow-up", "real world" not "real-world".
+Also avoid these AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question; restating the post back to them. Write the way a sharp person types a quick reply on their phone. Usually one or two sentences, tight, under about 240 characters unless the voice runs longer.
 
 Output ONLY the reply text itself — no JSON, no surrounding quotes, no preamble or sign-off, just the words to post.`;
 
@@ -72,7 +73,7 @@ export const REPLY_ANGLES: ReplyAngle[] = [
     id: "value",
     label: "Add value",
     directive:
-      "Angle: add real value. Contribute ONE specific insight, concrete tip, useful resource, or sharp counter-point they didn't already say. Teach or sharpen the thread — do not merely agree.",
+      "Angle: add real value. Contribute ONE specific insight, concrete tip, useful resource, or sharp counterpoint they didn't already say. Teach or sharpen the thread. Do not merely agree.",
   },
   {
     id: "ask",
