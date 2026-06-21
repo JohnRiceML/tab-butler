@@ -699,11 +699,25 @@ function ensureDock(): ShadowRoot {
   return dockRoot;
 }
 
+/** Blend the model's reply-worthiness with LIVE recency + engagement so fresh,
+ *  well-engaged-but-not-buried posts rank and read higher. Recomputed on the fly
+ *  (postedAt is absolute) so the score decays as a spot ages. ~±0.12 swing. */
+function effectiveScore(o: Opp): number {
+  let s = o.score;
+  if (o.postedAt) {
+    const h = (Date.now() - o.postedAt) / 3_600_000;
+    s += h < 1 ? 0.06 : h < 3 ? 0.03 : h < 12 ? 0 : h < 24 ? -0.03 : h < 72 ? -0.07 : -0.12;
+  }
+  if (o.likes) s += Math.min(0.04, Math.log10(o.likes + 1) / 100); // audience size, capped
+  if (o.replies && o.replies > 100) s -= o.replies > 300 ? 0.06 : 0.03; // saturated → a reply gets buried
+  return Math.max(0, Math.min(1, s));
+}
+
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
   return [...opps.values()]
     .filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => effectiveScore(b) - effectiveScore(a))
     .slice(0, 25);
 }
 
@@ -728,7 +742,7 @@ function renderList(list: HTMLElement) {
       cc.textContent = pname ? `${catLabel(o.category)} · ${pname}` : catLabel(o.category);
       ia.append(cc);
     }
-    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(o.score * 100)}%`; ia.append(sc);
+    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
     const meta = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
