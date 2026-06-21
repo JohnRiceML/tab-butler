@@ -154,13 +154,21 @@ function keyRow(d: ViewData): string {
     <div style="display:flex;gap:8px"><input id="keyinput" type="password" placeholder="sk-ant-..." autocomplete="off" style="flex:1;background:var(--row);border:0.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px 10px;font-family:inherit;font-size:12px;outline:none"/><button class="btn" data-action="save-key" style="padding:7px 12px">Save</button></div></div>`;
 }
 
+let expanded = false;
+
 function render(d: ViewData): string {
-  const groups = d.groups.length
-    ? `<div class="list">${d.groups.map(groupRow).join("")}</div>`
+  const all = d.groups;
+  const shown = expanded ? all : all.slice(0, 3);
+  const groupsList = shown.length
+    ? `<div class="list">${shown.map(groupRow).join("")}</div>`
     : `<div class="list"><div class="empty">No groups yet — hit “Group ${d.smart ? "with Claude" : "by site"}”.</div></div>`;
+  const groupCount = !expanded && all.length > 3 ? `3 of ${all.length} groups` : `${all.length} group${all.length === 1 ? "" : "s"}`;
+  const expandRow = all.length > 3
+    ? `<button class="btn" data-action="${expanded ? "collapse" : "expand"}" style="width:100%;margin-top:8px">${expanded ? "Collapse" : `Expand · view all ${all.length} groups`}</button>`
+    : "";
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><div class="sq" style="background:var(--blue)">${ICON.layout}</div><div class="brand">Tab Butler</div></div>
+    <div class="row-flex gap10"><div class="sq" style="background:var(--brand)">${ICON.layout}</div><div class="wordmark"><div class="brand">Tab Butler</div><div class="tagline">Your tabs. Smarter.</div></div></div>
     <div class="row-flex gap12">
       <span class="muted" style="font-size:11.5px">Smart</span>
       <label class="switch"><input type="checkbox" id="smart" aria-label="Smart mode — use Claude for grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label>
@@ -170,7 +178,7 @@ function render(d: ViewData): string {
   <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search tabs, archive &amp; history…" autocomplete="off"/><span class="kbd">↵ search</span></div>
 
   <div class="toolbar" style="margin-top:10px">
-    <button class="btn" data-action="group">${ICON.layout} ${d.smart ? "Group with Claude" : "Group by site"}</button>
+    <button class="btn primary" data-action="group">${ICON.layout} ${d.smart ? "Group with Claude" : "Group by site"}</button>
     <button class="btn" data-action="advise">${ICON.sparkles} Suggest cleanup</button>
     ${d.idleCount > 0 ? `<button class="btn" data-action="reclaim">${ICON.archive} Archive ${d.idleCount}</button>` : ""}
   </div>
@@ -179,8 +187,9 @@ function render(d: ViewData): string {
 
   ${memCard(d)}
 
-  <div class="sec"><h2>Tab groups</h2><span class="dim">${d.groups.length} group${d.groups.length === 1 ? "" : "s"}</span></div>
-  ${groups}
+  <div class="sec"><h2>Tab groups</h2><span class="dim">${groupCount}</span></div>
+  ${groupsList}
+  ${expandRow}
 
   <div class="sec"><h2>Settings</h2></div>
   <div class="list">
@@ -388,6 +397,8 @@ async function dispatch(el: HTMLElement) {
         window.close();
         break;
       }
+      case "expand": { expanded = true; await refresh(); break; }
+      case "collapse": { expanded = false; await refresh(); break; }
     }
   } catch (err) {
     console.error("action failed", el.dataset.action, err);
