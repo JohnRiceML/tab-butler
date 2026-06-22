@@ -51,19 +51,24 @@ function faviconImg(url?: string): HTMLImageElement | undefined {
   const im = document.createElement("img"); im.className = "pfav"; im.src = data; im.alt = ""; im.onerror = () => im.remove();
   return im;
 }
-let faviconHintShown = false;
 async function loadFavicons(): Promise<void> {
   const hosts = [...new Set(xProducts.map((p) => faviconHost(p.url)).filter((h): h is string => !!h && !faviconCache.has(h)))];
   if (!hosts.length) return;
   const resp = await send<{ favicons?: Record<string, string> }>({ type: "GET_FAVICONS", hosts });
   let any = false;
   for (const [h, d] of Object.entries(resp?.favicons || {})) { faviconCache.set(h, d); if (d) any = true; } // cache "" too (known miss)
-  if (any) renderDock();
-  else if (!faviconHintShown) {
-    // We asked for icons and got none — almost always the missing host permission.
-    faviconHintShown = true;
-    toast("Couldn't load product icons. Fully remove + re-add the Tab Butler extension to grant the icon permission (the reload arrow won't).");
-  }
+  if (any) renderDock(); // upgrade the letter-avatars to real favicons when they load; no nag when they don't (the google-s2 host permission needs a full re-add, and the avatars already look fine)
+}
+
+/** A colored letter chip standing in for a product when its real favicon isn't
+ *  available — the x.com dock can only render favicons once the optional google-s2
+ *  host permission is granted (a full re-add). Always works, needs no permission. */
+function letterAvatar(name: string): HTMLElement {
+  const s = document.createElement("span"); s.className = "pini";
+  s.textContent = (name.trim()[0] || "·").toUpperCase();
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  s.style.background = `hsl(${h % 360} 55% 42%)`; // deterministic per product name
+  return s;
 }
 
 /** The angle a draft should open with: the user's default if set, else the scorer's pick. */
@@ -897,6 +902,8 @@ const DOCK_CSS = `
        max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
        display:inline-flex; align-items:center; }
 .pfav { width:14px; height:14px; border-radius:3px; margin-left:5px; flex:0 0 auto; }
+.pini { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%;
+        margin-left:5px; flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; }
 .catt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
 .cat .pn { margin-left:5px; flex:0 1 auto; }
 .ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
@@ -1088,7 +1095,7 @@ function renderList(list: HTMLElement) {
       if (o.category === "promote") for (const p of o.products || []) {
         const ic = faviconImg(p.url);
         if (ic) { ic.title = p.name; cc.append(ic); }
-        else { const nm = document.createElement("span"); nm.className = "catt pn"; nm.textContent = p.name; cc.append(nm); }
+        else { const av = letterAvatar(p.name); av.title = p.name; cc.append(av); } // colored letter icon, no permission needed
       }
       ia.append(cc);
     }
