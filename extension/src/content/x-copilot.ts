@@ -374,7 +374,7 @@ async function findSpots() {
   toast("Searching X for fresh posts in your niche…");
   try {
     const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "30", query: q.slice(0, 120) },
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) },
     });
     if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Tab Butler popup to find spots."); return; }
     if (!search?.ok) {
@@ -910,7 +910,7 @@ function ensureDock(): ShadowRoot {
 
 /** handle(lower) -> follower lookup. `followers` set once known; `pending`
  *  while a request is in flight; `failed` + `at` to back off transient misses. */
-const authorReach = new Map<string, { followers?: number; at: number; pending?: boolean; failed?: boolean }>();
+const authorReach = new Map<string, { followers?: number; following?: number; at: number; pending?: boolean; failed?: boolean }>();
 const reachQueue: string[] = [];
 let reachInFlight = 0;
 let reachLookups = 0;            // lookup attempts this session (a failed author may retry after REACH_FAIL_TTL)
@@ -949,7 +949,7 @@ function pumpReach(): void {
       .then((resp) => {
         if (resp?.error === "no-twttr-config") { twttrUnconfigured = true; authorReach.delete(key); return; }
         const u = resp?.ok ? parseUser(resp.data) : null;
-        if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, at: Date.now() });
+        if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, following: u.following, at: Date.now() });
         else authorReach.set(key, { failed: true, at: Date.now() });
       })
       .catch(() => authorReach.set(key, { failed: true, at: Date.now() }))
@@ -967,9 +967,26 @@ function inReachSweetSpot(o: Opp): boolean {
   return r >= 5 && r <= 25;
 }
 
+/** Reply-back proxy from the author's following/followers ratio (the cheapest
+ *  signal for the ~75 author-reply-back weight, and it's already in the /user
+ *  response we fetch for reach). An account that follows back a real fraction of
+ *  its audience engages; a pure broadcaster almost never replies to a stranger.
+ *  Neutral (1) when `following` isn't known yet (e.g. search-seeded opps). */
+function reciprocityFactor(o: Opp): number {
+  const e = authorReach.get(o.author.toLowerCase());
+  const f = e?.followers ?? o.followers;
+  const fr = e?.following;
+  if (!f || fr == null) return 1;
+  const ratio = fr / Math.max(f, 1);
+  if (ratio >= 0.5) return 1.08;  // follows back heavily — very reply-prone
+  if (ratio >= 0.1) return 1.04;  // healthy two-way account
+  if (ratio < 0.02) return 0.92;  // pure broadcaster — rarely replies to randoms
+  return 1;
+}
+
 /** Audience factor for effectiveScore. Real follower count when known (lifts
- *  bigger audiences, with a sweet-spot bump and a mega-account discount), else
- *  the on-page likes proxy. */
+ *  bigger audiences, with a sweet-spot bump, a mega-account discount, and a
+ *  reciprocity nudge), else the on-page likes proxy. */
 function reachFactor(o: Opp): number {
   const f = knownFollowers(o);
   if (f && f > 0) {
@@ -979,7 +996,7 @@ function reachFactor(o: Opp): number {
       if (ratio >= 5 && ratio <= 25) r *= 1.08;   // sweet spot
       else if (ratio > 500) r *= 0.94;            // you'd be buried among the replies
     }
-    return Math.min(1.25, r);
+    return Math.min(1.3, r * reciprocityFactor(o));
   }
   return o.likes ? Math.min(1.2, 0.6 + Math.log10(o.likes + 1) * 0.12) : 0.7;
 }
