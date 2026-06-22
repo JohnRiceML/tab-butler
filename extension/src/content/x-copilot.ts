@@ -96,7 +96,7 @@ function productContext(product?: ProductItem): string | undefined {
 const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -160,6 +160,12 @@ function displayName(el: HTMLElement): string | undefined {
   // User-Name text is "Display Name@handle·time"; the name is everything before the @handle.
   const name = (un.textContent || "").split("@")[0].replace(/[·•].*$/s, "").replace(/​/g, "").trim();
   return name || undefined;
+}
+
+/** Whether the OUTER author shows a verified badge (best-effort; no badge if unsure). */
+function isVerified(el: HTMLElement): boolean {
+  const un = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="User-Name"]')).find((n) => !n.closest('[role="link"]'));
+  return !!un?.querySelector('[data-testid="icon-verified"], svg[aria-label="Verified account"]');
 }
 
 /** The OUTER author's avatar URL — skip the quoted tweet's avatar (role=link). */
@@ -310,7 +316,7 @@ async function flush() {
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
   scoreCalls++;
-  const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined }));
+  const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined, verified: b.el.isConnected ? isVerified(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
   batch.forEach((b) => inFlight.add(b.id));
   const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({
@@ -338,7 +344,7 @@ async function flush() {
     const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason, category, products });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name, verified: stat.verified });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
     } else {
@@ -1002,53 +1008,67 @@ const DOCK_CSS = `
 .ltext { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
 .ll1 { font-weight:700; }
 .ll2 { font-size:10px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; opacity:.78; margin-top:1px; }
-.d { width:340px; max-width:calc(100vw - 36px); max-height:70vh; display:flex; flex-direction:column;
-     background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:14px;
-     font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.5); }
-.dh { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 8px; }
-.dt { font-weight:600; } .dt b { color:${ACCENT}; }
-.dsub { font-weight:400; font-size:10.5px; color:#8c7d68; margin-top:1px; }
+.d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
+     background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
+     font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
+.dh { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:15px 16px 10px; flex:0 0 auto; }
+.dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
+.dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
 .pace { font-weight:500; white-space:nowrap; cursor:default; }
-.da { display:flex; align-items:center; gap:8px; }
-.re { background:none; border:.5px solid rgba(214,154,92,.28); color:${ACCENT}; border-radius:999px;
-      font:600 11px -apple-system,system-ui,sans-serif; padding:3px 9px; cursor:pointer; line-height:1.4; }
-.re:hover { background:rgba(214,154,92,.10); }
-.re:disabled { opacity:.6; cursor:default; }
-.dx { background:none; border:0; color:#8c7d68; font-size:14px; cursor:pointer; }
-.df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:9px;
-      color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
-.dl { overflow:auto; padding:0 8px 10px; }
-.it { padding:9px 8px; border-top:.5px solid rgba(214,154,92,.10); }
-.ia { font-weight:600; font-size:12.5px; display:flex; align-items:center; }
-.scwrap { margin-left:auto; display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; padding-left:6px; }
-.sc { color:${ACCENT}; flex:0 0 auto; font-variant-numeric:tabular-nums; }
-.nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; flex:0 1 auto; }
-.hndl { color:#8c7d68; font-weight:400; font-size:11px; margin-left:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; }
-.av { width:18px; height:18px; border-radius:50%; object-fit:cover; margin-right:7px; flex:0 0 auto; }
-.ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.im { color:#9b8d76; font-size:11px; margin:3px 0 0; line-height:1.4; }
-.im .ctag { color:${ACCENT}; font-weight:600; margin-right:5px; }
-.cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
-       padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT};
-       max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
-       display:inline-flex; align-items:center; }
-.pfav { width:14px; height:14px; border-radius:3px; margin-left:5px; flex:0 0 auto; vertical-align:-3px; }
+.da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
+.scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
+         font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
+.scanb:hover { background:rgba(214,154,92,.10); } .scanb:disabled { opacity:.6; cursor:default; }
+.iconb { background:none; border:.5px solid rgba(214,154,92,.18); color:#8c7d68; border-radius:8px;
+         width:30px; height:30px; cursor:pointer; font-size:15px; line-height:1; flex:0 0 auto; }
+.iconb:hover { background:#221c15; }
+.kback { position:absolute; inset:0; z-index:5; }
+.kmenu { position:absolute; top:50px; right:14px; z-index:6; background:#221c15; border:.5px solid rgba(214,154,92,.22);
+         border-radius:11px; padding:5px; display:flex; flex-direction:column; gap:2px; min-width:152px; box-shadow:0 12px 32px rgba(0,0,0,.5); }
+.kitem { background:none; border:0; color:#f3ead9; text-align:left; font:500 12.5px -apple-system,system-ui,sans-serif;
+         padding:8px 10px; border-radius:7px; cursor:pointer; }
+.kitem:hover { background:#2c241d; } .kitem:disabled { opacity:.5; cursor:default; }
+.tabs { display:flex; gap:4px; padding:0 14px 10px; flex:0 0 auto; }
+.tab { flex:1; border:.5px solid transparent; border-radius:9px; background:none; color:#8c7d68;
+       font:500 11.5px -apple-system,system-ui,sans-serif; padding:7px 4px; cursor:pointer; white-space:nowrap; }
+.tab:hover { color:#cbb89c; } .tab.on { background:rgba(214,154,92,.13); border-color:rgba(214,154,92,.32); color:#e7b277; }
+.df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
+      color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
+.dl { overflow:auto; padding:0; }
+.it { display:flex; gap:12px; padding:13px 16px; border-top:.5px solid rgba(214,154,92,.10); }
+.av { width:40px; height:40px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:#221c15; }
+.av.init { display:inline-flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:#fff; }
+.bodywrap { flex:1; min-width:0; display:flex; gap:12px; }
+.main { flex:1; min-width:0; }
+.nm { display:flex; align-items:center; gap:5px; font-weight:600; font-size:14px; }
+.nmt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.vf { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
+      border-radius:50%; background:#1d9bf0; color:#fff; font-size:9px; }
+.ix { color:#b6a892; font-size:13px; line-height:1.4; margin:4px 0 6px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.why { color:${ACCENT}; font-size:12px; line-height:1.4; display:flex; gap:5px; }
+.why .wst { flex:0 0 auto; } .why b { font-weight:600; }
+.meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:11.5px; color:#8c7d68; }
+.chip { font-size:10.5px; font-weight:600; padding:2px 9px; border-radius:999px; }
+.srch { flex:0 0 auto; }
+.pfav { width:14px; height:14px; border-radius:3px; flex:0 0 auto; vertical-align:-3px; }
 .pini { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%;
-        margin-left:5px; flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; vertical-align:-3px; }
-.catt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
-.cat .pn { margin-left:5px; flex:0 1 auto; }
-.ib { display:flex; align-items:center; gap:6px; margin-top:8px; }
-.bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:5px 10px; cursor:pointer;
-      border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
-.bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; flex:1; }
-.bt.ico { flex:0 0 auto; min-width:30px; padding:5px 0; text-align:center; font-size:13px; line-height:1; color:#cbb89c; }
-.bt.ico:hover { background:#2c241d; }
-.bt:disabled { opacity:.55; cursor:default; }
-.spot { color:#6fcf7f; font-size:12px; flex:0 0 auto; }
-.empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
-.paused { padding:22px 18px 20px; text-align:center; }
-.pttl { font-weight:600; font-size:13px; color:#cbb89c; }
-.pcopy { font-size:11.5px; color:#8c7d68; line-height:1.5; margin:6px 0 13px; }
+        flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; vertical-align:-3px; }
+.rcol { flex:0 0 116px; display:flex; flex-direction:column; }
+.rf { font-size:11px; color:#8c7d68; } .inf { cursor:default; }
+.pct { font-size:25px; font-weight:600; line-height:1.05; margin-top:2px; font-variant-numeric:tabular-nums; }
+.vd { font-size:11.5px; font-weight:500; margin-top:1px; }
+.acts { margin-top:11px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+.draftb { width:100%; background:${ACCENT}; color:${INK}; border:0; border-radius:9px;
+          font:600 12.5px -apple-system,system-ui,sans-serif; padding:9px 8px; cursor:pointer; margin-bottom:5px; }
+.draftb:hover { filter:brightness(1.06); }
+.lk { background:none; border:0; color:#8c7d68; font:500 12px -apple-system,system-ui,sans-serif; padding:5px 2px; cursor:pointer; text-align:left; }
+.lk:hover { color:#cbb89c; } .lk:disabled { opacity:.6; cursor:default; }
+.foot { padding:13px 14px; text-align:center; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
+.foot1 { font-size:12.5px; color:#b6a892; } .foot2 { font-size:11.5px; color:#8c7d68; margin-top:2px; }
+.empty { color:#8c7d68; font-size:12.5px; padding:24px 16px; text-align:center; }
+.paused { padding:26px 18px 22px; text-align:center; }
+.pttl { font-weight:600; font-size:14px; color:#cbb89c; }
+.pcopy { font-size:12px; color:#8c7d68; line-height:1.5; margin:7px 0 14px; }
 `;
 
 let dockHost: HTMLElement | null = null;
@@ -1188,20 +1208,59 @@ function effectiveScore(o: Opp): number {
   return Math.max(0, Math.min(1, o.score * freshnessFactor(o.postedAt) * reach * buried));
 }
 
-/** An at-a-glance "is this good?" verdict for a spot, from its live effectiveScore
+/** An at-a-glance "reply fit" verdict for a spot, from its live effectiveScore
  *  (which already folds in fit, freshness, reach, reply-pileup, and reciprocity). */
 function scoreVerdict(s: number): { label: string; color: string } {
-  if (s >= 0.55) return { label: "Strong", color: "#6fcf7f" }; // fresh + reachable + genuine fit
-  if (s >= 0.4) return { label: "Decent", color: ACCENT };
-  return { label: "Skip", color: "#8c7d68" };                  // stale, tiny audience, or engagement bait
+  if (s >= 0.55) return { label: "High", color: "#6fcf7f" };   // fresh + reachable + genuine fit
+  if (s >= 0.4) return { label: "Medium", color: "#e89a3c" };
+  return { label: "Low", color: "#8c7d68" };                   // stale, tiny audience, or engagement bait
 }
+
+/** "Easy replies" ranking — short, answerable posts you can reply to fast and
+ *  early: favors short text, a genuine question, few existing replies, freshness. */
+function easyScore(o: Opp): number {
+  const len = o.text.length;
+  const short = len < 120 ? 1 : len < 220 ? 0.6 : 0.3;
+  const question = /\?\s*$|\b(how|what|why|which|who|when|where|anyone|recommend|thoughts|favou?rite)\b/i.test(o.text) ? 1 : 0.4;
+  const early = o.replies == null ? 0.7 : o.replies < 5 ? 1 : o.replies < 30 ? 0.7 : 0.3;
+  const fresh = freshnessFactor(o.postedAt);
+  // Still weight genuine fit so spam doesn't top the "easy" list.
+  return (short * 0.38 + question * 0.3 + early * 0.22 + fresh * 0.1) * (0.55 + 0.45 * o.score);
+}
+
+type DockSort = "best" | "recent" | "reach" | "easy";
+let dockSort: DockSort = "best";
+let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
-  return [...opps.values()]
-    .filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f))
-    .sort((a, b) => effectiveScore(b) - effectiveScore(a))
-    .slice(0, 25);
+  const list = [...opps.values()].filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
+  const key = (o: Opp): number =>
+    dockSort === "recent" ? (o.postedAt ?? 0) :
+    dockSort === "reach" ? (knownFollowers(o) ?? 0) :
+    dockSort === "easy" ? easyScore(o) :
+    effectiveScore(o);
+  return list.sort((a, b) => key(b) - key(a)).slice(0, 25);
+}
+
+/** Category chip colors, keyed to the reply angle. */
+function catColor(id?: string): { bg: string; fg: string } {
+  switch (id) {
+    case "connect": case "support": return { bg: "rgba(79,174,106,.16)", fg: "#6fcf7f" };
+    case "value": return { bg: "rgba(127,119,221,.20)", fg: "#a99cf0" };
+    case "ask": return { bg: "rgba(214,154,92,.18)", fg: "#e0a45c" };
+    case "joke": return { bg: "rgba(237,147,177,.18)", fg: "#ed93b1" };
+    default: return { bg: "rgba(214,154,92,.16)", fg: "#d69a5c" }; // promote / reply
+  }
+}
+/** A colored initial circle when no avatar image is available. */
+function avInitial(o: Opp): HTMLElement {
+  const s = document.createElement("span"); s.className = "av init";
+  const n = o.name || o.author || "·";
+  s.textContent = (n.trim()[0] || "·").toUpperCase();
+  let h = 0; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
+  s.style.background = `hsl(${h % 360} 50% 42%)`;
+  return s;
 }
 
 function renderList(list: HTMLElement) {
@@ -1210,7 +1269,7 @@ function renderList(list: HTMLElement) {
   if (!items.length) {
     const e = document.createElement("div");
     e.className = "empty";
-    e.textContent = opps.size ? "No matches." : "Scroll your feed — reply-worthy posts collect here.";
+    e.textContent = opps.size ? "No posts match that filter." : "Scroll your feed — posts worth replying to collect here.";
     list.appendChild(e);
     return;
   }
@@ -1218,57 +1277,83 @@ function renderList(list: HTMLElement) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const it = document.createElement("div"); it.className = "it";
 
-    // Row 1 — who + verdict: avatar, name, then a right-aligned color-coded score (+ in-reach pip).
-    // Handle moves to the name's hover title to keep this row to one clean line.
-    const ia = document.createElement("div"); ia.className = "ia";
-    if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
-    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = o.name || `@${o.author}`; nm.title = `@${o.author}`; ia.append(nm);
-    const right = document.createElement("span"); right.className = "scwrap";
-    if (inReachSweetSpot(o)) { const sp = document.createElement("span"); sp.className = "spot"; sp.textContent = "◎"; sp.title = "In reach: this account is 5-25x your size, so a reply reaches a bigger, still-attainable audience."; right.append(sp); }
-    const es = effectiveScore(o); const v = scoreVerdict(es);
-    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(es * 100)}%`; sc.style.color = v.color; sc.title = `${v.label} — is this worth replying to right now? Strong = fresh, reachable, genuine fit; Skip = stale, tiny audience, or engagement bait.`; right.append(sc);
-    ia.append(right);
+    // Avatar (image, or a colored initial).
+    if (o.avatar) {
+      const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer";
+      av.onerror = () => av.replaceWith(avInitial(o));
+      it.append(av);
+    } else { it.append(avInitial(o)); }
 
-    // Row 2 — the post text.
-    const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
+    const body = document.createElement("div"); body.className = "bodywrap";
+    const main = document.createElement("div"); main.className = "main";
 
-    // Row 3 — one dim stats line: category tag · age · followers · product icon.
-    // The reason (the model's "why") moves to this line's hover title — it was the longest, most wrappy bit.
-    const im = document.createElement("div"); im.className = "im";
-    if (o.reason) im.title = o.reason;
-    if (o.source === "search") { const s = document.createElement("span"); s.title = "Found via niche search (off your current page)"; s.textContent = "🔎 "; im.append(s); }
-    if (o.category) { const ct = document.createElement("span"); ct.className = "ctag"; ct.textContent = catLabel(o.category); im.append(ct); }
-    const bits: string[] = [];
-    const age = fmtAge(o.postedAt); if (age) bits.push(age);
-    const fc = knownFollowers(o); if (fc) bits.push(`${fmtCount(fc)} followers`);
-    im.append(document.createTextNode(bits.join(" · ")));
-    if (o.category === "promote") for (const p of o.products || []) {
-      const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; im.append(ic);
+    // Name (+ verified badge).
+    const nm = document.createElement("div"); nm.className = "nm";
+    const ns = document.createElement("span"); ns.className = "nmt"; ns.textContent = o.name || `@${o.author}`; ns.title = `@${o.author}`; nm.append(ns);
+    if (o.verified) { const vb = document.createElement("span"); vb.className = "vf"; vb.textContent = "✓"; vb.title = "Verified account"; nm.append(vb); }
+    main.append(nm);
+
+    // Post text.
+    const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text; main.append(ix);
+
+    // Why this.
+    if (o.reason) {
+      const why = document.createElement("div"); why.className = "why";
+      const star = document.createElement("span"); star.className = "wst"; star.textContent = "✦";
+      const lbl = document.createElement("b"); lbl.textContent = "Why this: ";
+      const span = document.createElement("span"); span.append(lbl, document.createTextNode(o.reason));
+      why.append(star, span); main.append(why);
     }
 
-    // Row 4 — actions: Draft (primary text) + compact icon buttons.
-    const ib = document.createElement("div"); ib.className = "ib";
-    const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
+    // Meta: category chip · age · followers (+ product icon for promote).
+    const meta = document.createElement("div"); meta.className = "meta";
+    if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎"; s.title = "Found via niche search (off your current page)"; meta.append(s); }
+    if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = catLabel(o.category); meta.append(ct); }
+    const mbits: string[] = [];
+    const age = fmtAge(o.postedAt); if (age) mbits.push(age);
+    const fc = knownFollowers(o); if (fc) mbits.push(`${fmtCount(fc)} followers`);
+    const tail = mbits.join(" · ");
+    if (tail) meta.append(document.createTextNode((o.category ? " · " : "") + tail));
+    if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
+    main.append(meta);
+    body.append(main);
+
+    // Right column — reply fit + actions.
+    const rcol = document.createElement("div"); rcol.className = "rcol";
+    const es = effectiveScore(o); const v = scoreVerdict(es);
+    const rf = document.createElement("div"); rf.className = "rf";
+    const inf = document.createElement("span"); inf.className = "inf"; inf.textContent = "ⓘ"; inf.title = "Reply fit: how worth replying to right now — content fit + freshness + reach, minus reply-pileup and engagement bait.";
+    rf.append(document.createTextNode("Reply fit "), inf); rcol.append(rf);
+    const pct = document.createElement("div"); pct.className = "pct"; pct.textContent = `${Math.round(es * 100)}%`; pct.style.color = v.color; rcol.append(pct);
+    const vd = document.createElement("div"); vd.className = "vd"; vd.style.color = v.color;
+    vd.textContent = inReachSweetSpot(o) ? `${v.label} · ◎ in reach` : v.label;
+    vd.title = inReachSweetSpot(o) ? "In reach: this account is 5-25x your size — a reply reaches a bigger, still-attainable audience." : "";
+    rcol.append(vd);
+
+    const acts = document.createElement("div"); acts.className = "acts";
+    const draft = document.createElement("button"); draft.className = "draftb"; draft.textContent = "✎ Draft reply";
     draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.source === "search" ? undefined : o.text), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
-    const follow = document.createElement("button"); follow.className = "bt ico";
+    const follow = document.createElement("button"); follow.className = "lk";
     const isFollowed = followed.has(o.author);
-    follow.textContent = isFollowed ? "✓" : "+"; follow.title = isFollowed ? `Following @${o.author}` : `Follow @${o.author}`;
+    follow.textContent = isFollowed ? "✓ Following" : "+ Follow";
     follow.disabled = isFollowed;
     follow.onclick = async () => {
-      follow.disabled = true; follow.textContent = "…";
+      follow.disabled = true; follow.textContent = "Following…";
       const r = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
-      if (r === "followed") { followed.add(o.author); follow.textContent = "✓"; toast(`Followed @${o.author}.`); }
-      else if (r === "already") { followed.add(o.author); follow.textContent = "✓"; toast(`Already following @${o.author}.`); }
-      else if (r === "paced") { follow.disabled = false; follow.textContent = "+"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
-      else { follow.disabled = false; follow.textContent = "+"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
+      if (r === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); }
+      else if (r === "already") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Already following @${o.author}.`); }
+      else if (r === "paced") { follow.disabled = false; follow.textContent = "+ Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
+      else { follow.disabled = false; follow.textContent = "+ Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
     };
-    const open = document.createElement("button"); open.className = "bt ico"; open.textContent = "↗"; open.title = "Open the post on X";
+    const open = document.createElement("button"); open.className = "lk"; open.textContent = "↗ Open on X"; open.title = "Open the post on X";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
-    const dismiss = document.createElement("button"); dismiss.className = "bt ico"; dismiss.textContent = "✕"; dismiss.title = "Dismiss";
-    dismiss.onclick = () => { opps.delete(o.id); renderDock(); };
-    ib.append(draft, follow, open, dismiss);
+    const skip = document.createElement("button"); skip.className = "lk"; skip.textContent = "✕ Skip"; skip.title = "Skip — remove from the list";
+    skip.onclick = () => { opps.delete(o.id); renderDock(); };
+    acts.append(draft, follow, open, skip);
+    rcol.append(acts);
+    body.append(rcol);
 
-    it.append(ia, ix, im, ib);
+    it.append(body);
     list.appendChild(it);
   }
 }
@@ -1302,66 +1387,92 @@ function renderDock() {
   const d = document.createElement("div"); d.className = "d";
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
-  const l1 = document.createElement("div");
-  const tb = document.createElement("b"); tb.textContent = String(n);
-  l1.append(document.createTextNode("Reply opportunities "), tb);
+  const ti = document.createElement("div"); ti.className = "dtitle"; ti.textContent = "Posts worth replying to";
   const today = repliesToday();
   const sub = document.createElement("div"); sub.className = "dsub";
   const cnt = document.createElement("span");
-  cnt.textContent = today ? `${today} sent today` : "none sent today";
-  cnt.title = "Replies you've inserted through Tab Butler today (resets at local midnight).";
+  cnt.textContent = `${n} ready · ${today} sent today`;
+  cnt.title = "Posts ready to reply to · replies you've inserted through Tab Butler today (resets at local midnight).";
   sub.append(cnt);
   // Live pace chip — surfaces the account-safety status in the moment you're replying.
   const rhh = replyLog.times.filter((tm) => Date.now() - tm < HOUR_MS).length;
-  const st = reputationStatus(rhh);
+  const stt = reputationStatus(rhh);
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
   if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
-  else { chip.style.color = PACE_COLOR[st.level]; chip.textContent = `● ${st.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Tab Butler keeps you under it and the on-page actions paced like a human.`; }
+  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Tab Butler keeps you under it.`; }
   sub.append(document.createTextNode(" · "), chip);
-  t.append(l1, sub);
+  t.append(ti, sub);
+
   const acts = document.createElement("div"); acts.className = "da";
   if (!paused) {
-    const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
-    re.title = "Rescan the page — re-check every visible post for new reply spots";
+    const re = document.createElement("button"); re.className = "scanb"; re.textContent = findingSpots ? "Searching…" : "↻ Scan again";
+    re.title = "Rescan the page for new posts worth replying to";
+    re.disabled = findingSpots;
     re.onclick = () => rescan();
     acts.append(re);
-    const fs = document.createElement("button"); fs.className = "re";
-    fs.textContent = findingSpots ? "Searching…" : "✦ Find spots";
-    fs.title = "Search X for fresh posts in your niche (uses your RapidAPI key)";
-    fs.disabled = findingSpots;
-    fs.onclick = () => void findSpots();
-    acts.append(fs);
-    if (n) {
-      const clr = document.createElement("button"); clr.className = "re"; clr.textContent = "Clear all";
-      clr.title = "Clear every collected reply spot";
-      clr.onclick = () => { opps.clear(); renderDock(); toast("Cleared all reply spots."); };
-      acts.append(clr);
-    }
   }
-  // Pause / Resume — stop or restart the firehose. Icon-only while running; explicit while paused.
-  const pz = document.createElement("button"); pz.className = "re";
-  pz.textContent = paused ? "▶ Resume" : "⏸";
-  pz.title = paused ? "Resume — start finding reply spots again" : "Pause — stop scanning, surfacing, and API calls. Nothing happens until you resume.";
-  pz.onclick = () => setPaused(!paused);
-  acts.append(pz);
-  const x = document.createElement("button"); x.className = "dx"; x.textContent = "✕"; x.onclick = () => { dockOpen = false; renderDock(); };
+  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear";
+  kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
+  acts.append(kb);
+  const x = document.createElement("button"); x.className = "iconb"; x.textContent = "✕"; x.title = "Close";
+  x.onclick = () => { kebabOpen = false; dockOpen = false; renderDock(); };
   acts.append(x);
   h.append(t, acts);
+  d.append(h);
+
+  // ⋮ overflow menu + click-away backdrop.
+  if (kebabOpen) {
+    const back = document.createElement("div"); back.className = "kback"; back.onclick = () => { kebabOpen = false; renderDock(); };
+    const menu = document.createElement("div"); menu.className = "kmenu";
+    const item = (label: string, fn: () => void, disabled = false) => {
+      const b = document.createElement("button"); b.className = "kitem"; b.textContent = label; b.disabled = disabled;
+      b.onclick = () => { kebabOpen = false; renderDock(); fn(); };
+      menu.append(b);
+    };
+    item(paused ? "▶ Resume" : "⏸ Pause", () => setPaused(!paused));
+    item(findingSpots ? "Searching…" : "✦ Find spots", () => void findSpots(), paused || findingSpots);
+    if (n) item("🗑 Clear all", () => { opps.clear(); toast("Cleared all reply spots."); renderDock(); });
+    d.append(back, menu);
+  }
+
   if (paused) {
     const p = document.createElement("div"); p.className = "paused";
     const pt = document.createElement("div"); pt.className = "pttl"; pt.textContent = "⏸ Paused";
-    const pp = document.createElement("div"); pp.className = "pcopy"; pp.textContent = "The copilot is quiet — no scanning, no surfacing, no API calls. Take your break; your spots come back when you resume.";
-    const rb = document.createElement("button"); rb.className = "bt p"; rb.textContent = "Resume"; rb.onclick = () => setPaused(false);
+    const pp = document.createElement("div"); pp.className = "pcopy"; pp.textContent = "The copilot is quiet — no scanning, no surfacing, no API calls. Take your break; your posts come back when you resume.";
+    const rb = document.createElement("button"); rb.className = "draftb"; rb.style.width = "auto"; rb.style.padding = "9px 22px"; rb.textContent = "Resume"; rb.onclick = () => setPaused(false);
     p.append(pt, pp, rb);
-    d.append(h, p);
+    d.append(p);
     root.appendChild(d);
     return;
   }
-  const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter opportunities…"; f.value = dockFilter;
+
+  // Sort tabs.
+  const tabs = document.createElement("div"); tabs.className = "tabs";
+  const TABS: { id: DockSort; label: string; title: string }[] = [
+    { id: "best", label: "Best", title: "Best reply-fit first" },
+    { id: "recent", label: "Recent", title: "Newest posts first" },
+    { id: "reach", label: "High reach", title: "Biggest accounts first" },
+    { id: "easy", label: "Easy replies", title: "Short, answerable posts you can reply to fast and early" },
+  ];
+  for (const td of TABS) {
+    const tb2 = document.createElement("button"); tb2.className = "tab" + (dockSort === td.id ? " on" : ""); tb2.textContent = td.label; tb2.title = td.title;
+    tb2.onclick = () => { if (dockSort !== td.id) { dockSort = td.id; renderDock(); } };
+    tabs.append(tb2);
+  }
+  d.append(tabs);
+
+  const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter posts…"; f.value = dockFilter;
   const list = document.createElement("div"); list.className = "dl";
   f.oninput = () => { dockFilter = f.value; renderList(list); };
-  d.append(h, f, list);
+  d.append(f, list);
+
+  const foot = document.createElement("div"); foot.className = "foot";
+  const f1 = document.createElement("div"); f1.className = "foot1"; f1.textContent = n ? "✦ You're all caught up" : "✦ Watching your feed";
+  const f2 = document.createElement("div"); f2.className = "foot2"; f2.textContent = "We'll surface more great posts as you scroll.";
+  foot.append(f1, f2);
+  d.append(foot);
+
   root.appendChild(d);
   renderList(list);
 }
