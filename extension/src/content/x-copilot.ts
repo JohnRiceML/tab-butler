@@ -527,8 +527,25 @@ let draftOppAuthor = "";
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
  *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
-interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; }
-let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {} };
+/** One sent reply's features — the raw material for the "what's working" learning
+ *  loop. `outcome` is filled later by the (paced, API-backed) measure pass that
+ *  matches this to your posted reply via /user-replies and reads its engagement. */
+interface SentRecord {
+  at: number;            // when we handed you the reply
+  postId?: string;       // the tweet you replied to
+  author?: string;       // that tweet's author handle
+  score?: number;        // the effectiveScore we gave the opportunity (0..1)
+  followers?: number;    // the author's follower count, if known
+  ageMs?: number;        // how old the post was when you replied (freshness)
+  category?: string;     // opportunity category (promote/value/ask/…)
+  angle?: string;        // the drafting angle used
+  norm?: string;         // normalized reply text (match + dedup)
+  snippet?: string;      // first 80 chars of the reply (match via /user-replies)
+  outcome?: { at: number; likes?: number; replies?: number; authorReplied?: boolean };
+}
+interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
+let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
+const SENT_MAX = 500; // cap the feature log
 
 /** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
 function dayKey(ts: number): string {
@@ -714,25 +731,45 @@ let inserting = false;
 /** Record an inserted reply in the persisted reputation log and return the single
  *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
  *  Pattern-aware + cross-session, because X's penalties attach to the account. */
-/** Bump today's "replies sent via the system" tally and trim old days. */
+/** Bump today's "replies sent" tally + the all-time total; trim old days. */
 function bumpDaily(now: number): void {
   const dk = dayKey(now);
   replyLog.daily[dk] = (replyLog.daily[dk] || 0) + 1;
-  const cut = dayKey(now - 35 * 24 * HOUR_MS); // keep ~35 days of history
+  replyLog.total = (replyLog.total || 0) + 1;
+  const cut = dayKey(now - 35 * 24 * HOUR_MS); // keep ~35 days of per-day history
   for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
 }
 
-/** Count one reply the system handed you — the simple "how it's helping" metric.
- *  Fires on any Insert click that produced a usable reply (inserted into X's box,
- *  or copied to the clipboard when X blocked the direct insert). Persists + refreshes
- *  the header count. No post-confirmation: the click is the signal. */
-function countSystemReply(): void {
-  bumpDaily(Date.now());
+/** Append a feature record for the reply we just helped send — the raw material
+ *  the "what's working" loop will later correlate with outcomes. */
+function logSentReply(now: number, text: string, opp?: Opp, angle?: string): void {
+  const rec: SentRecord = {
+    at: now,
+    postId: opp?.id ?? draftOppId ?? undefined,
+    author: (opp?.author ?? draftOppAuthor) || undefined,
+    score: opp ? effectiveScore(opp) : undefined,
+    followers: opp ? knownFollowers(opp) : undefined,
+    ageMs: opp?.postedAt ? Math.max(0, now - opp.postedAt) : undefined,
+    category: opp?.category,
+    angle: angle || opp?.category,
+    norm: normalizeReply(text) || undefined,
+    snippet: text.slice(0, 80),
+  };
+  replyLog.sent.push(rec);
+  if (replyLog.sent.length > SENT_MAX) replyLog.sent = replyLog.sent.slice(-SENT_MAX);
+}
+
+/** Record one reply the system handed you (Insert landed, or clipboard fallback):
+ *  count it, log its features, persist, refresh the header. The click is the
+ *  signal — no post-confirmation. */
+function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now()): void {
+  bumpDaily(now);
+  logSentReply(now, text, opp, angle);
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   renderDock(); // update "N replies sent today" immediately
 }
 
-function recordReplyAndNudge(text: string): string | null {
+function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | null {
   const now = Date.now();
   replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
   const author = draftOppAuthor.toLowerCase();
@@ -741,13 +778,12 @@ function recordReplyAndNudge(text: string): string | null {
   const norm = normalizeReply(text);
   const recentNorms = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).map((d) => d.norm);
   const duplicate = isDuplicateReply(norm, recentNorms);
-  // commit + persist (cross-session)
+  // reputation-guard signals committed before the shared count/log
   replyLog.times.push(now);
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  bumpDaily(now);
-  void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
+  recordSentReply(text, opp, angle, now);
   return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
 }
 
@@ -755,20 +791,23 @@ async function doInsert(text: string) {
   if (inserting) return; // ignore re-clicks while an insert is in flight (avoids doubling)
   inserting = true;
   try {
+    // Snapshot the opportunity + angle BEFORE we delete the card, for the feature log.
+    const opp = draftOppId ? opps.get(draftOppId) : undefined;
+    const angle = lastDraft?.angle;
     const el = draftGetEl?.() ?? null;
     const r = await insertReply(text, el);
     if (r === "ok") {
       // Like the post only now — once you've actually committed to replying, not on
       // panel-open. Genuine, user-paced engagement, once per post.
       if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(el); }
-      const warn = recordReplyAndNudge(text); // counts today's reply + reputation guard
+      const warn = recordReplyAndNudge(text, opp, angle); // counts today's reply + reputation guard + feature log
       if (draftOppId) opps.delete(draftOppId);
       renderDock(); // after the count, so the "N today" header reflects this reply
       toast(warn || "Inserted into the reply box. Review it, then post.");
       dismissPanel();
     }
     else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
-    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } countSystemReply(); toast("X blocked the insert — copied it instead; paste it in."); }
+    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } recordSentReply(text, opp, angle); toast("X blocked the insert — copied it instead; paste it in."); }
   } finally {
     inserting = false;
   }
@@ -1249,11 +1288,16 @@ async function boot() {
   const storedLog = await getLocal(CONFIG.X_REPLY_LOG_KEY);
   if (storedLog && typeof storedLog === "object") {
     const l = storedLog as Partial<ReplyLog>;
+    const daily = l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {};
+    // Seed all-time from existing per-day history if it predates the `total` field.
+    const total = typeof l.total === "number" ? l.total : Object.values(daily).reduce((a, b) => a + (b || 0), 0);
     replyLog = {
       times: Array.isArray(l.times) ? l.times : [],
       authors: l.authors && typeof l.authors === "object" ? (l.authors as Record<string, number>) : {},
       drafts: Array.isArray(l.drafts) ? l.drafts : [],
-      daily: l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {},
+      daily,
+      total,
+      sent: Array.isArray(l.sent) ? (l.sent as SentRecord[]) : [],
     };
   }
   void loadFavicons();

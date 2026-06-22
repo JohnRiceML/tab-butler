@@ -120,6 +120,25 @@ interface ViewData {
   twttrKey: string;
   xMyHandle: string;
   twttrMeter: { requests: number; bytes: number } | null;
+  replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
+}
+
+/** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
+ *  the same per-day buckets. */
+function dayKeyOf(ts: number): string {
+  const d = new Date(ts); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function computeReplyStats(daily: Record<string, number>, total: number): ViewData["replyStats"] {
+  const now = Date.now(), DAY = 86_400_000, lab = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const days: { label: string; count: number; today: boolean }[] = [];
+  let week = 0;
+  for (let i = 6; i >= 0; i--) {
+    const ts = now - i * DAY, c = daily[dayKeyOf(ts)] || 0;
+    week += c;
+    days.push({ label: lab[new Date(ts).getDay()], count: c, today: i === 0 });
+  }
+  return { today: daily[dayKeyOf(now)] || 0, week, total: total || 0, days };
 }
 
 const MOCK: ViewData = {
@@ -144,6 +163,12 @@ const MOCK: ViewData = {
   twttrKey: "",
   xMyHandle: "",
   twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
+  replyStats: { today: 7, week: 35, total: 142, days: [
+    { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
+    { label: "We", count: 8, today: false }, { label: "Th", count: 4, today: false },
+    { label: "Fr", count: 6, today: false }, { label: "Sa", count: 2, today: false },
+    { label: "Su", count: 7, today: true },
+  ] },
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -183,9 +208,12 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_REPLY_LOG_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
+  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number } | undefined;
+  const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
+  const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
 
   let twttrMeter: { requests: number; bytes: number } | null = null;
   if (store[CONFIG.TWTTR_KEY_KEY]) {
@@ -210,7 +238,33 @@ async function getData(): Promise<ViewData> {
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
     twttrMeter,
+    replyStats,
   };
+}
+
+/** "Replies sent" showcase — totals + a 7-day trend. Pure read of the per-day
+ *  tally (no API). The "what's working" panel comes once the measure pass lands. */
+function replyShowcaseHTML(s: ViewData["replyStats"]): string {
+  const max = Math.max(1, ...s.days.map((d) => d.count));
+  const bars = s.days.map((d) => {
+    const h = Math.max(2, Math.round((d.count / max) * 52));
+    const fill = d.count ? (d.today ? "var(--green)" : "var(--brand)") : "var(--line-strong)";
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div title="${d.count} on ${esc(d.label)}" style="width:100%;height:${h}px;background:${fill};border-radius:3px 3px 0 0"></div>
+      <div style="font-size:11px;color:${d.today ? "var(--green)" : "var(--t3)"}">${esc(d.label)}</div>
+    </div>`;
+  }).join("");
+  const tile = (n: number, l: string) =>
+    `<div style="flex:1;background:var(--row);border-radius:9px;padding:9px 10px">
+      <div style="font-size:21px;font-weight:500;line-height:1">${n}</div>
+      <div style="font-size:10.5px;color:var(--t3);margin-top:3px">${l}</div></div>`;
+  const hint = s.total ? "" : `<div class="dim" style="font-size:10.5px;margin-top:8px">Draft a reply and hit Insert on X — your count starts here.</div>`;
+  return `<div class="li" style="display:block">
+    <div class="name" style="margin-bottom:8px">Replies sent <span class="dim" style="font-weight:400">— how the copilot is helping</span></div>
+    <div style="display:flex;gap:8px">${tile(s.today, "today")}${tile(s.week, "this week")}${tile(s.total, "all time")}</div>
+    <div style="display:flex;align-items:flex-end;gap:7px;height:64px;margin-top:10px">${bars}</div>
+    ${hint}
+  </div>`;
 }
 
 /* ---------- render ---------- */
@@ -302,6 +356,7 @@ function render(d: ViewData): string {
 
   <div class="sec"><h2>X reply copilot</h2><label class="switch"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="list">
+    ${replyShowcaseHTML(d.replyStats)}
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— your niche/goals</span></div>
       <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
