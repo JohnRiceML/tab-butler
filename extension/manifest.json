@@ -3,7 +3,7 @@
   "name": "Tab Butler",
   "version": "0.1.0",
   "description": "Auto-bundles tabs, safely archives idle ones, and is made smart by Claude. Local-first; Claude is opt-in.",
-  "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history"],
+  "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history", "favicon"],
   "host_permissions": [
     "https://api.anthropic.com/*",
     "http://localhost:3210/*",

@@ -23,12 +23,29 @@ function letterChip(name?: string): string {
   const bg = n ? `hsl(${h % 360} 55% 42%)` : "#5a4a36";
   return `<span style="flex:0 0 auto;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;background:${bg}">${esc(ch)}</span>`;
 }
+
+/** The product's real favicon via Chrome's built-in `_favicon` service (cache-backed,
+ *  no network, no CORS, no host permission). Falls back to the letter chip when there's
+ *  no usable URL. Requires the "favicon" permission. */
+function productIconHTML(p?: ProductItem): string {
+  const url = (p?.url || "").trim();
+  if (url && !/^(javascript|data|blob|vbscript):/i.test(url)) {
+    try {
+      const norm = url.startsWith("http") ? url : `https://${url}`;
+      if (new URL(norm).hostname) {
+        const fav = chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(norm)}&size=32`);
+        return `<img src="${esc(fav)}" width="16" height="16" style="border-radius:4px;flex:0 0 auto" alt=""/>`;
+      }
+    } catch { /* fall through to the letter chip */ }
+  }
+  return letterChip(p?.name);
+}
 /** One editable product row: separate Name / URL / Description fields. */
 function productRow(p?: ProductItem): string {
   const ist = "width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:8px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none";
   return `<div class="prodrow" style="border:.5px solid var(--line-strong);border-radius:10px;padding:8px;margin-bottom:8px">
     <div style="display:flex;gap:6px;align-items:center">
-      ${letterChip(p?.name)}
+      ${productIconHTML(p)}
       <input class="pname" placeholder="Product name" value="${esc(p?.name ?? "")}" style="${ist}"/>
       <button data-action="del-product" title="Remove product" style="flex:0 0 auto;background:none;border:0;color:#8c7d68;font-size:14px;cursor:pointer;padding:0 4px">✕</button>
     </div>

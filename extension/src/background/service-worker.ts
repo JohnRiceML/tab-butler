@@ -176,6 +176,35 @@ async function applyRec(
   return { done, label };
 }
 
+/* ---------- favicons ---------- */
+
+/** Resolve product favicons from Chrome's built-in `_favicon` cache (no network,
+ *  no CORS) and inline as data URLs so the content script can render them under
+ *  x.com's CSP. Empty string = no favicon (content script shows a letter chip).
+ *  Cached for the SW's lifetime. Requires the "favicon" permission. */
+const faviconMem = new Map<string, string>();
+async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await Promise.all((hosts || []).map(async (host) => {
+    if (faviconMem.has(host)) { out[host] = faviconMem.get(host)!; return; }
+    let data = "";
+    try {
+      const url = chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(`https://${host}`)}&size=64`);
+      const res = await fetch(url);
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.startsWith("image/")) {
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        data = `data:${ct};base64,${btoa(bin)}`;
+      }
+    } catch { /* ignore — fall back to the letter chip */ }
+    faviconMem.set(host, data); // cache success or negative ("") so we don't refetch a bad host
+    out[host] = data;
+  }));
+  return out;
+}
+
 /* ---------- Twttr (RapidAPI) X-data client ---------- */
 
 /** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
@@ -227,6 +256,9 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
+        break;
+      case "GET_FAVICONS":
+        sendResponse({ favicons: await fetchFavicons(msg.hosts) });
         break;
       case "TWTTR_GET":
         sendResponse(await twttrFetch(msg.path, msg.query, msg.intent));

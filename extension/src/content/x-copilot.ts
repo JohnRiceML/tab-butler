@@ -37,10 +37,32 @@ let xNiche = "";              // the niche query "Find spots" searches X for
 let myFollowers = 0;          // the user's own follower count, for the reach sweet-spot
 let twttrUnconfigured = false; // once the SW reports no key/host, stop trying until settings change
 
-/** A colored letter chip standing in for a product on the dock. Deterministic
- *  per product name, needs no network and no host permission — so the dock never
- *  fetches third-party favicons (that path hit CORS on Google's gstatic redirect
- *  and required a full extension re-add to grant the host permission). */
+/** product host -> favicon data URL ("" = known no-favicon). Resolved by the SW
+ *  from Chrome's built-in `_favicon` cache (no network, no CORS) and inlined as a
+ *  data URL, since x.com's CSP blocks a direct external/extension favicon <img>. */
+const faviconCache = new Map<string, string>();
+function faviconHost(url?: string): string | undefined {
+  if (!url) return undefined;
+  try { return new URL(url.startsWith("http") ? url : `https://${url}`).hostname; } catch { return undefined; }
+}
+function faviconImg(url?: string): HTMLImageElement | undefined {
+  const host = faviconHost(url);
+  const data = host ? faviconCache.get(host) : undefined;
+  if (!data) return undefined; // undefined (not fetched) or "" (no favicon) -> caller uses the letter chip
+  const im = document.createElement("img"); im.className = "pfav"; im.src = data; im.alt = ""; im.onerror = () => im.remove();
+  return im;
+}
+async function loadFavicons(): Promise<void> {
+  const hosts = [...new Set(xProducts.map((p) => faviconHost(p.url)).filter((h): h is string => !!h && !faviconCache.has(h)))];
+  if (!hosts.length) return;
+  const resp = await send<{ favicons?: Record<string, string> }>({ type: "GET_FAVICONS", hosts });
+  let any = false;
+  for (const [h, d] of Object.entries(resp?.favicons || {})) { faviconCache.set(h, d); if (d) any = true; } // cache "" too (known miss)
+  if (any) renderDock(); // upgrade the letter chips to the real favicon once it resolves
+}
+
+/** A colored letter chip standing in for a product when Chrome has no cached
+ *  favicon for its site. Deterministic per name, needs no network or permission. */
 function letterAvatar(name: string): HTMLElement {
   const s = document.createElement("span"); s.className = "pini";
   s.textContent = (name.trim()[0] || "·").toUpperCase();
@@ -1101,7 +1123,7 @@ function renderList(list: HTMLElement) {
     const fc = knownFollowers(o); if (fc) bits.push(`${fmtCount(fc)} followers`);
     im.append(document.createTextNode(bits.join(" · ")));
     if (o.category === "promote") for (const p of o.products || []) {
-      const av = letterAvatar(p.name); av.title = p.name; im.append(av);
+      const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; im.append(ic);
     }
 
     // Row 4 — actions: Draft (primary text) + compact icon buttons.
@@ -1218,9 +1240,10 @@ async function boot() {
       daily: l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {},
     };
   }
+  void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes[CONFIG.X_PRODUCTS_KEY]) { xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || []; renderDock(); }
+    if (changes[CONFIG.X_PRODUCTS_KEY]) { xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || []; void loadFavicons(); renderDock(); }
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
