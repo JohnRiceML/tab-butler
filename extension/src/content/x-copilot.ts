@@ -527,8 +527,15 @@ let draftOppAuthor = "";
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
  *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
-interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; }
-let replyLog: ReplyLog = { times: [], authors: {}, drafts: [] };
+interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; }
+let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {} };
+
+/** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
+function dayKey(ts: number): string {
+  const d = new Date(ts); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function repliesToday(): number { return replyLog.daily[dayKey(Date.now())] || 0; }
 const HOUR_MS = 3_600_000;
 const AUTHOR_REPEAT_TTL = 3 * 24 * HOUR_MS; // "replied recently" window for the spread nudge
 const DRAFT_TTL = 24 * HOUR_MS;             // how long a reply counts toward the duplicate guard
@@ -721,6 +728,10 @@ function recordReplyAndNudge(text: string): string | null {
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
+  const dk = dayKey(now);
+  replyLog.daily[dk] = (replyLog.daily[dk] || 0) + 1; // per-day "replies sent via the system" tally
+  const cut = dayKey(now - 35 * 24 * HOUR_MS);        // keep ~35 days of history
+  for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
 }
@@ -880,6 +891,7 @@ const DOCK_CSS = `
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.5); }
 .dh { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 8px; }
 .dt { font-weight:600; } .dt b { color:${ACCENT}; }
+.dsub { font-weight:400; font-size:10.5px; color:#8c7d68; margin-top:1px; }
 .da { display:flex; align-items:center; gap:8px; }
 .re { background:none; border:.5px solid rgba(214,154,92,.28); color:${ACCENT}; border-radius:999px;
       font:600 11px -apple-system,system-ui,sans-serif; padding:3px 9px; cursor:pointer; line-height:1.4; }
@@ -1086,11 +1098,11 @@ function renderList(list: HTMLElement) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const it = document.createElement("div"); it.className = "it";
 
-    // Row 1 — who + verdict: avatar, name, dim handle, then a right-aligned color-coded score (+ in-reach pip).
+    // Row 1 — who + verdict: avatar, name, then a right-aligned color-coded score (+ in-reach pip).
+    // Handle moves to the name's hover title to keep this row to one clean line.
     const ia = document.createElement("div"); ia.className = "ia";
     if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
-    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = o.name || `@${o.author}`; ia.append(nm);
-    if (o.name) { const hd = document.createElement("span"); hd.className = "hndl"; hd.textContent = `@${o.author}`; ia.append(hd); }
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = o.name || `@${o.author}`; nm.title = `@${o.author}`; ia.append(nm);
     const right = document.createElement("span"); right.className = "scwrap";
     if (inReachSweetSpot(o)) { const sp = document.createElement("span"); sp.className = "spot"; sp.textContent = "◎"; sp.title = "In reach: this account is 5-25x your size, so a reply reaches a bigger, still-attainable audience."; right.append(sp); }
     const es = effectiveScore(o); const v = scoreVerdict(es);
@@ -1100,12 +1112,13 @@ function renderList(list: HTMLElement) {
     // Row 2 — the post text.
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
 
-    // Row 3 — one dim "why + stats" line: category tag, reason, age, followers, product icon.
+    // Row 3 — one dim stats line: category tag · age · followers · product icon.
+    // The reason (the model's "why") moves to this line's hover title — it was the longest, most wrappy bit.
     const im = document.createElement("div"); im.className = "im";
+    if (o.reason) im.title = o.reason;
     if (o.source === "search") { const s = document.createElement("span"); s.title = "Found via niche search (off your current page)"; s.textContent = "🔎 "; im.append(s); }
     if (o.category) { const ct = document.createElement("span"); ct.className = "ctag"; ct.textContent = catLabel(o.category); im.append(ct); }
     const bits: string[] = [];
-    if (o.reason) bits.push(o.reason);
     const age = fmtAge(o.postedAt); if (age) bits.push(age);
     const fc = knownFollowers(o); if (fc) bits.push(`${fmtCount(fc)} followers`);
     im.append(document.createTextNode(bits.join(" · ")));
@@ -1170,8 +1183,14 @@ function renderDock() {
   const d = document.createElement("div"); d.className = "d";
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
+  const l1 = document.createElement("div");
   const tb = document.createElement("b"); tb.textContent = String(n);
-  t.append(document.createTextNode("Reply opportunities "), tb);
+  l1.append(document.createTextNode("Reply opportunities "), tb);
+  const today = repliesToday();
+  const sub = document.createElement("div"); sub.className = "dsub";
+  sub.textContent = today ? `${today} repl${today === 1 ? "y" : "ies"} sent today` : "no replies sent yet today";
+  sub.title = "Replies you've inserted through Tab Butler today (resets at local midnight).";
+  t.append(l1, sub);
   const acts = document.createElement("div"); acts.className = "da";
   const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
   re.title = "Rescan the page — re-check every visible post for new reply spots";
@@ -1219,6 +1238,7 @@ async function boot() {
       times: Array.isArray(l.times) ? l.times : [],
       authors: l.authors && typeof l.authors === "object" ? (l.authors as Record<string, number>) : {},
       drafts: Array.isArray(l.drafts) ? l.drafts : [],
+      daily: l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {},
     };
   }
   void loadFavicons();
