@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus } from "../lib/reply-hygiene";
-import { humanDelayMs, jitterGap } from "../lib/human-pacing";
+import { humanDelayMs, typeChunks, jitterGap } from "../lib/human-pacing";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -682,19 +682,19 @@ function placeCaretEnd(ce: HTMLElement) {
   } catch { /* ignore */ }
 }
 
-/** Put text into X's DraftJS editor. Tries execCommand, then a simulated paste,
- *  then beforeinput — verifying after each, since DraftJS silently drops inputs
- *  that don't align with its internal selection. */
+/** Put text into X's DraftJS editor. First types it in word-by-word (verified —
+ *  DraftJS silently drops repeated inserts, so each word is confirmed and the moment
+ *  one drops we bail), then falls back to a reliable one-shot insert (exec → paste →
+ *  beforeinput). Success is LENGTH-aware (`complete`, not just "non-empty"), so a
+ *  partial fill can never be mistaken for success and the box is never left half-done. */
 async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
   const ce = editableOf(node);
-  const filled = () => (ce.textContent || "").replace(/​/g, "").trim().length > 0;
+  const norm = (s: string) => s.replace(/​/g, "").replace(/\s+/g, " ").trim();
+  const want = norm(text);
+  const got = () => norm(ce.textContent || "");
+  const filled = () => got().length > 0;
+  const complete = () => want.length > 0 && got().length >= want.length * 0.9; // FULL reply landed; never "complete" on empty text
 
-  // Poll for success so a slow-but-successful method is detected BEFORE the next
-  // one runs — otherwise two methods both land and the text doubles in the box.
-  const settled = async (): Promise<boolean> => {
-    for (let i = 0; i < 12; i++) { if (filled()) return true; await sleep(40); }
-    return filled();
-  };
   const clear = () => {
     try {
       ce.focus();
@@ -702,6 +702,11 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
       const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r);
       document.execCommand("delete", false);
     } catch { /* ignore */ }
+  };
+  // Empty the box, verified — DraftJS sometimes ignores a single delete.
+  const ensureEmpty = async (): Promise<boolean> => {
+    for (let i = 0; i < 4; i++) { if (!filled()) return true; clear(); await sleep(30); }
+    return !filled();
   };
   const exec = () => { placeCaretEnd(ce); document.execCommand("insertText", false, text); };
   const paste = () => {
@@ -716,21 +721,49 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
       ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
     } catch { /* ignore */ }
   };
-  // Single reliable insert. DraftJS silently drops REPEATED programmatic inserts,
-  // so the reply goes in ONE shot via the proven exec/paste/beforeInput chain —
-  // typing it word-by-word left the box half-filled. A brief human pause before it
-  // is the only safe in-text cadence; the real human-pacing is the spaced-out
-  // like/follow actions (see likePost/followAuthor), not the keystrokes.
-  await sleep(80 + humanDelayMs("react"));
-  for (const method of [exec, paste, beforeInput]) {
+
+  // Reliable one-shot insert into an empty box, verified by `complete` (length-aware),
+  // so a partial never counts as success. The proven path.
+  const insertWhole = async (): Promise<boolean> => {
+    for (const method of [exec, paste, beforeInput]) {
+      ce.focus();
+      await ensureEmpty();
+      await sleep(20);
+      placeCaretEnd(ce);
+      method();
+      for (let i = 0; i < 14; i++) { if (complete()) return true; await sleep(40); }
+    }
+    return complete();
+  };
+
+  // Best-effort typed cadence: build the reply up word by word, confirming each word
+  // actually landed. Returns false the instant a word truly drops, so the caller wipes
+  // the partial and uses insertWhole — it can never leave the box half-filled.
+  const typeCadence = async (): Promise<boolean> => {
+    if (!want) return false;
     ce.focus();
-    if (filled()) clear();      // never stack onto a prior (slow) insert
-    await sleep(20);
-    placeCaretEnd(ce);
-    method();
-    if (await settled()) return true;
-  }
-  return filled();
+    if (!(await ensureEmpty())) return false; // need a clean start
+    await sleep(humanDelayMs("react"));
+    for (const chunk of typeChunks(text)) {
+      if (!ce.isConnected) return false;
+      const before = got().length;
+      let landed = false;
+      for (let attempt = 0; attempt < 2 && !landed; attempt++) {
+        ce.focus(); placeCaretEnd(ce);
+        document.execCommand("insertText", false, chunk);
+        for (let i = 0; i < 5 && !landed; i++) { if (got().length > before) landed = true; else await sleep(20); }
+      }
+      if (!landed) return false; // a word dropped — bail to the reliable path
+      await sleep(humanDelayMs("type"));
+    }
+    return complete();
+  };
+
+  await sleep(80);
+  ce.focus();
+  if (await typeCadence()) return true; // typed in, fully verified
+  await ensureEmpty();                  // wipe any partial the cadence left behind
+  return await insertWhole();           // reliable one-shot
 }
 
 /** Best-effort: open the post's reply box and type the draft into it. Never submits. */
