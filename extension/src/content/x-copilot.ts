@@ -1015,7 +1015,9 @@ const DOCK_CSS = `
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { overflow:auto; padding:0; }
-.it { display:flex; gap:12px; padding:13px 16px; border-top:.5px solid rgba(214,154,92,.10); }
+.it { display:flex; flex-direction:column; padding:13px 16px; border-top:.5px solid rgba(214,154,92,.10); }
+.top { display:flex; gap:12px; }
+.botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:11px; padding-top:10px; border-top:.5px solid rgba(214,154,92,.08); }
 .av { width:40px; height:40px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:#221c15; }
 .av.init { display:inline-flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:#fff; }
 .bodywrap { flex:1; min-width:0; display:flex; gap:12px; }
@@ -1036,14 +1038,14 @@ const DOCK_CSS = `
         flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; vertical-align:-3px; }
 .rcol { flex:0 0 116px; display:flex; flex-direction:column; }
 .rf { font-size:11px; color:#8c7d68; } .inf { cursor:default; }
-.pct { font-size:25px; font-weight:600; line-height:1.05; margin-top:2px; font-variant-numeric:tabular-nums; }
+.pct { font-size:32px; font-weight:600; line-height:1.02; margin-top:3px; font-variant-numeric:tabular-nums; }
 .vd { font-size:11.5px; font-weight:500; margin-top:1px; }
-.acts { margin-top:11px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+.acts { margin-top:12px; }
 .draftb { width:100%; background:${ACCENT}; color:${INK}; border:0; border-radius:9px;
-          font:600 12.5px -apple-system,system-ui,sans-serif; padding:9px 8px; cursor:pointer; margin-bottom:5px; }
+          font:600 12.5px -apple-system,system-ui,sans-serif; padding:9px 8px; cursor:pointer; }
 .draftb:hover { filter:brightness(1.06); }
-.lk { background:none; border:0; color:#8c7d68; font:500 12px -apple-system,system-ui,sans-serif; padding:5px 2px; cursor:pointer; text-align:left; }
-.lk:hover { color:#cbb89c; } .lk:disabled { opacity:.6; cursor:default; }
+.lk { background:none; border:0; color:#8c7d68; font:500 12px -apple-system,system-ui,sans-serif; padding:6px 9px; border-radius:7px; cursor:pointer; white-space:nowrap; }
+.lk:hover { background:#221c15; color:#cbb89c; } .lk:disabled { opacity:.6; cursor:default; } .lk.skip { margin-left:auto; }
 .foot { padding:13px 14px; text-align:center; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
 .foot1 { font-size:12.5px; color:#b6a892; } .foot2 { font-size:11.5px; color:#8c7d68; margin-top:2px; }
 .empty { color:#8c7d68; font-size:12.5px; padding:24px 16px; text-align:center; }
@@ -1257,13 +1259,14 @@ function renderList(list: HTMLElement) {
   for (const o of items) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const it = document.createElement("div"); it.className = "it";
+    const top = document.createElement("div"); top.className = "top";
 
     // Avatar (image, or a colored initial).
     if (o.avatar) {
       const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer";
       av.onerror = () => av.replaceWith(avInitial(o));
-      it.append(av);
-    } else { it.append(avInitial(o)); }
+      top.append(av);
+    } else { top.append(avInitial(o)); }
 
     const body = document.createElement("div"); body.className = "bodywrap";
     const main = document.createElement("div"); main.className = "main";
@@ -1313,6 +1316,14 @@ function renderList(list: HTMLElement) {
     const acts = document.createElement("div"); acts.className = "acts";
     const draft = document.createElement("button"); draft.className = "draftb"; draft.textContent = "✎ Draft reply";
     draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.source === "search" ? undefined : o.text), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
+    acts.append(draft);
+    rcol.append(acts);
+    body.append(rcol);
+    top.append(body);
+    it.append(top);
+
+    // Bottom action row — Follow / Open on X / Skip / Mark commented.
+    const bot = document.createElement("div"); bot.className = "botacts";
     const follow = document.createElement("button"); follow.className = "lk";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "✓ Following" : "+ Follow";
@@ -1327,13 +1338,14 @@ function renderList(list: HTMLElement) {
     };
     const open = document.createElement("button"); open.className = "lk"; open.textContent = "↗ Open on X"; open.title = "Open the post on X";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
-    const skip = document.createElement("button"); skip.className = "lk"; skip.textContent = "✕ Skip"; skip.title = "Skip — remove from the list";
+    const commented = document.createElement("button"); commented.className = "lk"; commented.textContent = "✓ Commented";
+    commented.title = "Mark as commented — counts it toward today's replies and removes it from the list.";
+    commented.onclick = () => { opps.delete(o.id); recordSentReply("", o); toast("Marked as commented."); };
+    const skip = document.createElement("button"); skip.className = "lk skip"; skip.textContent = "✕ Skip"; skip.title = "Skip — remove from the list (doesn't count)";
     skip.onclick = () => { opps.delete(o.id); renderDock(); };
-    acts.append(draft, follow, open, skip);
-    rcol.append(acts);
-    body.append(rcol);
+    bot.append(follow, open, commented, skip);
+    it.append(bot);
 
-    it.append(body);
     list.appendChild(it);
   }
 }
