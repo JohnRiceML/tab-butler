@@ -42,9 +42,7 @@ Return ONLY JSON, no prose:
 
 export const X_SCORE_SYSTEM = `You score X (Twitter) posts for how worth-it it is for THIS user to REPLY, to grow their presence. You get the user's niche/goals and a numbered list of posts (author, text). Score each 0–1 with a reason of AT MOST 6 words.
 
-Calibrate hard — be selective: across a normal timeline only about 1 in 8–10 posts should score >= 0.6. Reserve 0.8+ for posts where the user has a genuinely differentiated take AND there's clear engagement upside. Score <= 0.3 for: pure broadcast/announcements, ads/promos, ragebait, vague platitudes, posts already saturated with replies, or anything a reply adds nothing to. HIGH = on the user's niche, answerable with specific value/insight, and recent.
-
-Each post may include bracketed metadata after the handle, e.g. [3h old · 1.2k likes · 45 replies]. Use it: favor RECENT posts (a reply lands while the thread is still live and seen) and posts with traction but NOT yet buried — a high reply-to-like ratio or hundreds of existing replies means the user's reply gets lost, so lower those. An older post (a day+) is a weaker reply target even if on-topic.
+Calibrate hard — be selective: across a normal timeline only about 1 in 8–10 posts should score >= 0.6. Reserve 0.8+ for posts where the user has a genuinely differentiated take AND there's clear engagement upside. Score <= 0.3 for: pure broadcast/announcements, ads/promos, ragebait, vague platitudes, or anything a reply adds nothing to. HIGH = on the user's niche and answerable with specific value or a differentiated take. Do NOT factor in recency, likes, or reply counts; the app weighs timing and engagement separately, so judge the post's content and fit only.
 
 Open-call posts that invite sharing (a roll call, build in public, "what are you building", "drop your project", "who's hiring", "show your work") are HIGH value to reply to when the user has something relevant to share: the reply is invited, not spam, and these threads drive real engagement. Score them 0.7+ when they fit the user's niche.
 

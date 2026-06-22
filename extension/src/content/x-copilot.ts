@@ -21,6 +21,7 @@ let scoreCalls = 0;
 let enabled = true;
 let selfHandle = "";
 let noKeyNotified = false;
+let scanCapNotified = false; // surface the per-session scan cap once, instead of silently stopping
 
 /** The user's products (relevance-tagged promotion) + legacy single-product fallback.
  *  Read from storage on boot and kept fresh via storage.onChanged. */
@@ -221,7 +222,11 @@ function requestScan() {
 }
 
 function scan() {
-  if (!enabled || scoreCalls >= MAX_SCORE_CALLS) return;
+  if (!enabled) return;
+  if (scoreCalls >= MAX_SCORE_CALLS) {
+    if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
+    return;
+  }
   if (!selfHandle) selfHandle = getSelf();
   document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]').forEach((el) => {
     const info = statusInfo(el);
@@ -252,7 +257,7 @@ async function flush() {
   if (!batch.length) return;
   scoreCalls++;
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined }));
-  const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text, meta: metaLine(snap[i]) }));
+  const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
   batch.forEach((b) => inFlight.add(b.id));
   const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; product?: number }[]; error?: string }>({
     type: "SCORE_POSTS",
@@ -296,6 +301,7 @@ async function flush() {
 function rescan() {
   if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to enable scanning."); return; }
   scoreCalls = 0;        // user explicitly asked for more — reset the guard
+  scanCapNotified = false;
   seen.clear();          // re-evaluate the visible feed from scratch
   queue.length = 0;      // drop anything half-queued
   for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
@@ -400,6 +406,10 @@ function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = nul
 
 let draftGetEl: (() => HTMLElement | null) | null = null;
 let draftOppId: string | null = null;
+let draftOppAuthor = "";
+/** Reply pacing: spread across accounts + keep volume sane (both growth + anti-spam). */
+const repliedAuthors = new Set<string>();
+let replyTimes: number[] = [];
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
@@ -420,6 +430,10 @@ function likePost(el: HTMLElement | null): void {
 
 /** Authors we've followed (or confirmed already-followed) this session. */
 const followed = new Set<string>();
+/** Follow pacing: rapid/bulk follows are a classic spam flag, so cap velocity. */
+const FOLLOW_MIN_GAP_MS = 20_000; // no rapid-fire follows
+const FOLLOW_HOUR_CAP = 15;       // ceiling per rolling hour
+let followTimes: number[] = [];
 
 function closeMenu(): void {
   document.querySelector<HTMLElement>('[data-testid="mask"]')?.click();
@@ -428,9 +442,13 @@ function closeMenu(): void {
 
 /** Follow the OUTER post's author via its "•••" menu (the only reliable in-DOM
  *  path on a timeline post). The menu shows "Follow @x" ONLY when not already
- *  following — so this can only follow, never unfollow. Best-effort. */
-async function followAuthor(el: HTMLElement | null): Promise<"followed" | "already" | "failed"> {
+ *  following — so this can only follow, never unfollow. User-initiated + paced
+ *  (min-gap + hourly cap) so it never produces a rapid-follow velocity flag. */
+async function followAuthor(el: HTMLElement | null): Promise<"followed" | "already" | "failed" | "paced"> {
   if (!el?.isConnected) return "failed";
+  const now = Date.now();
+  followTimes = followTimes.filter((t) => now - t < 3_600_000);
+  if ((followTimes.length && now - followTimes[followTimes.length - 1] < FOLLOW_MIN_GAP_MS) || followTimes.length >= FOLLOW_HOUR_CAP) return "paced";
   const caret = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="caret"]')).find((c) => !c.closest('[role="link"]'));
   if (!caret) return "failed";
   caret.click();
@@ -438,20 +456,22 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
   if (!menu) return "failed";
   const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'));
   const follow = items.find((it) => /^follow\b/i.test(it.textContent?.trim() || ""));
-  if (follow) { follow.click(); return "followed"; }
+  if (follow) { follow.click(); followTimes.push(Date.now()); return "followed"; }
   const already = items.some((it) => /^unfollow\b/i.test(it.textContent?.trim() || ""));
   closeMenu();
   return already ? "already" : "failed";
 }
 
 /** Locate a post by status id, falling back to matching its text (for the dock,
- *  where the original element may have been recycled by virtualization). */
-function findPost(id: string, text?: string): HTMLElement | null {
+ *  where the original element may have been recycled by virtualization). The text
+ *  fallback also requires the AUTHOR to match, so we never act on the wrong post. */
+function findPost(id: string, text?: string, author?: string): HTMLElement | null {
   let byText: HTMLElement | null = null;
   const needle = text?.slice(0, 60);
   for (const a of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) {
-    if (statusInfo(a)?.id === id) return a; // id match wins
-    if (needle && !byText && outerText(a).startsWith(needle)) byText = a;
+    const info = statusInfo(a);
+    if (info?.id === id) return a; // id match wins
+    if (needle && !byText && outerText(a).startsWith(needle) && (!author || info?.author?.toLowerCase() === author.toLowerCase())) byText = a;
   }
   return byText;
 }
@@ -556,12 +576,35 @@ async function insertReply(text: string, postEl: HTMLElement | null): Promise<"o
 }
 
 let inserting = false;
+/** Gentle reply-pacing: spread across accounts and keep hourly volume sane —
+ *  both a growth tactic and an anti-spam guard. Returns a one-off nudge or null. */
+function pacingNudge(): string | null {
+  const now = Date.now();
+  replyTimes = replyTimes.filter((t) => now - t < 3_600_000);
+  replyTimes.push(now);
+  const a = draftOppAuthor.toLowerCase();
+  const dup = !!a && repliedAuthors.has(a);
+  if (a) repliedAuthors.add(a);
+  if (dup) return `You already replied to @${draftOppAuthor} recently. Spreading across accounts grows faster.`;
+  if (replyTimes.length === 21) return "20+ replies this hour. X rewards quality over volume, so ease off.";
+  return null;
+}
+
 async function doInsert(text: string) {
   if (inserting) return; // ignore re-clicks while an insert is in flight (avoids doubling)
   inserting = true;
   try {
-    const r = await insertReply(text, draftGetEl?.() ?? null);
-    if (r === "ok") { if (draftOppId) { opps.delete(draftOppId); renderDock(); } toast("Inserted into the reply box — review, then post it."); dismissPanel(); }
+    const el = draftGetEl?.() ?? null;
+    const r = await insertReply(text, el);
+    if (r === "ok") {
+      // Like the post only now — once you've actually committed to replying, not on
+      // panel-open. Genuine, user-paced engagement, once per post.
+      if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(el); }
+      if (draftOppId) { opps.delete(draftOppId); renderDock(); }
+      const warn = pacingNudge();
+      toast(warn || "Inserted into the reply box. Review it, then post.");
+      dismissPanel();
+    }
     else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
     else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
   } finally {
@@ -573,9 +616,8 @@ async function draftFor(req: DraftReq) {
   const { author, text, context, getEl, oppId, angle, avatar, product, name } = req;
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
+  draftOppAuthor = author;
   lastDraft = req;
-  // Like the post you're engaging with — once per post, on the first draft.
-  if (oppId && !liked.has(oppId)) { liked.add(oppId); likePost(getEl?.() ?? null); }
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, angle, avatar, name });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
@@ -712,18 +754,31 @@ function ensureDock(): ShadowRoot {
   return dockRoot;
 }
 
-/** Blend the model's reply-worthiness with LIVE recency + engagement so fresh,
- *  well-engaged-but-not-buried posts rank and read higher. Recomputed on the fly
- *  (postedAt is absolute) so the score decays as a spot ages. ~±0.12 swing. */
+/** Reply-worthiness RIGHT NOW = content/fit (the model score) × how live the
+ *  window is. Timing dominates by design: on X, only the first ~5-10 replies in
+ *  the first ~15 min get seen, so a fresh fast-rising post must outrank a stale
+ *  great one. Multiplicative, recomputed live (postedAt is absolute), so a spot
+ *  visibly decays as it ages. Reach (audience) lifts; reply-pileup buries. */
+function freshnessFactor(postedAt?: number): number {
+  if (!postedAt) return 0.5; // unknown age — neutral
+  const m = (Date.now() - postedAt) / 60_000; // minutes old
+  if (m < 5) return 1;
+  if (m < 15) return 0.92;
+  if (m < 30) return 0.78;
+  if (m < 60) return 0.6;
+  if (m < 180) return 0.42;
+  if (m < 720) return 0.28; // <12h
+  if (m < 1440) return 0.16; // <24h
+  return 0.08;
+}
 function effectiveScore(o: Opp): number {
-  let s = o.score;
-  if (o.postedAt) {
-    const h = (Date.now() - o.postedAt) / 3_600_000;
-    s += h < 1 ? 0.06 : h < 3 ? 0.03 : h < 12 ? 0 : h < 24 ? -0.03 : h < 72 ? -0.07 : -0.12;
-  }
-  if (o.likes) s += Math.min(0.04, Math.log10(o.likes + 1) / 100); // audience size, capped
-  if (o.replies && o.replies > 100) s -= o.replies > 300 ? 0.06 : 0.03; // saturated → a reply gets buried
-  return Math.max(0, Math.min(1, s));
+  const reach = o.likes ? Math.min(1.2, 0.6 + Math.log10(o.likes + 1) * 0.12) : 0.7; // 0:0.7 100:0.84 1k:0.96 10k:1.08 100k+:1.2
+  let buried = 1;
+  if (o.likes && o.replies) {
+    const ratio = o.replies / (o.likes + 1); // many replies per like = pile-on you get lost in
+    buried = ratio > 1.5 ? 0.7 : ratio > 0.7 ? 0.85 : 1;
+  } else if (o.replies && o.replies > 300) buried = 0.8;
+  return Math.max(0, Math.min(1, o.score * freshnessFactor(o.postedAt) * reach * buried));
 }
 
 function topOpps(): Opp[] {
@@ -762,16 +817,17 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text), oppId: o.id, angle: o.category, avatar: o.avatar, product: productContext(o.product), name: o.name });
+    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text, o.author), oppId: o.id, angle: o.category, avatar: o.avatar, product: productContext(o.product), name: o.name });
     const follow = document.createElement("button"); follow.className = "bt";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "Following ✓" : "Follow";
     follow.disabled = isFollowed;
     follow.onclick = async () => {
       follow.disabled = true; follow.textContent = "Following…";
-      const r = await followAuthor(findPost(o.id, o.text));
+      const r = await followAuthor(findPost(o.id, o.text, o.author));
       if (r === "followed") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Followed @${o.author}.`); }
       else if (r === "already") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Already following @${o.author}.`); }
+      else if (r === "paced") { follow.disabled = false; follow.textContent = "Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
       else { follow.disabled = false; follow.textContent = "Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
     };
     const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";

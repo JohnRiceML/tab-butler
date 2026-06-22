@@ -153,14 +153,22 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
 
 /** Enforce the user's hard rule for replies: no em/en dashes, no hyphenated
  *  compound words. A deterministic safety net on top of the prompt instruction.
- *  Digit hyphens (ranges, negatives) and bullet hyphens are left alone. */
+ *  Digit hyphens (ranges, negatives) and bullet hyphens are left alone — and
+ *  URLs / domains / @handles / emails are SHIELDED so we never break a link
+ *  (e.g. my-startup.com stays intact while "long-term" -> "long term"). */
 function stripDashes(s: string): string {
-  return s
+  // Mask URLs/emails/domains/handles with NUL-delimited sentinels (NUL never
+  // occurs in text, so no collision with bare numbers in the reply).
+  const shielded: string[] = [];
+  const masked = s.replace(/(https?:\/\/\S+|[\w.+-]+@[\w-]+\.[a-z]{2,}|\b[\w-]+\.[a-z]{2,}\S*|@[\w-]+)/gi,
+    (m) => `\u0000${shielded.push(m) - 1}\u0000`);
+  const out = masked
     .replace(/\s*[—–]\s*/g, ", ")          // em/en dash -> comma
     .replace(/(\p{L})-+(\p{L})/gu, "$1 $2") // hyphenated compound -> two words
     .replace(/\s+,/g, ",")                  // tidy any " ," produced
     .replace(/\s{2,}/g, " ")                // collapse doubled spaces
     .trim();
+  return out.replace(/\u0000(\d+)\u0000/g, (_, i) => shielded[Number(i)]);
 }
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
