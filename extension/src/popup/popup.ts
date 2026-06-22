@@ -352,6 +352,8 @@ function keyRow(d: ViewData): string {
 }
 
 let expanded = false;
+type PanelTab = "tabs" | "x";
+let activeTab: PanelTab = "tabs";
 
 function render(d: ViewData): string {
   const all = d.groups;
@@ -372,6 +374,12 @@ function render(d: ViewData): string {
     </div>
   </header>
 
+  <div class="vtabs">
+    <button class="vtab${activeTab === "tabs" ? " on" : ""}" data-action="switch-tab" data-tab="tabs">Tabs</button>
+    <button class="vtab${activeTab === "x" ? " on" : ""}" data-action="switch-tab" data-tab="x">X copilot</button>
+  </div>
+
+  <div id="view-tabs"${activeTab === "tabs" ? "" : " hidden"}>
   <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search tabs, archive &amp; history…" autocomplete="off"/><span class="kbd">↵ search</span></div>
 
   <div class="toolbar" style="margin-top:10px">
@@ -395,6 +403,14 @@ function render(d: ViewData): string {
     ${d.smart ? keyRow(d) : ""}
   </div>
 
+  <div class="footer-actions">
+    <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
+    <button class="btn" data-action="undo">${ICON.undo} Undo</button>
+  </div>
+  <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send page titles + URLs to Claude — search also includes recent history.</div></div>
+  </div>
+
+  <div id="view-x"${activeTab === "x" ? "" : " hidden"}>
   <div class="sec"><h2>X reply copilot</h2><label class="switch"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="list">
     ${replyShowcaseHTML(d.replyStats)}
@@ -443,12 +459,7 @@ function render(d: ViewData): string {
     </div>
   </div>
   <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, the text of timeline posts is sent to Claude to score &amp; draft. Draft-only — it never posts for you.</div></div>
-
-  <div class="footer-actions">
-    <button class="btn" data-action="archived">${ICON.archive} Archived (${d.archivedCount})</button>
-    <button class="btn" data-action="undo">${ICON.undo} Undo</button>
-  </div>
-  <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send page titles + URLs to Claude — search also includes recent history.</div></div>`;
+  </div>`;
 }
 
 /* ---------- actions ---------- */
@@ -656,6 +667,13 @@ async function dispatch(el: HTMLElement) {
       }
       case "expand": { expanded = true; await refresh(); break; }
       case "collapse": { expanded = false; await refresh(); break; }
+      case "switch-tab": {
+        activeTab = el.dataset.tab === "x" ? "x" : "tabs";
+        document.getElementById("view-tabs")?.toggleAttribute("hidden", activeTab !== "tabs");
+        document.getElementById("view-x")?.toggleAttribute("hidden", activeTab !== "x");
+        document.querySelectorAll<HTMLElement>(".vtab").forEach((b) => b.classList.toggle("on", b.dataset.tab === activeTab));
+        break;
+      }
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";

@@ -39,6 +39,13 @@
       .wrap::-webkit-scrollbar { width: 8px; }
       .wrap::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
 
+      .vtabs { display: flex; gap: 6px; margin-top: 14px; }
+      .vtab { flex: 1; background: none; border: 0.5px solid var(--line-strong); color: var(--t2);
+              font: 600 13px inherit; padding: 9px; border-radius: 10px; cursor: pointer; }
+      .vtab:hover { color: var(--t1); }
+      .vtab.on { background: rgba(214,154,92,.14); border-color: rgba(214,154,92,.42); color: #e0a45c; }
+      [hidden] { display: none !important; }
+
       .row-flex { display: flex; align-items: center; }
       .between { justify-content: space-between; }
       .gap8 { gap: 8px; } .gap10 { gap: 10px; } .gap12 { gap: 12px; }
