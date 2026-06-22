@@ -44,6 +44,7 @@ function faviconImg(url?: string): HTMLImageElement | undefined {
   const im = document.createElement("img"); im.className = "pfav"; im.src = data; im.alt = ""; im.onerror = () => im.remove();
   return im;
 }
+let faviconHintShown = false;
 async function loadFavicons(): Promise<void> {
   const hosts = [...new Set(xProducts.map((p) => faviconHost(p.url)).filter((h): h is string => !!h && !faviconCache.has(h)))];
   if (!hosts.length) return;
@@ -51,6 +52,11 @@ async function loadFavicons(): Promise<void> {
   let any = false;
   for (const [h, d] of Object.entries(resp?.favicons || {})) { faviconCache.set(h, d); if (d) any = true; } // cache "" too (known miss)
   if (any) renderDock();
+  else if (!faviconHintShown) {
+    // We asked for icons and got none — almost always the missing host permission.
+    faviconHintShown = true;
+    toast("Couldn't load product icons. Fully remove + re-add the Tab Butler extension to grant the icon permission (the reload arrow won't).");
+  }
 }
 
 /** The angle a draft should open with: the user's default if set, else the scorer's pick. */
