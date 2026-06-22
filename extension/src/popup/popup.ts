@@ -574,7 +574,7 @@ async function dispatch(el: HTMLElement) {
           const user = parseUser(ures.data);
           if (!user?.id) {
             let raw = ""; try { raw = JSON.stringify(ures.data).slice(0, 200); } catch { /* ignore */ }
-            console.warn("[tab-butler] /user found no user for", handle, ures.data);
+            console.warn("[tab-butler] /user found no user for", handle, raw || ures.data); // log the JSON, not [object Object]
             toast(`Couldn't find @${handle} via the API. Confirm the exact handle (copy it from your profile URL).${raw ? ` API said: ${raw}` : ""}`);
             return;
           }
