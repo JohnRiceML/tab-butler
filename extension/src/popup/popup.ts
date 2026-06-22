@@ -13,32 +13,38 @@ function esc(s: string): string {
   );
 }
 
-/** A deterministic colored letter chip for a product — matches the on-page dock's
- *  letter-avatars. No third-party favicon fetch (that path hit CORS + needed a host
- *  permission re-add), so the popup has zero external image dependency. */
-function letterChip(name?: string): string {
-  const n = (name || "").trim();
+/** Product icon: renders a colored letter chip immediately, then upgrades to the
+ *  real favicon (Chrome's built-in `_favicon` cache — no network, no CORS) IF it
+ *  loads. Never goes blank: if `_favicon` is unavailable (the "favicon" permission
+ *  isn't granted yet, or the site isn't in Chrome's cache) the letter chip stays.
+ *  Call hydrateProductIcons() after the rows are in the DOM. */
+function productIconHTML(p?: ProductItem): string {
+  const n = (p?.name || "").trim();
   const ch = (n[0] || "✦").toUpperCase();
   let h = 0; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
   const bg = n ? `hsl(${h % 360} 55% 42%)` : "#5a4a36";
-  return `<span style="flex:0 0 auto;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;background:${bg}">${esc(ch)}</span>`;
-}
-
-/** The product's real favicon via Chrome's built-in `_favicon` service (cache-backed,
- *  no network, no CORS, no host permission). Falls back to the letter chip when there's
- *  no usable URL. Requires the "favicon" permission. */
-function productIconHTML(p?: ProductItem): string {
+  const style = `flex:0 0 auto;width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;overflow:hidden;background:${bg}`;
+  let favAttr = "";
   const url = (p?.url || "").trim();
   if (url && !/^(javascript|data|blob|vbscript):/i.test(url)) {
     try {
       const norm = url.startsWith("http") ? url : `https://${url}`;
-      if (new URL(norm).hostname) {
-        const fav = chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(norm)}&size=32`);
-        return `<img src="${esc(fav)}" width="16" height="16" style="border-radius:4px;flex:0 0 auto" alt=""/>`;
-      }
-    } catch { /* fall through to the letter chip */ }
+      if (new URL(norm).hostname) favAttr = ` data-fav="${esc(chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(norm)}&size=32`))}"`;
+    } catch { /* no usable URL — letter chip only */ }
   }
-  return letterChip(p?.name);
+  return `<span class="picon"${favAttr} style="${style}">${esc(ch)}</span>`;
+}
+
+/** Upgrade letter chips to real favicons wherever Chrome has one cached. Idempotent
+ *  (each chip is wired at most once); on load failure the letter chip is left alone. */
+function hydrateProductIcons(): void {
+  document.querySelectorAll<HTMLElement>("span.picon[data-fav]").forEach((el) => {
+    const fav = el.getAttribute("data-fav"); el.removeAttribute("data-fav");
+    if (!fav) return;
+    const img = new Image();
+    img.onload = () => { el.textContent = ""; el.style.background = "transparent"; img.style.cssText = "width:16px;height:16px;object-fit:contain;display:block"; el.appendChild(img); };
+    img.src = fav;
+  });
 }
 /** One editable product row: separate Name / URL / Description fields. */
 function productRow(p?: ProductItem): string {
@@ -373,6 +379,7 @@ function send<T>(msg: Message): Promise<T> {
 
 async function refresh() {
   app.innerHTML = render(await getData());
+  hydrateProductIcons();
 }
 
 let lastRecs: AdviceResult | null = null;
