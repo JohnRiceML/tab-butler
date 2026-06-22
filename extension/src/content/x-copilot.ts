@@ -890,29 +890,32 @@ const DOCK_CSS = `
       color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
 .dl { overflow:auto; padding:0 8px 10px; }
 .it { padding:9px 8px; border-top:.5px solid rgba(214,154,92,.10); }
-.ia { font-weight:600; font-size:12.5px; display:flex; align-items:center; } .ia .sc { color:${ACCENT}; margin-left:auto; padding-left:6px; flex:0 0 auto; }
+.ia { font-weight:600; font-size:12.5px; display:flex; align-items:center; }
+.scwrap { margin-left:auto; display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; padding-left:6px; }
+.sc { color:${ACCENT}; flex:0 0 auto; font-variant-numeric:tabular-nums; }
 .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; flex:0 1 auto; }
 .hndl { color:#8c7d68; font-weight:400; font-size:11px; margin-left:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; }
 .av { width:18px; height:18px; border-radius:50%; object-fit:cover; margin-right:7px; flex:0 0 auto; }
 .ix { color:#b6a892; font-size:12px; margin:2px 0 4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.im { color:#9b8d76; font-size:11px; margin:0 0 4px; letter-spacing:.1px; }
-.ir { color:#8c7d68; font-size:11px; }
+.im { color:#9b8d76; font-size:11px; margin:3px 0 0; line-height:1.4; }
+.im .ctag { color:${ACCENT}; font-weight:600; margin-right:5px; }
 .cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
        padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT};
        max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
        display:inline-flex; align-items:center; }
-.pfav { width:14px; height:14px; border-radius:3px; margin-left:5px; flex:0 0 auto; }
+.pfav { width:14px; height:14px; border-radius:3px; margin-left:5px; flex:0 0 auto; vertical-align:-3px; }
 .pini { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%;
-        margin-left:5px; flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; }
+        margin-left:5px; flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; vertical-align:-3px; }
 .catt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
 .cat .pn { margin-left:5px; flex:0 1 auto; }
-.ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-.bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
+.ib { display:flex; align-items:center; gap:6px; margin-top:8px; }
+.bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:5px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
-.bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; }
+.bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; flex:1; }
+.bt.ico { flex:0 0 auto; min-width:30px; padding:5px 0; text-align:center; font-size:13px; line-height:1; color:#cbb89c; }
+.bt.ico:hover { background:#2c241d; }
 .bt:disabled { opacity:.55; cursor:default; }
-.spot { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; padding:1px 7px; border-radius:999px;
-        background:rgba(48,209,88,.16); color:#6fcf7f; flex:0 0 auto; white-space:nowrap; }
+.spot { color:#6fcf7f; font-size:12px; flex:0 0 auto; }
 .empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
 `;
 
@@ -1082,62 +1085,58 @@ function renderList(list: HTMLElement) {
   for (const o of items) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const it = document.createElement("div"); it.className = "it";
+
+    // Row 1 — who + verdict: avatar, name, dim handle, then a right-aligned color-coded score (+ in-reach pip).
     const ia = document.createElement("div"); ia.className = "ia";
     if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
     const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = o.name || `@${o.author}`; ia.append(nm);
     if (o.name) { const hd = document.createElement("span"); hd.className = "hndl"; hd.textContent = `@${o.author}`; ia.append(hd); }
-    if (o.category) {
-      const cc = document.createElement("span"); cc.className = "cat";
-      const lab = document.createElement("span"); lab.className = "catt"; lab.textContent = catLabel(o.category);
-      cc.append(lab);
-      // For promote, show each fitting product as its URL icon (not its name);
-      // fall back to the name only when no favicon is available.
-      if (o.category === "promote") for (const p of o.products || []) {
-        const ic = faviconImg(p.url);
-        if (ic) { ic.title = p.name; cc.append(ic); }
-        else { const av = letterAvatar(p.name); av.title = p.name; cc.append(av); } // colored letter icon, no permission needed
-      }
-      ia.append(cc);
-    }
-    if (inReachSweetSpot(o)) {
-      const sp = document.createElement("span"); sp.className = "spot"; sp.textContent = "◎ in reach";
-      sp.title = "This account is 5-25x your size. Replying here reaches a meaningfully bigger, still-attainable audience.";
-      ia.append(sp);
-    }
+    const right = document.createElement("span"); right.className = "scwrap";
+    if (inReachSweetSpot(o)) { const sp = document.createElement("span"); sp.className = "spot"; sp.textContent = "◎"; sp.title = "In reach: this account is 5-25x your size, so a reply reaches a bigger, still-attainable audience."; right.append(sp); }
     const es = effectiveScore(o); const v = scoreVerdict(es);
-    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${v.label} · ${Math.round(es * 100)}%`; sc.style.color = v.color; sc.title = "Is this worth replying to right now? Strong = fresh, reachable, genuine fit; Skip = stale, tiny audience, or engagement bait."; ia.append(sc);
+    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(es * 100)}%`; sc.style.color = v.color; sc.title = `${v.label} — is this worth replying to right now? Strong = fresh, reachable, genuine fit; Skip = stale, tiny audience, or engagement bait.`; right.append(sc);
+    ia.append(right);
+
+    // Row 2 — the post text.
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
-    const metaParts: string[] = [];
-    if (o.source === "search") metaParts.push("🔎 search");
-    const ml = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
-    if (ml) metaParts.push(ml);
-    const fc = knownFollowers(o);
-    if (fc) metaParts.push(`${fmtCount(fc)} followers`);
-    const meta = metaParts.join(" · ");
-    const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
+
+    // Row 3 — one dim "why + stats" line: category tag, reason, age, followers, product icon.
+    const im = document.createElement("div"); im.className = "im";
+    if (o.source === "search") { const s = document.createElement("span"); s.title = "Found via niche search (off your current page)"; s.textContent = "🔎 "; im.append(s); }
+    if (o.category) { const ct = document.createElement("span"); ct.className = "ctag"; ct.textContent = catLabel(o.category); im.append(ct); }
+    const bits: string[] = [];
+    if (o.reason) bits.push(o.reason);
+    const age = fmtAge(o.postedAt); if (age) bits.push(age);
+    const fc = knownFollowers(o); if (fc) bits.push(`${fmtCount(fc)} followers`);
+    im.append(document.createTextNode(bits.join(" · ")));
+    if (o.category === "promote") for (const p of o.products || []) {
+      const ic = faviconImg(p.url);
+      if (ic) { ic.title = p.name; im.append(ic); } else { const av = letterAvatar(p.name); av.title = p.name; im.append(av); }
+    }
+
+    // Row 4 — actions: Draft (primary text) + compact icon buttons.
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
     draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.source === "search" ? undefined : o.text), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
-    const follow = document.createElement("button"); follow.className = "bt";
+    const follow = document.createElement("button"); follow.className = "bt ico";
     const isFollowed = followed.has(o.author);
-    follow.textContent = isFollowed ? "Following ✓" : "Follow";
+    follow.textContent = isFollowed ? "✓" : "+"; follow.title = isFollowed ? `Following @${o.author}` : `Follow @${o.author}`;
     follow.disabled = isFollowed;
     follow.onclick = async () => {
-      follow.disabled = true; follow.textContent = "Following…";
+      follow.disabled = true; follow.textContent = "…";
       const r = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
-      if (r === "followed") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Followed @${o.author}.`); }
-      else if (r === "already") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Already following @${o.author}.`); }
-      else if (r === "paced") { follow.disabled = false; follow.textContent = "Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
-      else { follow.disabled = false; follow.textContent = "Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
+      if (r === "followed") { followed.add(o.author); follow.textContent = "✓"; toast(`Followed @${o.author}.`); }
+      else if (r === "already") { followed.add(o.author); follow.textContent = "✓"; toast(`Already following @${o.author}.`); }
+      else if (r === "paced") { follow.disabled = false; follow.textContent = "+"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
+      else { follow.disabled = false; follow.textContent = "+"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
     };
-    const open = document.createElement("button"); open.className = "bt"; open.textContent = "Open ↗";
+    const open = document.createElement("button"); open.className = "bt ico"; open.textContent = "↗"; open.title = "Open the post on X";
     open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
-    const dismiss = document.createElement("button"); dismiss.className = "bt"; dismiss.textContent = "✕"; dismiss.title = "Dismiss — remove from reply spots";
+    const dismiss = document.createElement("button"); dismiss.className = "bt ico"; dismiss.textContent = "✕"; dismiss.title = "Dismiss";
     dismiss.onclick = () => { opps.delete(o.id); renderDock(); };
     ib.append(draft, follow, open, dismiss);
-    it.append(ia, ix);
-    if (meta) { const im = document.createElement("div"); im.className = "im"; im.textContent = meta; it.append(im); }
-    it.append(ir, ib);
+
+    it.append(ia, ix, im, ib);
     list.appendChild(it);
   }
 }
