@@ -803,8 +803,9 @@ const DOCK_CSS = `
        padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT};
        max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
        display:inline-flex; align-items:center; }
-.pfav { width:13px; height:13px; border-radius:3px; margin-right:4px; flex:0 0 auto; }
+.pfav { width:14px; height:14px; border-radius:3px; margin-left:5px; flex:0 0 auto; }
 .catt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
+.cat .pn { margin-left:5px; flex:0 1 auto; }
 .ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
@@ -880,11 +881,15 @@ function renderList(list: HTMLElement) {
     if (o.name) { const hd = document.createElement("span"); hd.className = "hndl"; hd.textContent = `@${o.author}`; ia.append(hd); }
     if (o.category) {
       const cc = document.createElement("span"); cc.className = "cat";
-      for (const p of o.products || []) { const ic = faviconImg(p.url); if (ic) cc.append(ic); } // url icons show what fits
-      const names = (o.products || []).map((p) => p.name).filter(Boolean);
-      const ct = document.createElement("span"); ct.className = "catt";
-      ct.textContent = names.length ? `${catLabel(o.category)} · ${names.join(" + ")}` : catLabel(o.category);
-      cc.append(ct);
+      const lab = document.createElement("span"); lab.className = "catt"; lab.textContent = catLabel(o.category);
+      cc.append(lab);
+      // For promote, show each fitting product as its URL icon (not its name);
+      // fall back to the name only when no favicon is available.
+      if (o.category === "promote") for (const p of o.products || []) {
+        const ic = faviconImg(p.url);
+        if (ic) { ic.title = p.name; cc.append(ic); }
+        else { const nm = document.createElement("span"); nm.className = "catt pn"; nm.textContent = p.name; cc.append(nm); }
+      }
       ia.append(cc);
     }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
