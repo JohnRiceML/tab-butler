@@ -19,6 +19,7 @@ export const CONFIG = {
   AUTO_DEDUPE_KEY: "autoDedupe", // background duplicate-tab merge (default on)
   ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — lets Smart run with no proxy
   X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (default on)
+  X_PAUSED_KEY: "xPaused", // temporary pause — halts scanning/surfacing/API + the on-page actions until resumed
   X_NICHE_KEY: "xNiche", // what posts are worth replying to
   X_VOICE_KEY: "xVoice", // reply voice / examples
   X_PRODUCT_KEY: "xProduct", // legacy single-product string (fallback)

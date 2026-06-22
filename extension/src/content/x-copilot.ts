@@ -22,6 +22,7 @@ const BATCH = 12;
 
 let scoreCalls = 0;
 let enabled = true;
+let paused = false; // temporary "take a break" — halts scanning/surfacing/API until resumed
 let selfHandle = "";
 let noKeyNotified = false;
 let scanCapNotified = false; // surface the per-session scan cap once, instead of silently stopping
@@ -275,7 +276,7 @@ function requestScan() {
 }
 
 function scan() {
-  if (!enabled) return;
+  if (!enabled || paused) return;
   if (scoreCalls >= MAX_SCORE_CALLS) {
     if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
     return;
@@ -305,7 +306,7 @@ function scheduleFlush() {
 }
 
 async function flush() {
-  if (!enabled || scoreCalls >= MAX_SCORE_CALLS) return;
+  if (!enabled || paused || scoreCalls >= MAX_SCORE_CALLS) return;
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
   scoreCalls++;
@@ -353,8 +354,20 @@ async function flush() {
 /** Manual rescan (dock button). Lifts the per-session cost cap and forgets prior
  *  scores so every post currently on screen is re-evaluated fresh. Keeps the
  *  opportunities already collected from scrolling — this refreshes, never wipes. */
+/** Pause/resume the copilot. Paused = no scanning, surfacing, or API calls; the
+ *  dock goes quiet until resumed. Persisted so it survives navigation + reload. */
+function setPaused(v: boolean): void {
+  paused = v;
+  void chrome.storage.local.set({ [CONFIG.X_PAUSED_KEY]: v }).catch(() => { /* best-effort */ });
+  if (v) dismissPanel(); // close any open draft so nothing can be inserted while paused
+  renderDock();
+  if (v) { toast("Paused — the copilot is quiet until you resume."); }
+  else { toast("Resumed — finding reply spots again."); rescan(); }
+}
+
 function rescan() {
   if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to enable scanning."); return; }
+  if (paused) return; // a paused copilot doesn't scan, even on an explicit rescan
   scoreCalls = 0;        // user explicitly asked for more — reset the guard
   scanCapNotified = false;
   seen.clear();          // re-evaluate the visible feed from scratch
@@ -1022,6 +1035,9 @@ const DOCK_CSS = `
 .bt:disabled { opacity:.55; cursor:default; }
 .spot { color:#6fcf7f; font-size:12px; flex:0 0 auto; }
 .empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
+.paused { padding:22px 18px 20px; text-align:center; }
+.pttl { font-weight:600; font-size:13px; color:#cbb89c; }
+.pcopy { font-size:11.5px; color:#8c7d68; line-height:1.5; margin:6px 0 13px; }
 `;
 
 let dockHost: HTMLElement | null = null;
@@ -1289,31 +1305,48 @@ function renderDock() {
   const st = reputationStatus(rhh);
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
-  chip.style.color = PACE_COLOR[st.level];
-  chip.textContent = `● ${st.label}`;
-  chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~${30}/hr as automated — Tab Butler keeps you under it and the on-page actions paced like a human.`;
+  if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
+  else { chip.style.color = PACE_COLOR[st.level]; chip.textContent = `● ${st.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Tab Butler keeps you under it and the on-page actions paced like a human.`; }
   sub.append(document.createTextNode(" · "), chip);
   t.append(l1, sub);
   const acts = document.createElement("div"); acts.className = "da";
-  const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
-  re.title = "Rescan the page — re-check every visible post for new reply spots";
-  re.onclick = () => rescan();
-  acts.append(re);
-  const fs = document.createElement("button"); fs.className = "re";
-  fs.textContent = findingSpots ? "Searching…" : "✦ Find spots";
-  fs.title = "Search X for fresh posts in your niche (uses your RapidAPI key)";
-  fs.disabled = findingSpots;
-  fs.onclick = () => void findSpots();
-  acts.append(fs);
-  if (n) {
-    const clr = document.createElement("button"); clr.className = "re"; clr.textContent = "Clear all";
-    clr.title = "Clear every collected reply spot";
-    clr.onclick = () => { opps.clear(); renderDock(); toast("Cleared all reply spots."); };
-    acts.append(clr);
+  if (!paused) {
+    const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";
+    re.title = "Rescan the page — re-check every visible post for new reply spots";
+    re.onclick = () => rescan();
+    acts.append(re);
+    const fs = document.createElement("button"); fs.className = "re";
+    fs.textContent = findingSpots ? "Searching…" : "✦ Find spots";
+    fs.title = "Search X for fresh posts in your niche (uses your RapidAPI key)";
+    fs.disabled = findingSpots;
+    fs.onclick = () => void findSpots();
+    acts.append(fs);
+    if (n) {
+      const clr = document.createElement("button"); clr.className = "re"; clr.textContent = "Clear all";
+      clr.title = "Clear every collected reply spot";
+      clr.onclick = () => { opps.clear(); renderDock(); toast("Cleared all reply spots."); };
+      acts.append(clr);
+    }
   }
+  // Pause / Resume — stop or restart the firehose. Icon-only while running; explicit while paused.
+  const pz = document.createElement("button"); pz.className = "re";
+  pz.textContent = paused ? "▶ Resume" : "⏸";
+  pz.title = paused ? "Resume — start finding reply spots again" : "Pause — stop scanning, surfacing, and API calls. Nothing happens until you resume.";
+  pz.onclick = () => setPaused(!paused);
+  acts.append(pz);
   const x = document.createElement("button"); x.className = "dx"; x.textContent = "✕"; x.onclick = () => { dockOpen = false; renderDock(); };
   acts.append(x);
   h.append(t, acts);
+  if (paused) {
+    const p = document.createElement("div"); p.className = "paused";
+    const pt = document.createElement("div"); pt.className = "pttl"; pt.textContent = "⏸ Paused";
+    const pp = document.createElement("div"); pp.className = "pcopy"; pp.textContent = "The copilot is quiet — no scanning, no surfacing, no API calls. Take your break; your spots come back when you resume.";
+    const rb = document.createElement("button"); rb.className = "bt p"; rb.textContent = "Resume"; rb.onclick = () => setPaused(false);
+    p.append(pt, pp, rb);
+    d.append(h, p);
+    root.appendChild(d);
+    return;
+  }
   const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter opportunities…"; f.value = dockFilter;
   const list = document.createElement("div"); list.className = "dl";
   f.oninput = () => { dockFilter = f.value; renderList(list); };
@@ -1327,6 +1360,7 @@ function renderDock() {
 async function boot() {
   enabled = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false; // default on
   if (!enabled) return;
+  paused = (await getLocal(CONFIG.X_PAUSED_KEY)) === true; // default not paused
   const storedProducts = await getLocal(CONFIG.X_PRODUCTS_KEY);
   xProducts = Array.isArray(storedProducts) ? (storedProducts as ProductItem[]) : [];
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
@@ -1357,6 +1391,7 @@ async function boot() {
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
