@@ -714,6 +714,24 @@ let inserting = false;
 /** Record an inserted reply in the persisted reputation log and return the single
  *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
  *  Pattern-aware + cross-session, because X's penalties attach to the account. */
+/** Bump today's "replies sent via the system" tally and trim old days. */
+function bumpDaily(now: number): void {
+  const dk = dayKey(now);
+  replyLog.daily[dk] = (replyLog.daily[dk] || 0) + 1;
+  const cut = dayKey(now - 35 * 24 * HOUR_MS); // keep ~35 days of history
+  for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
+}
+
+/** Count one reply the system handed you — the simple "how it's helping" metric.
+ *  Fires on any Insert click that produced a usable reply (inserted into X's box,
+ *  or copied to the clipboard when X blocked the direct insert). Persists + refreshes
+ *  the header count. No post-confirmation: the click is the signal. */
+function countSystemReply(): void {
+  bumpDaily(Date.now());
+  void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
+  renderDock(); // update "N replies sent today" immediately
+}
+
 function recordReplyAndNudge(text: string): string | null {
   const now = Date.now();
   replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
@@ -728,10 +746,7 @@ function recordReplyAndNudge(text: string): string | null {
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  const dk = dayKey(now);
-  replyLog.daily[dk] = (replyLog.daily[dk] || 0) + 1; // per-day "replies sent via the system" tally
-  const cut = dayKey(now - 35 * 24 * HOUR_MS);        // keep ~35 days of history
-  for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
+  bumpDaily(now);
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
 }
@@ -746,13 +761,14 @@ async function doInsert(text: string) {
       // Like the post only now — once you've actually committed to replying, not on
       // panel-open. Genuine, user-paced engagement, once per post.
       if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(el); }
-      if (draftOppId) { opps.delete(draftOppId); renderDock(); }
-      const warn = recordReplyAndNudge(text);
+      const warn = recordReplyAndNudge(text); // counts today's reply + reputation guard
+      if (draftOppId) opps.delete(draftOppId);
+      renderDock(); // after the count, so the "N today" header reflects this reply
       toast(warn || "Inserted into the reply box. Review it, then post.");
       dismissPanel();
     }
     else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
-    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } toast("X blocked the insert — copied it instead; paste it in."); }
+    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } countSystemReply(); toast("X blocked the insert — copied it instead; paste it in."); }
   } finally {
     inserting = false;
   }
