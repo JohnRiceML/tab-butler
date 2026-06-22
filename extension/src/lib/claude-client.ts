@@ -129,7 +129,7 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 /* ---------- X reply copilot (BYO-key) ---------- */
 
 export interface XPost { i: number; author: string; text: string; meta?: string; }
-export interface XScore { i: number; score: number; reason: string; category?: string; products?: number[]; }
+export interface XScore { i: number; score: number; reason: string; category?: string; products?: string[]; }
 
 /** Score posts for reply-worthiness given the user's niche. Cheap (Haiku).
  *  When products are supplied, the scorer also tags each PROMOTE post with the
@@ -139,16 +139,24 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
   if (!key) throw new Error("no-key");
   const list = posts.map((p) => `${p.i}. @${p.author}${p.meta ? ` [${p.meta}]` : ""}: ${p.text}`).join("\n");
   const prods = products.length
-    ? `\n\nThe user's products (for a post you categorize "promote", also set "product" to the 0-based index of the single best-fit product; omit if none clearly fits):\n${products.map((p, i) => `${i}. ${p.name}${p.blurb ? ` — ${p.blurb}` : ""}`).join("\n")}`
+    ? `\n\nThe user's products (for a post you categorize "promote", set "products" to the 0-based indices of the product(s) that genuinely fit, most relevant first, up to 2; omit if none clearly fits):\n${products.map((p, i) => `${i}. ${p.name}${p.blurb ? ` — ${p.blurb}` : ""}`).join("\n")}`
     : "";
-  const raw = await callDirect<{ scores: XScore[] }>(
+  const raw = await callDirect<{ scores: { i: number; score: number; reason: string; category?: string; products?: number[] }[] }>(
     key,
     "claude-haiku-4-5",
     X_SCORE_SYSTEM,
     `User niche / what's worth replying to:\n${niche || "(not set — only flag posts clearly answerable with specific expertise; be extra strict)"}\n\nPosts:\n${list}${prods}`,
     1024,
   );
-  return raw.scores || [];
+  // Resolve product indices to NAMES here (against the list we sent), so the
+  // content script maps by identity — robust to the user reordering/editing
+  // products between scoring and rendering.
+  return (raw.scores || []).map((s) => ({
+    i: s.i, score: s.score, reason: s.reason, category: s.category,
+    products: Array.isArray(s.products)
+      ? s.products.map((idx) => products[idx]?.name).filter((n): n is string => !!n).slice(0, 2)
+      : undefined,
+  }));
 }
 
 /** Enforce the user's hard rule for replies: no em/en dashes, no hyphenated

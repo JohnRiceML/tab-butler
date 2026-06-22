@@ -49,7 +49,7 @@ async function loadFavicons(): Promise<void> {
   if (!hosts.length) return;
   const resp = await send<{ favicons?: Record<string, string> }>({ type: "GET_FAVICONS", hosts });
   let any = false;
-  for (const [h, d] of Object.entries(resp?.favicons || {})) if (d) { faviconCache.set(h, d); any = true; }
+  for (const [h, d] of Object.entries(resp?.favicons || {})) { faviconCache.set(h, d); if (d) any = true; } // cache "" too (known miss)
   if (any) renderDock();
 }
 
@@ -293,7 +293,7 @@ async function flush() {
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
   batch.forEach((b) => inFlight.add(b.id));
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: number[] }[]; error?: string }>({
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
@@ -310,10 +310,10 @@ async function flush() {
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
     const category = catId(s.category);
-    // Snapshot the resolved product OBJECT(s) (not indices) so a later product
-    // edit can't make a stored index point at the wrong/missing product.
+    // The scorer returns product NAMES (resolved SW-side); map them to objects by
+    // identity so a reorder/edit can't mis-point. Snapshot the objects on the opp.
     const products = category === "promote" && Array.isArray(s.products)
-      ? s.products.map((i) => xProducts[i]).filter((p): p is ProductItem => !!p).slice(0, 2)
+      ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
       : undefined;
     const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason, category, products });
@@ -659,7 +659,9 @@ async function draftFor(req: DraftReq) {
   // opp's best-fit product, else the user's default, else the first.
   const candidates = angle === "promote" && xProducts.length ? xProducts : undefined;
   let productIndex = req.productIndex;
-  if (productIndex == null && candidates) {
+  // Re-resolve when unset OR out of range (e.g. a product was deleted/reordered
+  // after the index was chosen) so it never falls through to the all-products path.
+  if (candidates && (productIndex == null || productIndex < 0 || productIndex >= candidates.length)) {
     const preferred = req.products?.[0]?.name;
     const pi = preferred ? candidates.findIndex((p) => p.name === preferred) : -1;
     productIndex = pi >= 0 ? pi : defaultProductIndex(candidates);
@@ -802,6 +804,7 @@ const DOCK_CSS = `
        max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
        display:inline-flex; align-items:center; }
 .pfav { width:13px; height:13px; border-radius:3px; margin-right:4px; flex:0 0 auto; }
+.catt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
 .ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
@@ -879,7 +882,9 @@ function renderList(list: HTMLElement) {
       const cc = document.createElement("span"); cc.className = "cat";
       for (const p of o.products || []) { const ic = faviconImg(p.url); if (ic) cc.append(ic); } // url icons show what fits
       const names = (o.products || []).map((p) => p.name).filter(Boolean);
-      cc.append(document.createTextNode(names.length ? `${catLabel(o.category)} · ${names.join(" + ")}` : catLabel(o.category)));
+      const ct = document.createElement("span"); ct.className = "catt";
+      ct.textContent = names.length ? `${catLabel(o.category)} · ${names.join(" + ")}` : catLabel(o.category);
+      cc.append(ct);
       ia.append(cc);
     }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
