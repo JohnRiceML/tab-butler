@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus } from "../lib/reply-hygiene";
-import { humanDelayMs, typeChunks, jitterGap } from "../lib/human-pacing";
+import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -742,34 +742,14 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
     return complete();
   };
 
-  // Best-effort typed cadence: build the reply up word by word, confirming each word
-  // actually landed. Returns false the instant a word truly drops, so the caller wipes
-  // the partial and uses insertWhole — it can never leave the box half-filled.
-  const typeCadence = async (): Promise<boolean> => {
-    if (!want) return false;
-    ce.focus();
-    if (!(await ensureEmpty())) return false; // need a clean start
-    await sleep(humanDelayMs("react"));
-    for (const chunk of typeChunks(text)) {
-      if (!ce.isConnected) return false;
-      const before = got().length;
-      let landed = false;
-      for (let attempt = 0; attempt < 2 && !landed; attempt++) {
-        ce.focus(); placeCaretEnd(ce);
-        document.execCommand("insertText", false, chunk);
-        for (let i = 0; i < 5 && !landed; i++) { if (got().length > before) landed = true; else await sleep(20); }
-      }
-      if (!landed) return false; // a word dropped — bail to the reliable path
-      await sleep(humanDelayMs("type"));
-    }
-    return complete();
-  };
-
-  await sleep(80);
+  // No typed cadence: repeated programmatic inserts POISON DraftJS — after a couple
+  // words it stops accepting input entirely, so even a fallback can't recover and the
+  // box is left with two words. The only reliable way is one verified shot. A brief
+  // human pause before it is the only safe in-text cadence; the real human-pacing is
+  // the spaced-out like/follow actions, not the keystrokes.
+  await sleep(80 + humanDelayMs("react"));
   ce.focus();
-  if (await typeCadence()) return true; // typed in, fully verified
-  await ensureEmpty();                  // wipe any partial the cadence left behind
-  return await insertWhole();           // reliable one-shot
+  return await insertWhole();
 }
 
 /** Best-effort: open the post's reply box and type the draft into it. Never submits. */
@@ -1040,14 +1020,15 @@ const DOCK_CSS = `
 .av.init { display:inline-flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:#fff; }
 .bodywrap { flex:1; min-width:0; display:flex; gap:12px; }
 .main { flex:1; min-width:0; }
-.nm { display:flex; align-items:center; gap:5px; font-weight:600; font-size:14px; }
-.nmt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.nm { display:flex; align-items:center; gap:6px; font-weight:600; font-size:14px; }
+.nmt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto; }
 .vf { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
       border-radius:50%; background:#1d9bf0; color:#fff; font-size:9px; }
-.ix { color:#b6a892; font-size:13px; line-height:1.4; margin:4px 0 6px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.fc { flex:0 0 auto; color:#b6a892; font-weight:500; font-size:12px; white-space:nowrap; }
+.ix { color:#b6a892; font-size:13px; line-height:1.4; margin:7px 0 6px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .why { color:${ACCENT}; font-size:12px; line-height:1.4; display:flex; gap:5px; }
 .why .wst { flex:0 0 auto; } .why b { font-weight:600; }
-.meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:11.5px; color:#8c7d68; }
+.meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:5px; font-size:11.5px; color:#8c7d68; }
 .chip { font-size:10.5px; font-weight:600; padding:2px 9px; border-radius:999px; }
 .srch { flex:0 0 auto; }
 .pfav { width:14px; height:14px; border-radius:3px; flex:0 0 auto; vertical-align:-3px; }
@@ -1287,11 +1268,22 @@ function renderList(list: HTMLElement) {
     const body = document.createElement("div"); body.className = "bodywrap";
     const main = document.createElement("div"); main.className = "main";
 
-    // Name (+ verified badge).
+    // Name (+ verified badge) + follower count, right on the name line.
     const nm = document.createElement("div"); nm.className = "nm";
     const ns = document.createElement("span"); ns.className = "nmt"; ns.textContent = o.name || `@${o.author}`; ns.title = `@${o.author}`; nm.append(ns);
     if (o.verified) { const vb = document.createElement("span"); vb.className = "vf"; vb.textContent = "✓"; vb.title = "Verified account"; nm.append(vb); }
+    const fc = knownFollowers(o);
+    if (fc) { const fcs = document.createElement("span"); fcs.className = "fc"; fcs.textContent = `${fmtCount(fc)} followers`; nm.append(fcs); }
     main.append(nm);
+
+    // Category chip + age — up near the name, above the text.
+    const meta = document.createElement("div"); meta.className = "meta";
+    if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎"; s.title = "Found via niche search (off your current page)"; meta.append(s); }
+    if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = catLabel(o.category); meta.append(ct); }
+    const age = fmtAge(o.postedAt);
+    if (age) meta.append(document.createTextNode((o.category ? " · " : "") + age));
+    if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
+    main.append(meta);
 
     // Post text.
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text; main.append(ix);
@@ -1304,18 +1296,6 @@ function renderList(list: HTMLElement) {
       const span = document.createElement("span"); span.append(lbl, document.createTextNode(o.reason));
       why.append(star, span); main.append(why);
     }
-
-    // Meta: category chip · age · followers (+ product icon for promote).
-    const meta = document.createElement("div"); meta.className = "meta";
-    if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎"; s.title = "Found via niche search (off your current page)"; meta.append(s); }
-    if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = catLabel(o.category); meta.append(ct); }
-    const mbits: string[] = [];
-    const age = fmtAge(o.postedAt); if (age) mbits.push(age);
-    const fc = knownFollowers(o); if (fc) mbits.push(`${fmtCount(fc)} followers`);
-    const tail = mbits.join(" · ");
-    if (tail) meta.append(document.createTextNode((o.category ? " · " : "") + tail));
-    if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
-    main.append(meta);
     body.append(main);
 
     // Right column — reply fit + actions.
