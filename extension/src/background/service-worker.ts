@@ -24,6 +24,10 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Clicking the toolbar icon opens Tab Butler as a right-edge, full-height side
+// panel (a drawer) instead of a small popup. Idempotent + persists across sessions.
+chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => { /* older Chrome without sidePanel */ });
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === CONFIG.SCAN_ALARM) void runIdleArchive();
 });

@@ -26,8 +26,8 @@
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; }
+      html, body { width: 100%; min-height: 100vh; }
       body {
-        width: 560px;
         background: var(--bg);
         color: var(--t1);
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
@@ -35,7 +35,7 @@
         line-height: 1.4;
         -webkit-font-smoothing: antialiased;
       }
-      .wrap { padding: 14px; max-height: 600px; overflow-y: auto; }
+      .wrap { padding: 14px; min-height: 100vh; }
       .wrap::-webkit-scrollbar { width: 8px; }
       .wrap::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
 
