@@ -50,11 +50,30 @@ function viewCount(views: any): number | undefined {
   return views ? num(views.count) : undefined;
 }
 
+/** True if a node looks like an X user "result" object (either shape). */
+function isUserNode(n: any): boolean {
+  return !!n && typeof n === "object" && (n.__typename === "User" || !!n.rest_id || !!n.legacy?.screen_name || !!n.core?.screen_name);
+}
+
+/** Recursively find the first user-result node, however the provider wraps it. */
+function findUserNode(json: any, depth = 0): any {
+  if (!json || typeof json !== "object" || depth > 8) return null;
+  if (isUserNode(json) && (json.legacy?.screen_name || json.core?.screen_name || json.rest_id)) return json;
+  for (const v of Array.isArray(json) ? json : Object.values(json)) {
+    const found = findUserNode(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Parse a /user (by-username) response into the fields we rank/learn on.
- *  Handles the legacy shape (legacy.followers_count) and the new shape
- *  (core.* + relationship_counts.followers). */
+ *  Handles the legacy shape (legacy.followers_count), the new shape
+ *  (core.* + relationship_counts.followers), and however the provider wraps the
+ *  user node (e.g. user.result vs result.data.user.result). */
 export function parseUser(json: any): TwttrUser | null {
-  const r = json?.user?.result ?? json?.result ?? json?.data?.user?.result ?? json;
+  // Known direct paths first (precise), then a recursive fallback for any wrapping.
+  const candidates = [json?.user?.result, json?.result?.data?.user?.result, json?.data?.user?.result, json?.result?.user?.result, json?.result];
+  let r = candidates.find(isUserNode) ?? findUserNode(json);
   if (!r || typeof r !== "object") return null;
   const lg = r.legacy ?? {};
   const core = r.core ?? {};
@@ -133,16 +152,29 @@ function flattenTweet(result: any): TwttrTweet | null {
   };
 }
 
-/** Every timeline instruction's entries, across both shapes. */
+/** The first `instructions` array found anywhere in the response (the stable
+ *  anchor across all GraphQL timeline shapes, regardless of how it's wrapped). */
+function findInstructions(json: any, depth = 0): any[] {
+  if (!json || typeof json !== "object" || depth > 10) return [];
+  if (Array.isArray(json.instructions)) return json.instructions;
+  for (const v of Array.isArray(json) ? json : Object.values(json)) {
+    const r = findInstructions(v, depth + 1);
+    if (r.length) return r;
+  }
+  return [];
+}
+
+/** Every timeline instruction's entries, across both shapes and any wrapping. */
 function collectEntries(json: any): any[] {
   const instr =
     json?.result?.timeline_response?.timeline?.instructions ??
     json?.result?.timeline?.instructions ??
     json?.timeline?.instructions ??
     json?.data?.timeline?.instructions ??
-    [];
+    null;
+  const list = Array.isArray(instr) ? instr : findInstructions(json);
   const out: any[] = [];
-  for (const ins of Array.isArray(instr) ? instr : []) {
+  for (const ins of list) {
     if (ins?.entry) out.push(ins.entry);                 // TimelinePinEntry
     if (Array.isArray(ins?.entries)) out.push(...ins.entries);
   }

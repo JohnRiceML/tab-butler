@@ -45,6 +45,12 @@ const u2 = parseUser({ user: { result: { rest_id: "9", core: { screen_name: "ali
 eq(u2.followers, 5000, "parseUser new-shape followers");
 eq(u2.handle, "alice", "parseUser new-shape handle");
 ok(parseUser({}) === null, "parseUser empty -> null");
+// LIVE shape: the provider wraps the user under result.data.user.result (raw GraphQL), new-shape fields
+const wrappedUser = { result: { data: { user: { result: { __typename: "User", rest_id: "2455740283", core: { name: "MrBeast", screen_name: "MrBeast" }, relationship_counts: { followers: 34750652, following: 2301 }, profile_bio: { description: "bio" } } } } } };
+const wu = parseUser(wrappedUser);
+eq(wu.id, "2455740283", "parseUser wrapped result.data.user.result id");
+eq(wu.handle, "MrBeast", "parseUser wrapped handle (core.screen_name)");
+eq(wu.followers, 34750652, "parseUser wrapped followers (relationship_counts)");
 
 /* ---- /search-v3 (new GraphQL shape) ---- */
 const searchJson = {
@@ -171,6 +177,22 @@ eq(t4.isReply, true, "search reply via reply_to_user_results only (no @ prefix)"
 const disc = pickDiscoveryTweets(searchJson, 18);
 eq(disc.length, 1, "discovery drops all replies (structured + @-prefixed)");
 eq(disc[0].id, "t1", "discovery keeps original post");
+
+// LIVE wrapping: instructions nested deep under result.data.<...>.timeline.instructions
+const wrappedTimeline = { result: { data: { search_by_raw_query: { search_timeline: { timeline: { instructions: [
+  { __typename: "TimelineAddEntries", entries: [
+    { content: { content: { __typename: "TimelineTweet", tweet_results: { result: {
+      __typename: "Tweet", rest_id: "w1",
+      core: { user_results: { result: { rest_id: "uw", core: { name: "Zoe", screen_name: "zoe" }, relationship_counts: { followers: 900 } } } },
+      counts: { favorite_count: 3, reply_count: 0 },
+      details: { full_text: "building in public is underrated", created_at_ms: 1782000000000 },
+    } } } }, entry_id: "tweet-w1" },
+  ] },
+] } } } } } };
+const wt = parseTimelineTweets(wrappedTimeline);
+eq(wt.length, 1, "findInstructions reaches deeply-wrapped instructions");
+eq(wt[0].id, "w1", "wrapped timeline tweet parsed");
+eq(wt[0].author, "zoe", "wrapped timeline author");
 
 /* ---- /user-replies-v2 (legacy shape, with a conversation module) ---- */
 const meId = "me1";

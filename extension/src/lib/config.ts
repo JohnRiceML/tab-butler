@@ -26,7 +26,7 @@ export const CONFIG = {
   X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
   X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
   TWTTR_KEY_KEY: "twttrKey", // BYO RapidAPI key for the Twttr X-data API (read-only enrichment)
-  TWTTR_HOST_KEY: "twttrHost", // RapidAPI host for the Twttr API, e.g. twitter241.p.rapidapi.com
+  TWTTR_HOST: "twitter241.p.rapidapi.com", // fixed provider host — the parsers are written for this shape. Not a secret, not user-set.
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
   X_MY_FOLLOWERS_KEY: "xMyFollowers", // the user's own follower count, for the reach sweet-spot ratio
 } as const;

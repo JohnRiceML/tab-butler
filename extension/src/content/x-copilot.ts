@@ -373,11 +373,16 @@ async function findSpots() {
   renderDock();
   toast("Searching X for fresh posts in your niche…");
   try {
-    const search = await send<{ ok?: boolean; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) },
+    const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "30", query: q.slice(0, 120) },
     });
-    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your X data API key + host in the Tab Butler popup to find spots."); return; }
-    if (!search?.ok) { toast("Couldn't reach X search. Check your X data API key/host in the popup."); return; }
+    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Tab Butler popup to find spots."); return; }
+    if (!search?.ok) {
+      const s = search?.status;
+      const why = s === 401 || s === 403 ? "Key invalid or not subscribed to twitter241 on RapidAPI." : "Check your RapidAPI key in the popup.";
+      toast(`X search failed${s ? ` (HTTP ${s})` : ""}. ${why}${search?.error ? ` — provider says: ${search.error}` : ""}`);
+      return;
+    }
     if (!selfHandle) selfHandle = getSelf();
     const found = pickDiscoveryTweets(search.data, 18)
       .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle)
@@ -1124,7 +1129,7 @@ function renderDock() {
   acts.append(re);
   const fs = document.createElement("button"); fs.className = "re";
   fs.textContent = findingSpots ? "Searching…" : "✦ Find spots";
-  fs.title = "Search X for fresh posts in your niche (uses your X data API key)";
+  fs.title = "Search X for fresh posts in your niche (uses your RapidAPI key)";
   fs.disabled = findingSpots;
   fs.onclick = () => void findSpots();
   acts.append(fs);
@@ -1166,8 +1171,8 @@ async function boot() {
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
-    if (changes[CONFIG.TWTTR_KEY_KEY] || changes[CONFIG.TWTTR_HOST_KEY]) {
-      // X-data settings changed — let lookups try again and drop the failed-lookup backoff.
+    if (changes[CONFIG.TWTTR_KEY_KEY]) {
+      // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
       twttrUnconfigured = false;
       for (const [k, v] of authorReach) if (v.failed) authorReach.delete(k);
     }

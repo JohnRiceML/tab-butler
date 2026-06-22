@@ -89,7 +89,6 @@ interface ViewData {
   xDefaultAngle: string;
   xDefaultProduct: string;
   twttrKey: string;
-  twttrHost: string;
   xMyHandle: string;
 }
 
@@ -113,7 +112,6 @@ const MOCK: ViewData = {
   xDefaultAngle: "",
   xDefaultProduct: "",
   twttrKey: "",
-  twttrHost: "",
   xMyHandle: "",
 };
 
@@ -154,7 +152,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.TWTTR_HOST_KEY, CONFIG.X_MY_HANDLE_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
@@ -174,7 +172,6 @@ async function getData(): Promise<ViewData> {
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
-    twttrHost: (store[CONFIG.TWTTR_HOST_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
   };
 }
@@ -292,10 +289,10 @@ function render(d: ViewData): string {
       </div>
     </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">X data API <span class="dim" style="font-weight:400">— RapidAPI key + host (powers reach-aware recs, search &amp; voice-learning)</span></div>
-      <input id="twttrhost" placeholder="host, e.g. twitter241.p.rapidapi.com" value="${esc(d.twttrHost)}" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
-      <input id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "RapidAPI key (stored — leave blank to keep)" : "RapidAPI key"}" value="" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
+      <div class="name" style="margin-bottom:6px">RapidAPI key <span class="dim" style="font-weight:400">— powers reach-aware recs, search &amp; voice-learning</span></div>
+      <input id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value="" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
+      ${d.twttrKey ? `<div class="dim" style="font-size:10.5px;margin-top:4px;color:var(--green)">✓ Key stored. The field stays blank for safety — leave it blank to keep the saved key.</div>` : ""}
+      <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (twitter241 on RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your X handle <span class="dim" style="font-weight:400">— powers reach-aware ranking &amp; voice-learning</span></div>
@@ -303,7 +300,7 @@ function render(d: ViewData): string {
         <input id="xmyhandle" placeholder="@yourhandle" value="${esc(d.xMyHandle)}" style="flex:1;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
         <button class="btn" data-action="learn-voice" style="padding:7px 12px;white-space:nowrap">Learn my voice</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">Reads your recent replies (needs the X data API above) and fills the voice box below. Also sizes the “in reach” tag on the dock.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:6px">Reads your recent replies (needs the RapidAPI key above) and fills the voice box below. Also sizes the “in reach” tag on the dock.</div>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -529,51 +526,60 @@ async function dispatch(el: HTMLElement) {
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
         const defAngle = (document.getElementById("xdefangle") as HTMLSelectElement | null)?.value ?? "";
         const defProduct = (document.getElementById("xdefproduct") as HTMLSelectElement | null)?.value ?? "";
-        const twttrHost = ((document.getElementById("twttrhost") as HTMLInputElement | null)?.value ?? "").trim();
         const typedKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
         const myHandle = ((document.getElementById("xmyhandle") as HTMLInputElement | null)?.value ?? "").trim().replace(/^@+/, "");
         const prev = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.TWTTR_KEY_KEY]);
         const prevHandle = ((prev[CONFIG.X_MY_HANDLE_KEY] as string) || "").toLowerCase();
         const storedKey = (prev[CONFIG.TWTTR_KEY_KEY] as string) || "";
-        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.TWTTR_HOST_KEY]: twttrHost, [CONFIG.X_MY_HANDLE_KEY]: myHandle };
+        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle };
         if (typedKey) set[CONFIG.TWTTR_KEY_KEY] = typedKey; // the key field isn't pre-filled, so only overwrite when a new one is typed
         if (!myHandle || myHandle.toLowerCase() !== prevHandle) set[CONFIG.X_MY_FOLLOWERS_KEY] = 0; // drop a stale follower base for a new/cleared handle
         await chrome.storage.local.set(set);
         const products = await saveProducts();
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
-        if (myHandle && twttrHost && (typedKey || storedKey)) void resolveMyFollowers(myHandle); // best-effort, sizes the reach sweet-spot
+        if (myHandle && (typedKey || storedKey)) void resolveMyFollowers(myHandle); // best-effort, sizes the reach sweet-spot
         await refresh(); // re-render so the product favicon previews update
         break;
       }
       case "learn-voice": {
+        // Feedback goes to toasts + this button + the voice box (all near the button),
+        // NOT to #toparea at the top of the popup — that scrolls out of view down here.
+        const btn = el as HTMLButtonElement;
         const handle = ((document.getElementById("xmyhandle") as HTMLInputElement | null)?.value ?? "").trim().replace(/^@+/, "");
-        if (!handle) { toast("Enter your X handle first."); return; }
-        // Persist any just-typed host/key first, so the SW sees them without a separate Save.
-        const liveHost = ((document.getElementById("twttrhost") as HTMLInputElement | null)?.value ?? "").trim();
+        if (!handle) { toast("Type your X handle in the field first, then Learn my voice."); return; }
+        // Persist any just-typed key first, so the SW sees it without a separate Save.
         const liveKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
-        const credSet: Record<string, unknown> = {};
-        if (liveHost) credSet[CONFIG.TWTTR_HOST_KEY] = liveHost;
-        if (liveKey) credSet[CONFIG.TWTTR_KEY_KEY] = liveKey;
-        if (Object.keys(credSet).length) await chrome.storage.local.set(credSet);
-        showLoader(`Reading @${handle}'s recent replies…`);
+        if (liveKey) await chrome.storage.local.set({ [CONFIG.TWTTR_KEY_KEY]: liveKey });
+        const orig = btn.textContent;
+        btn.disabled = true; btn.textContent = "Reading…";
+        toast(`Reading @${handle}'s recent replies…`);
         try {
-          const ures = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle } });
-          if (ures?.error === "no-twttr-config") { top().innerHTML = `<div class="empty">Add your X data API host + key above and hit Save, then try Learn my voice again.</div>`; return; }
-          const user = ures?.ok ? parseUser(ures.data) : null;
-          if (!user?.id) { top().innerHTML = `<div class="empty">Couldn't find @${esc(handle)}. Check the handle and that your X data API key is valid.</div>`; return; }
+          const ures = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle } });
+          if (ures?.error === "no-twttr-config") { toast("No RapidAPI key saved yet — paste it above, then try again."); return; }
+          if (!ures?.ok) { toast(`Couldn't reach the X API${ures?.status ? ` (HTTP ${ures.status})` : ""}. ${ures?.status === 401 || ures?.status === 403 ? "Key invalid or not subscribed to twitter241." : "Check your RapidAPI key."}${ures?.error ? ` — ${ures.error}` : ""}`); return; }
+          const user = parseUser(ures.data);
+          if (!user?.id) {
+            let raw = ""; try { raw = JSON.stringify(ures.data).slice(0, 200); } catch { /* ignore */ }
+            console.warn("[tab-butler] /user found no user for", handle, ures.data);
+            toast(`Couldn't find @${handle} via the API. Confirm the exact handle (copy it from your profile URL).${raw ? ` API said: ${raw}` : ""}`);
+            return;
+          }
           await chrome.storage.local.set({ [CONFIG.X_MY_HANDLE_KEY]: user.handle, [CONFIG.X_MY_FOLLOWERS_KEY]: user.followers });
           const hEl = document.getElementById("xmyhandle") as HTMLInputElement | null;
           if (hEl) hEl.value = user.handle; // reflect the canonical handle so a later Save persists it (not the raw typed value)
-          const rres = await send<{ ok?: boolean; data?: unknown }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: user.id, count: "40" } });
-          const samples = rres?.ok ? pickVoiceSamples(rres.data, user.id, 12) : [];
-          if (!samples.length) { top().innerHTML = `<div class="empty">Found @${esc(user.handle)} (${user.followers.toLocaleString()} followers) but no recent replies to learn from. Reply to a few posts, then try again.</div>`; return; }
+          const rres = await send<{ ok?: boolean; status?: number; data?: unknown }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: user.id, count: "40" } });
+          if (!rres?.ok) { toast(`Found @${user.handle} but couldn't read replies${rres?.status ? ` (HTTP ${rres.status})` : ""}.`); return; }
+          const samples = pickVoiceSamples(rres.data, user.id, 12);
+          if (!samples.length) { toast(`@${user.handle} (${user.followers.toLocaleString()} followers): no recent replies to learn from. Reply to a few posts, then retry.`); return; }
           const voice = buildVoiceProfile(user.handle, samples);
           const ta = document.getElementById("xvoice") as HTMLTextAreaElement | null;
-          if (ta) ta.value = voice;
+          if (ta) { ta.value = voice; ta.scrollIntoView({ block: "center" }); }
           await chrome.storage.local.set({ [CONFIG.X_VOICE_KEY]: voice });
-          top().innerHTML = `<div class="dim" style="margin:4px">Learned your voice from ${samples.length} recent repl${samples.length === 1 ? "y" : "ies"} by @${esc(user.handle)} (${user.followers.toLocaleString()} followers). Edit the voice box below if you like, then hit Save.</div>`;
+          toast(`Learned your voice from ${samples.length} repl${samples.length === 1 ? "y" : "ies"} by @${user.handle}. Review the voice box, then Save.`);
         } catch {
-          top().innerHTML = `<div class="empty">Voice-learning failed. Check your X data API host + key.</div>`;
+          toast("Voice-learning failed. Check your RapidAPI key.");
+        } finally {
+          btn.disabled = false; btn.textContent = orig ?? "Learn my voice";
         }
         break;
       }

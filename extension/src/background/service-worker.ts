@@ -203,19 +203,27 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
 
 /* ---------- Twttr (RapidAPI) X-data client ---------- */
 
-/** Call the user's BYO Twttr RapidAPI endpoint. Read-only enrichment (profiles,
- *  tweets, search). Key + host live in storage (popup settings); never bundled. */
+/** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
+ *  search). The host is fixed (CONFIG.TWTTR_HOST); only the BYO key lives in
+ *  storage (popup settings) and is never bundled. */
 async function twttrFetch(path: string, query?: Record<string, string>): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
-  const store = await chrome.storage.local.get([CONFIG.TWTTR_KEY_KEY, CONFIG.TWTTR_HOST_KEY]);
+  const store = await chrome.storage.local.get(CONFIG.TWTTR_KEY_KEY);
   const key = (store[CONFIG.TWTTR_KEY_KEY] as string) || "";
-  const host = ((store[CONFIG.TWTTR_HOST_KEY] as string) || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
-  if (!key || !host) return { ok: false, error: "no-twttr-config" };
+  if (!key) return { ok: false, error: "no-twttr-config" };
+  const host = CONFIG.TWTTR_HOST;
   const qs = query && Object.keys(query).length ? "?" + new URLSearchParams(query).toString() : "";
   try {
     const res = await fetch(`https://${host}/${path.replace(/^\//, "")}${qs}`, {
-      headers: { "x-rapidapi-key": key, "x-rapidapi-host": host },
+      headers: { "Content-Type": "application/json", "x-rapidapi-key": key, "x-rapidapi-host": host },
     });
-    if (!res.ok) return { ok: false, status: res.status, error: `twttr ${res.status}` };
+    if (!res.ok) {
+      // Surface the provider's rejection text (e.g. "You are not subscribed to this API.")
+      // so the user can tell a wrong/unsubscribed key from a rate limit, etc.
+      let detail = "";
+      try { detail = (await res.text()).replace(/\s+/g, " ").trim().slice(0, 160); } catch { /* ignore */ }
+      console.warn("[tab-butler] twttr", path, res.status, detail);
+      return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
+    }
     return { ok: true, data: await res.json() };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
