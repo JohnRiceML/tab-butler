@@ -1,0 +1,264 @@
+/**
+ * Unit test for the Twttr parsers, run with `node scripts/test-twttr.mjs`.
+ * twttr.ts has zero imports, so we transpile it with esbuild and import the
+ * result from a data URL — no build step, no test framework. Fixtures mirror
+ * the two real provider shapes (new GraphQL for /search-v3, legacy for /user
+ * and /user-replies-v2) exactly as observed from twitter241.p.rapidapi.com.
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import * as esbuild from "esbuild";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
+const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
+const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, buildVoiceProfile } = mod;
+
+let pass = 0,
+  fail = 0;
+function ok(cond, label) {
+  if (cond) { pass++; } else { fail++; console.error("  FAIL:", label); }
+}
+function eq(a, b, label) {
+  ok(JSON.stringify(a) === JSON.stringify(b), `${label} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
+}
+
+/* ---- /user (legacy shape) ---- */
+const userJson = {
+  user: {
+    result: {
+      __typename: "User",
+      rest_id: "2455740283",
+      legacy: { screen_name: "MrBeast", name: "MrBeast", description: "CEO", followers_count: 20700602, friends_count: 1924 },
+    },
+  },
+};
+const u = parseUser(userJson);
+eq(u.id, "2455740283", "parseUser id");
+eq(u.handle, "MrBeast", "parseUser handle");
+eq(u.followers, 20700602, "parseUser followers");
+eq(u.following, 1924, "parseUser following");
+// new-shape user (core + relationship_counts)
+const u2 = parseUser({ user: { result: { rest_id: "9", core: { screen_name: "alice", name: "Alice" }, relationship_counts: { followers: 5000, following: 10 } } } });
+eq(u2.followers, 5000, "parseUser new-shape followers");
+eq(u2.handle, "alice", "parseUser new-shape handle");
+ok(parseUser({}) === null, "parseUser empty -> null");
+
+/* ---- /search-v3 (new GraphQL shape) ---- */
+const searchJson = {
+  result: {
+    timeline_response: {
+      timeline: {
+        instructions: [
+          {
+            __typename: "TimelineAddEntries",
+            entries: [
+              {
+                __typename: "TimelineTimelineEntry",
+                content: {
+                  __typename: "TimelineTimelineItem",
+                  content: {
+                    __typename: "TimelineTweet",
+                    tweet_results: {
+                      result: {
+                        __typename: "Tweet",
+                        rest_id: "t1",
+                        core: {
+                          user_results: {
+                            result: {
+                              __typename: "User",
+                              rest_id: "u1",
+                              core: { name: "Alice", screen_name: "alice" },
+                              avatar: { image_url: "https://av/alice.jpg" },
+                              relationship_counts: { followers: 5000, following: 100 },
+                            },
+                          },
+                        },
+                        counts: { favorite_count: 36776, reply_count: 6089, retweet_count: 1411 },
+                        details: { full_text: "If USA wins the World Cup we are calling it soccer forever", created_at_ms: 1782079947000 },
+                        views: { count: "2723034" },
+                      },
+                    },
+                  },
+                },
+                entry_id: "tweet-t1",
+              },
+              // a reply (should be excluded from discovery)
+              {
+                content: {
+                  content: {
+                    __typename: "TimelineTweet",
+                    tweet_results: {
+                      result: {
+                        __typename: "Tweet",
+                        rest_id: "t2",
+                        core: { user_results: { result: { rest_id: "u2", core: { name: "Bob", screen_name: "bob" }, relationship_counts: { followers: 50 } } } },
+                        counts: { favorite_count: 4, reply_count: 1 },
+                        details: { full_text: "@alice good take", created_at_ms: 1782000000000 },
+                      },
+                    },
+                  },
+                },
+                entry_id: "tweet-t2",
+              },
+              // a reply marked ONLY by the structured field reply_to_results, with NO leading @ in the text
+              // (X strips the @mention on in-conversation replies) — the robust path, must still be caught
+              {
+                content: {
+                  content: {
+                    __typename: "TimelineTweet",
+                    tweet_results: {
+                      result: {
+                        __typename: "Tweet",
+                        rest_id: "t3",
+                        core: { user_results: { result: { rest_id: "u3", core: { name: "Cara", screen_name: "cara" }, relationship_counts: { followers: 300 } } } },
+                        counts: { favorite_count: 9, reply_count: 0 },
+                        details: { full_text: "this is the part everyone misses about distribution", created_at_ms: 1781999999000 },
+                        reply_to_results: { rest_id: "t1" },
+                      },
+                    },
+                  },
+                },
+                entry_id: "tweet-t3",
+              },
+              // a reply marked ONLY by reply_to_user_results (no reply_to_results, no @ prefix)
+              {
+                content: {
+                  content: {
+                    __typename: "TimelineTweet",
+                    tweet_results: {
+                      result: {
+                        __typename: "Tweet",
+                        rest_id: "t4",
+                        core: { user_results: { result: { rest_id: "u4", core: { name: "Dan", screen_name: "dan" }, relationship_counts: { followers: 80 } } } },
+                        counts: { favorite_count: 2, reply_count: 0 },
+                        details: { full_text: "agreed, shipping daily changed everything for us", created_at_ms: 1781888888000 },
+                        reply_to_user_results: { result: { rest_id: "u1" } },
+                      },
+                    },
+                  },
+                },
+                entry_id: "tweet-t4",
+              },
+              { content: { __typename: "TimelineTimelineCursor", cursor_type: "Bottom", value: "abc" }, entry_id: "cursor-bottom-0" },
+            ],
+          },
+        ],
+      },
+    },
+  },
+};
+const st = parseTimelineTweets(searchJson);
+eq(st.length, 4, "search parseTimeline count");
+const t1 = st.find((t) => t.id === "t1");
+eq(t1.author, "alice", "search author");
+eq(t1.name, "Alice", "search name");
+eq(t1.likes, 36776, "search likes");
+eq(t1.replies, 6089, "search replies");
+eq(t1.postedAt, 1782079947000, "search postedAt");
+eq(t1.avatar, "https://av/alice.jpg", "search avatar");
+eq(t1.followers, 5000, "search author followers");
+eq(t1.views, 2723034, "search views");
+eq(t1.isReply, false, "search t1 not a reply");
+const t2 = st.find((t) => t.id === "t2");
+eq(t2.isReply, true, "search t2 is a reply (@-prefixed)");
+const t3 = st.find((t) => t.id === "t3");
+eq(t3.isReply, true, "search reply via reply_to_results (no @ prefix)");
+const t4 = st.find((t) => t.id === "t4");
+eq(t4.isReply, true, "search reply via reply_to_user_results only (no @ prefix)");
+const disc = pickDiscoveryTweets(searchJson, 18);
+eq(disc.length, 1, "discovery drops all replies (structured + @-prefixed)");
+eq(disc[0].id, "t1", "discovery keeps original post");
+
+/* ---- /user-replies-v2 (legacy shape, with a conversation module) ---- */
+const meId = "me1";
+const reply = (rest_id, full_text, extra = {}) => ({
+  content: {
+    __typename: "TimelineTimelineItem",
+    itemContent: {
+      __typename: "TimelineTweet",
+      tweet_results: {
+        result: {
+          __typename: "Tweet",
+          rest_id,
+          core: { user_results: { result: { rest_id: meId, legacy: { screen_name: "me", name: "Me" } } } },
+          legacy: { full_text, favorite_count: 5, reply_count: 1, user_id_str: meId, in_reply_to_status_id_str: "x", created_at: "Sat Mar 23 16:18:30 +0000 2024", ...extra },
+        },
+      },
+    },
+  },
+  entryId: "tweet-" + rest_id,
+});
+const repliesJson = {
+  result: {
+    timeline: {
+      instructions: [
+        { type: "TimelineClearCache" },
+        {
+          // pinned original post by me (not a reply) — should not be a voice sample
+          entry: {
+            content: {
+              __typename: "TimelineTimelineItem",
+              itemContent: { __typename: "TimelineTweet", tweet_results: { result: { __typename: "Tweet", rest_id: "pin1", core: { user_results: { result: { rest_id: meId, legacy: { screen_name: "me", name: "Me" } } } }, legacy: { full_text: "No takesies backsies", favorite_count: 1, user_id_str: meId, created_at: "Mon May 09 14:42:25 +0000 2022" } } } },
+            },
+            entryId: "tweet-pin1",
+          },
+          type: "TimelinePinEntry",
+        },
+        {
+          type: "TimelineAddEntries",
+          entries: [
+            reply("r1", "@bob good point, the trick is to ship daily and measure what sticks"),
+            reply("r2", "@carol Netflix really missed out on a bag here, wild decision"),
+            reply("r3", "🥰"), // emoji-only — dropped
+            reply("r4", "ok"), // too short — dropped
+            // a who-to-follow module (TimelineUser items, no tweet_results) — ignored
+            {
+              content: {
+                __typename: "TimelineTimelineModule",
+                items: [
+                  { entryId: "wtf-1", item: { itemContent: { __typename: "TimelineUser", user_results: { result: { rest_id: "x" } } } } },
+                ],
+              },
+              entryId: "who-to-follow-1",
+            },
+            // a conversation module: someone else's original + my reply inside items[]
+            {
+              content: {
+                __typename: "TimelineTimelineModule",
+                items: [
+                  { entryId: "conv-a", item: { itemContent: { __typename: "TimelineTweet", tweet_results: { result: { __typename: "Tweet", rest_id: "orig1", core: { user_results: { result: { rest_id: "u9", legacy: { screen_name: "stranger", name: "Stranger" } } } }, legacy: { full_text: "Original post from someone else", favorite_count: 9, created_at: "Sat Mar 16 16:02:57 +0000 2024" } } } } } },
+                  { entryId: "conv-b", item: { itemContent: { __typename: "TimelineTweet", tweet_results: { result: { __typename: "Tweet", rest_id: "r5", core: { user_results: { result: { rest_id: meId, legacy: { screen_name: "me", name: "Me" } } } }, legacy: { full_text: "@stranger this is the part everyone misses about distribution", favorite_count: 7, user_id_str: meId, in_reply_to_status_id_str: "orig1", created_at: "Sat Mar 16 16:33:59 +0000 2024" } } } } } },
+                ],
+              },
+              entryId: "profile-conversation-1",
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
+const rt = parseTimelineTweets(repliesJson);
+ok(rt.some((t) => t.id === "r1"), "replies: top-level reply parsed");
+ok(rt.some((t) => t.id === "orig1"), "replies: module original parsed");
+ok(rt.some((t) => t.id === "r5"), "replies: module reply parsed");
+ok(rt.some((t) => t.id === "pin1"), "replies: pinned entry parsed");
+const samples = pickVoiceSamples(repliesJson, meId, 12);
+ok(samples.includes("good point, the trick is to ship daily and measure what sticks"), "voice: r1 mention stripped + kept");
+ok(samples.includes("this is the part everyone misses about distribution"), "voice: module reply kept");
+ok(!samples.some((s) => s === "🥰" || s === "ok"), "voice: drops emoji-only / too-short");
+ok(!samples.includes("No takesies backsies"), "voice: drops pinned original (prefers replies)");
+ok(samples.every((s) => !s.startsWith("@")), "voice: no leading @mentions remain");
+const vp = buildVoiceProfile("me", samples);
+ok(vp.includes("@me") && vp.includes("- good point"), "voice profile shape");
+
+/* ---- robustness ---- */
+eq(parseTimelineTweets(null), [], "null -> []");
+eq(parseTimelineTweets({}), [], "empty -> []");
+eq(pickVoiceSamples({}, "x"), [], "voice empty -> []");
+
+console.log(fail === 0 ? `\n✓ twttr parsers: ${pass} assertions passed` : `\n✗ twttr parsers: ${fail} failed, ${pass} passed`);
+process.exit(fail === 0 ? 0 : 1);

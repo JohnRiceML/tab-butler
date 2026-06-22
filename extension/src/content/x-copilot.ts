@@ -1,5 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
+import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -29,6 +30,11 @@ let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
+
+/** Twttr (X-data API) enrichment, all read-only + best-effort. */
+let xNiche = "";              // the niche query "Find spots" searches X for
+let myFollowers = 0;          // the user's own follower count, for the reach sweet-spot
+let twttrUnconfigured = false; // once the SW reports no key/host, stop trying until settings change
 
 /** product host -> favicon data URL. Fetched via the SW (google s2) and inlined
  *  as a data URL, since x.com's CSP blocks a direct external favicon <img>. */
@@ -82,7 +88,7 @@ function productContext(product?: ProductItem): string | undefined {
 const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -351,6 +357,59 @@ function rescan() {
   scan();
 }
 
+/* ---------- niche discovery (Twttr search → scored opportunities) ---------- */
+
+let findingSpots = false;
+/** Search X (via the Twttr API) for fresh posts in the user's niche, score them
+ *  with the same Claude scorer the feed uses, and drop the worthwhile ones into
+ *  the dock. These are OFF the current page: Draft/Copy work, but inserting into
+ *  a reply box needs the post opened (the panel/toast guide that). */
+async function findSpots() {
+  if (findingSpots) return;
+  if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to score posts."); return; }
+  const q = xNiche.trim();
+  if (!q) { toast("Set your niche in the Tab Butler popup so it knows what to search for."); return; }
+  findingSpots = true;
+  renderDock();
+  toast("Searching X for fresh posts in your niche…");
+  try {
+    const search = await send<{ ok?: boolean; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) },
+    });
+    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your X data API key + host in the Tab Butler popup to find spots."); return; }
+    if (!search?.ok) { toast("Couldn't reach X search. Check your X data API key/host in the popup."); return; }
+    if (!selfHandle) selfHandle = getSelf();
+    const found = pickDiscoveryTweets(search.data, 18)
+      .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle)
+      .filter((t) => !opps.has(t.id) && !seen.has(t.id));
+    if (!found.length) { toast("No new posts found for your niche right now."); return; }
+    const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
+    const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({ type: "SCORE_POSTS", posts });
+    if (resp?.error === "no-key") { toast("Add your Anthropic key in the Tab Butler popup to score posts."); return; }
+    if (!resp || resp.error) { toast("Couldn't score the posts — try again."); return; }
+    let added = 0;
+    for (const s of resp.scores ?? []) {
+      const t = found[s.i];
+      if (!t) continue;
+      const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
+      const category = catId(s.category);
+      const products = category === "promote" && Array.isArray(s.products)
+        ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
+        : undefined;
+      seen.set(t.id, { score: s.score, reason, category, products });
+      if (s.score >= THRESHOLD) {
+        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, postedAt: t.postedAt, likes: t.likes, replies: t.replies, avatar: t.avatar, name: t.name, followers: t.followers, source: "search" });
+        if (t.author && t.followers != null) authorReach.set(t.author.toLowerCase(), { followers: t.followers, at: Date.now() }); // search already told us the author's reach
+        added++;
+      }
+    }
+    toast(added ? `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.` : "Searched, but nothing scored high enough to surface.");
+  } finally {
+    findingSpots = false;
+    renderDock();
+  }
+}
+
 /* ---------- badge (idempotent; survives X re-renders via cache re-apply) ---------- */
 
 /** Validate a model-returned category against the known angle ids. */
@@ -506,16 +565,21 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
   return already ? "already" : "failed";
 }
 
-/** Locate a post by status id, falling back to matching its text (for the dock,
- *  where the original element may have been recycled by virtualization). The text
- *  fallback also requires the AUTHOR to match, so we never act on the wrong post. */
-function findPost(id: string, text?: string, author?: string): HTMLElement | null {
+/** Locate a post by status id. Falls back to matching its first 60 chars ONLY
+ *  for an element whose status id can't be read yet (its permalink anchor isn't
+ *  painted). An element with a DIFFERENT extractable id is a different tweet and
+ *  is never matched, so we can never act on a same-author lookalike. Off-page
+ *  opps (e.g. search-discovered, whose id is not in the DOM) find nothing, so
+ *  Insert degrades to the "open the post, then Insert" path. Pass no text to
+ *  force a strict id-only lookup. */
+function findPost(id: string, text?: string): HTMLElement | null {
   let byText: HTMLElement | null = null;
   const needle = text?.slice(0, 60);
   for (const a of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) {
     const info = statusInfo(a);
-    if (info?.id === id) return a; // id match wins
-    if (needle && !byText && outerText(a).startsWith(needle) && (!author || info?.author?.toLowerCase() === author.toLowerCase())) byText = a;
+    if (info?.id === id) return a;  // id match wins
+    if (info) continue;             // a different, identifiable tweet — never a fallback target
+    if (needle && !byText && outerText(a).startsWith(needle)) byText = a;
   }
   return byText;
 }
@@ -793,6 +857,7 @@ const DOCK_CSS = `
 .re { background:none; border:.5px solid rgba(214,154,92,.28); color:${ACCENT}; border-radius:999px;
       font:600 11px -apple-system,system-ui,sans-serif; padding:3px 9px; cursor:pointer; line-height:1.4; }
 .re:hover { background:rgba(214,154,92,.10); }
+.re:disabled { opacity:.6; cursor:default; }
 .dx { background:none; border:0; color:#8c7d68; font-size:14px; cursor:pointer; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:9px;
       color:#f3ead9; font:inherit; font-size:12px; padding:7px 10px; outline:none; }
@@ -817,6 +882,8 @@ const DOCK_CSS = `
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
 .bt.p { background:${ACCENT}; color:${INK}; border-color:transparent; font-weight:600; }
 .bt:disabled { opacity:.55; cursor:default; }
+.spot { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; padding:1px 7px; border-radius:999px;
+        background:rgba(48,209,88,.16); color:#6fcf7f; flex:0 0 auto; white-space:nowrap; }
 .empty { color:#8c7d68; font-size:12px; padding:14px; text-align:center; }
 `;
 
@@ -832,6 +899,84 @@ function ensureDock(): ShadowRoot {
   dockRoot.adoptedStyleSheets = [sheet];
   document.documentElement.appendChild(dockHost);
   return dockRoot;
+}
+
+/* ---------- author reach (Twttr X-data API, best-effort enrichment) ---------- */
+
+/** handle(lower) -> follower lookup. `followers` set once known; `pending`
+ *  while a request is in flight; `failed` + `at` to back off transient misses. */
+const authorReach = new Map<string, { followers?: number; at: number; pending?: boolean; failed?: boolean }>();
+const reachQueue: string[] = [];
+let reachInFlight = 0;
+let reachLookups = 0;            // lookup attempts this session (a failed author may retry after REACH_FAIL_TTL)
+const REACH_CONCURRENCY = 4;     // gentle on the 10 req/sec budget
+const REACH_CAP = 80;            // per-session ceiling — bounds cost
+const REACH_FAIL_TTL = 600_000;  // re-try a failed lookup after 10 min
+
+/** The known follower count for an opp's author, from a live lookup or (for
+ *  search-discovered opps) the count the search response already carried. */
+function knownFollowers(o: Opp): number | undefined {
+  return authorReach.get(o.author.toLowerCase())?.followers ?? o.followers;
+}
+
+/** Queue a follower lookup for `handle` if we don't already have/aren't fetching
+ *  it. Deduped, capped, and short-circuited when the X-data API isn't configured. */
+function maybeFetchReach(handle?: string): void {
+  if (twttrUnconfigured || reachLookups >= REACH_CAP) return;
+  const key = (handle || "").toLowerCase();
+  if (!key) return;
+  const e = authorReach.get(key);
+  if (e && (e.pending || e.followers != null)) return;
+  if (e?.failed && Date.now() - e.at < REACH_FAIL_TTL) return;
+  if (reachQueue.includes(key)) return;
+  reachQueue.push(key);
+  pumpReach();
+}
+
+function pumpReach(): void {
+  while (reachInFlight < REACH_CONCURRENCY && reachQueue.length && reachLookups < REACH_CAP && !twttrUnconfigured) {
+    const key = reachQueue.shift()!;
+    const cur = authorReach.get(key);
+    if (cur && cur.followers != null) continue;
+    reachInFlight++; reachLookups++;
+    authorReach.set(key, { ...cur, pending: true, at: Date.now() });
+    void send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: key } })
+      .then((resp) => {
+        if (resp?.error === "no-twttr-config") { twttrUnconfigured = true; authorReach.delete(key); return; }
+        const u = resp?.ok ? parseUser(resp.data) : null;
+        if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, at: Date.now() });
+        else authorReach.set(key, { failed: true, at: Date.now() });
+      })
+      .catch(() => authorReach.set(key, { failed: true, at: Date.now() }))
+      .finally(() => { reachInFlight--; renderDock(); pumpReach(); });
+  }
+}
+
+/** True when the author is in the "punch up but reachable" zone: 5x–25x the
+ *  user's own following. Replying under these gets real new-audience exposure
+ *  without being one of thousands of replies on a mega-account. */
+function inReachSweetSpot(o: Opp): boolean {
+  const f = knownFollowers(o);
+  if (!myFollowers || !f) return false;
+  const r = f / myFollowers;
+  return r >= 5 && r <= 25;
+}
+
+/** Audience factor for effectiveScore. Real follower count when known (lifts
+ *  bigger audiences, with a sweet-spot bump and a mega-account discount), else
+ *  the on-page likes proxy. */
+function reachFactor(o: Opp): number {
+  const f = knownFollowers(o);
+  if (f && f > 0) {
+    let r = Math.min(1.2, Math.max(0.5, 0.55 + Math.log10(f + 1) * 0.11)); // 1k:0.88 10k:0.99 100k:1.1 1M:1.2
+    if (myFollowers > 0) {
+      const ratio = f / myFollowers;
+      if (ratio >= 5 && ratio <= 25) r *= 1.08;   // sweet spot
+      else if (ratio > 500) r *= 0.94;            // you'd be buried among the replies
+    }
+    return Math.min(1.25, r);
+  }
+  return o.likes ? Math.min(1.2, 0.6 + Math.log10(o.likes + 1) * 0.12) : 0.7;
 }
 
 /** Reply-worthiness RIGHT NOW = content/fit (the model score) × how live the
@@ -852,7 +997,7 @@ function freshnessFactor(postedAt?: number): number {
   return 0.08;
 }
 function effectiveScore(o: Opp): number {
-  const reach = o.likes ? Math.min(1.2, 0.6 + Math.log10(o.likes + 1) * 0.12) : 0.7; // 0:0.7 100:0.84 1k:0.96 10k:1.08 100k+:1.2
+  const reach = reachFactor(o); // real follower count when known (Twttr), else the on-page likes proxy
   let buried = 1;
   if (o.likes && o.replies) {
     const ratio = o.replies / (o.likes + 1); // many replies per like = pile-on you get lost in
@@ -880,6 +1025,7 @@ function renderList(list: HTMLElement) {
     return;
   }
   for (const o of items) {
+    maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const it = document.createElement("div"); it.className = "it";
     const ia = document.createElement("div"); ia.className = "ia";
     if (o.avatar) { const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); ia.append(av); }
@@ -898,20 +1044,31 @@ function renderList(list: HTMLElement) {
       }
       ia.append(cc);
     }
+    if (inReachSweetSpot(o)) {
+      const sp = document.createElement("span"); sp.className = "spot"; sp.textContent = "◎ in reach";
+      sp.title = "This account is 5-25x your size. Replying here reaches a meaningfully bigger, still-attainable audience.";
+      ia.append(sp);
+    }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
-    const meta = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
+    const metaParts: string[] = [];
+    if (o.source === "search") metaParts.push("🔎 search");
+    const ml = metaLine({ postedAt: o.postedAt, likes: o.likes, replies: o.replies });
+    if (ml) metaParts.push(ml);
+    const fc = knownFollowers(o);
+    if (fc) metaParts.push(`${fmtCount(fc)} followers`);
+    const meta = metaParts.join(" · ");
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text, o.author), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
+    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.source === "search" ? undefined : o.text), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
     const follow = document.createElement("button"); follow.className = "bt";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "Following ✓" : "Follow";
     follow.disabled = isFollowed;
     follow.onclick = async () => {
       follow.disabled = true; follow.textContent = "Following…";
-      const r = await followAuthor(findPost(o.id, o.text, o.author));
+      const r = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
       if (r === "followed") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Followed @${o.author}.`); }
       else if (r === "already") { followed.add(o.author); follow.textContent = "Following ✓"; toast(`Already following @${o.author}.`); }
       else if (r === "paced") { follow.disabled = false; follow.textContent = "Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
@@ -965,6 +1122,12 @@ function renderDock() {
   re.title = "Rescan the page — re-check every visible post for new reply spots";
   re.onclick = () => rescan();
   acts.append(re);
+  const fs = document.createElement("button"); fs.className = "re";
+  fs.textContent = findingSpots ? "Searching…" : "✦ Find spots";
+  fs.title = "Search X for fresh posts in your niche (uses your X data API key)";
+  fs.disabled = findingSpots;
+  fs.onclick = () => void findSpots();
+  acts.append(fs);
   if (n) {
     const clr = document.createElement("button"); clr.className = "re"; clr.textContent = "Clear all";
     clr.title = "Clear every collected reply spot";
@@ -992,6 +1155,8 @@ async function boot() {
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
+  xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
+  myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
@@ -999,6 +1164,13 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
+    if (changes[CONFIG.TWTTR_KEY_KEY] || changes[CONFIG.TWTTR_HOST_KEY]) {
+      // X-data settings changed — let lookups try again and drop the failed-lookup backoff.
+      twttrUnconfigured = false;
+      for (const [k, v] of authorReach) if (v.failed) authorReach.delete(k);
+    }
   });
   renderDock();
   new MutationObserver(() => requestScan()).observe(document.body, { childList: true, subtree: true });
@@ -1009,7 +1181,7 @@ async function boot() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
     dismissPanel();
-    if (seen.size > 600) { seen.clear(); opps.clear(); } // bound memory across long sessions
+    if (seen.size > 600) { seen.clear(); opps.clear(); authorReach.clear(); } // bound memory across long sessions
     selfHandle = "";
     requestScan();
     renderDock();
