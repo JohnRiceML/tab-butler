@@ -374,9 +374,10 @@ async function findSpots() {
   toast("Searching X for fresh posts in your niche…");
   try {
     const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) },
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) }, intent: true,
     });
     if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Tab Butler popup to find spots."); return; }
+    if (search?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — Find spots is paused. It resets on the 1st."); return; }
     if (!search?.ok) {
       const s = search?.status;
       const why = s === 401 || s === 403 ? "Key invalid or not subscribed to twitter241 on RapidAPI." : "Check your RapidAPI key in the popup.";
@@ -948,6 +949,7 @@ function pumpReach(): void {
     void send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: key } })
       .then((resp) => {
         if (resp?.error === "no-twttr-config") { twttrUnconfigured = true; authorReach.delete(key); return; }
+        if (resp?.error?.startsWith("budget-")) { authorReach.set(key, { failed: true, at: Date.now() }); reachLookups--; return; } // no network spent: free the cap slot, back off via the fail-TTL
         const u = resp?.ok ? parseUser(resp.data) : null;
         if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, following: u.following, at: Date.now() });
         else authorReach.set(key, { failed: true, at: Date.now() });

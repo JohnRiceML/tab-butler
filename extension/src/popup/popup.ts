@@ -57,6 +57,11 @@ function idleLabel(min: number | undefined): string {
 function gib(bytes: number): number {
   return Math.round((bytes / 1073741824) * 10) / 10;
 }
+/** Human data size for the Twttr budget meter ("142 MB", "1.84 GB"). */
+function fmtData(bytes: number): string {
+  const mb = bytes / 1048576;
+  return mb < 1024 ? `${mb.toFixed(mb < 10 ? 1 : 0)} MB` : `${(mb / 1024).toFixed(2)} GB`;
+}
 
 const GROUP_HEX: Record<string, string> = {
   grey: "#5f6671", blue: "#0a84ff", red: "#ff453a", yellow: "#ffd60a",
@@ -90,6 +95,7 @@ interface ViewData {
   xDefaultProduct: string;
   twttrKey: string;
   xMyHandle: string;
+  twttrMeter: { requests: number; bytes: number } | null;
 }
 
 const MOCK: ViewData = {
@@ -113,6 +119,7 @@ const MOCK: ViewData = {
   xDefaultProduct: "",
   twttrKey: "",
   xMyHandle: "",
+  twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -156,6 +163,11 @@ async function getData(): Promise<ViewData> {
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
+  let twttrMeter: { requests: number; bytes: number } | null = null;
+  if (store[CONFIG.TWTTR_KEY_KEY]) {
+    try { twttrMeter = await send<{ requests: number; bytes: number }>({ type: "GET_TWTTR_METER" }); } catch { twttrMeter = null; }
+  }
+
   return {
     smart: Boolean(store[CONFIG.SMART_ENABLED_KEY]),
     pressure,
@@ -173,6 +185,7 @@ async function getData(): Promise<ViewData> {
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
+    twttrMeter,
   };
 }
 
@@ -293,7 +306,7 @@ function render(d: ViewData): string {
       <input id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value="" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
       ${d.twttrKey ? `<div class="dim" style="font-size:10.5px;margin-top:4px;color:var(--green)">✓ Key stored. The field stays blank for safety — leave it blank to keep the saved key.</div>` : ""}
       <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (twitter241 on RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
-    </div>
+      ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">This month: <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> / 10 GB · ${d.twttrMeter.requests.toLocaleString()} / 100k requests</div>` : ""}
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your X handle <span class="dim" style="font-weight:400">— powers reach-aware ranking &amp; voice-learning</span></div>
       <div style="display:flex;gap:8px">
@@ -421,7 +434,7 @@ async function doRecall(query: string) {
  *  on-page dock can size the "in reach" sweet-spot. Never throws. */
 async function resolveMyFollowers(handle: string): Promise<void> {
   try {
-    const res = await send<{ ok?: boolean; data?: unknown }>({ type: "TWTTR_GET", path: "user", query: { username: handle } });
+    const res = await send<{ ok?: boolean; data?: unknown }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
     const u = res?.ok ? parseUser(res.data) : null;
     if (u) await chrome.storage.local.set({ [CONFIG.X_MY_FOLLOWERS_KEY]: u.followers });
   } catch { /* best-effort */ }
@@ -554,8 +567,9 @@ async function dispatch(el: HTMLElement) {
         btn.disabled = true; btn.textContent = "Reading…";
         toast(`Reading @${handle}'s recent replies…`);
         try {
-          const ures = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle } });
+          const ures = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
           if (ures?.error === "no-twttr-config") { toast("No RapidAPI key saved yet — paste it above, then try again."); return; }
+          if (ures?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — voice-learning is paused. It resets on the 1st."); return; }
           if (!ures?.ok) { toast(`Couldn't reach the X API${ures?.status ? ` (HTTP ${ures.status})` : ""}. ${ures?.status === 401 || ures?.status === 403 ? "Key invalid or not subscribed to twitter241." : "Check your RapidAPI key."}${ures?.error ? ` — ${ures.error}` : ""}`); return; }
           const user = parseUser(ures.data);
           if (!user?.id) {
@@ -567,7 +581,8 @@ async function dispatch(el: HTMLElement) {
           await chrome.storage.local.set({ [CONFIG.X_MY_HANDLE_KEY]: user.handle, [CONFIG.X_MY_FOLLOWERS_KEY]: user.followers });
           const hEl = document.getElementById("xmyhandle") as HTMLInputElement | null;
           if (hEl) hEl.value = user.handle; // reflect the canonical handle so a later Save persists it (not the raw typed value)
-          const rres = await send<{ ok?: boolean; status?: number; data?: unknown }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: user.id, count: "40" } });
+          const rres = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: user.id, count: "40" }, intent: true });
+          if (rres?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — voice-learning is paused. It resets on the 1st."); return; }
           if (!rres?.ok) { toast(`Found @${user.handle} but couldn't read replies${rres?.status ? ` (HTTP ${rres.status})` : ""}.`); return; }
           const samples = pickVoiceSamples(rres.data, user.id, 12);
           if (!samples.length) { toast(`@${user.handle} (${user.followers.toLocaleString()} followers): no recent replies to learn from. Reply to a few posts, then retry.`); return; }

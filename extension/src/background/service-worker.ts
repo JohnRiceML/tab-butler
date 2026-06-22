@@ -2,6 +2,7 @@ import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast, getArchive } from "../lib/archive";
 import { advise, classify, draftReply, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
+import { governedFetch, readMeter } from "../lib/twttr-governor";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -205,29 +206,13 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
 
 /** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
  *  search). The host is fixed (CONFIG.TWTTR_HOST); only the BYO key lives in
- *  storage (popup settings) and is never bundled. */
-async function twttrFetch(path: string, query?: Record<string, string>): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
+ *  storage (popup settings) and is never bundled. Routed through the governor
+ *  (monthly budget meter + 8/sec token bucket + degradation + coalescing). */
+async function twttrFetch(path: string, query?: Record<string, string>, intent = false): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
   const store = await chrome.storage.local.get(CONFIG.TWTTR_KEY_KEY);
   const key = (store[CONFIG.TWTTR_KEY_KEY] as string) || "";
   if (!key) return { ok: false, error: "no-twttr-config" };
-  const host = CONFIG.TWTTR_HOST;
-  const qs = query && Object.keys(query).length ? "?" + new URLSearchParams(query).toString() : "";
-  try {
-    const res = await fetch(`https://${host}/${path.replace(/^\//, "")}${qs}`, {
-      headers: { "Content-Type": "application/json", "x-rapidapi-key": key, "x-rapidapi-host": host },
-    });
-    if (!res.ok) {
-      // Surface the provider's rejection text (e.g. "You are not subscribed to this API.")
-      // so the user can tell a wrong/unsubscribed key from a rate limit, etc.
-      let detail = "";
-      try { detail = (await res.text()).replace(/\s+/g, " ").trim().slice(0, 160); } catch { /* ignore */ }
-      console.warn("[tab-butler] twttr", path, res.status, detail);
-      return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
-    }
-    return { ok: true, data: await res.json() };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
+  return governedFetch(CONFIG.TWTTR_HOST, key, path, query, intent);
 }
 
 /* ---------- popup messaging ---------- */
@@ -273,7 +258,10 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         sendResponse({ favicons: await fetchFavicons(msg.hosts) });
         break;
       case "TWTTR_GET":
-        sendResponse(await twttrFetch(msg.path, msg.query));
+        sendResponse(await twttrFetch(msg.path, msg.query, msg.intent));
+        break;
+      case "GET_TWTTR_METER":
+        sendResponse(await readMeter());
         break;
       case "GET_STATE":
         sendResponse({

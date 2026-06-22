@@ -51,6 +51,9 @@ const wu = parseUser(wrappedUser);
 eq(wu.id, "2455740283", "parseUser wrapped result.data.user.result id");
 eq(wu.handle, "MrBeast", "parseUser wrapped handle (core.screen_name)");
 eq(wu.followers, 34750652, "parseUser wrapped followers (relationship_counts)");
+// following must be undefined (not a fake 0) when the response omits it — keeps reciprocity neutral
+const uNoFollow = parseUser({ user: { result: { rest_id: "5", legacy: { screen_name: "x", followers_count: 100 } } } });
+eq(uNoFollow.following, undefined, "following undefined when absent (not a broadcaster 0)");
 
 /* ---- /search-v3 (new GraphQL shape) ---- */
 const searchJson = {

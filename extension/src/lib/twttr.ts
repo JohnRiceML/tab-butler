@@ -19,7 +19,7 @@ export interface TwttrUser {
   name: string;      // display name
   bio: string;
   followers: number;
-  following: number;
+  following?: number; // undefined when the response omits it — distinct from a genuine 0 (a broadcaster)
 }
 
 /** A tweet, flattened from either the new or legacy shape. */
@@ -87,7 +87,7 @@ export function parseUser(json: any): TwttrUser | null {
     name: String(lg.name ?? core.name ?? handle ?? ""),
     bio: String(lg.description ?? r.profile_bio?.description ?? ""),
     followers: num(lg.followers_count) ?? num(rc.followers) ?? 0,
-    following: num(lg.friends_count) ?? num(rc.following) ?? 0,
+    following: num(lg.friends_count) ?? num(rc.following), // undefined when absent, so reciprocity stays neutral (not a fake broadcaster 0)
   };
 }
 
