@@ -1,6 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
+import { isDuplicateReply, normalizeReply, pickReplyNudge } from "../lib/reply-hygiene";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -516,9 +517,17 @@ function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = nul
 let draftGetEl: (() => HTMLElement | null) | null = null;
 let draftOppId: string | null = null;
 let draftOppAuthor = "";
-/** Reply pacing: spread across accounts + keep volume sane (both growth + anti-spam). */
-const repliedAuthors = new Set<string>();
-let replyTimes: number[] = [];
+/** Cross-session reply-reputation log. X penalties attach to the ACCOUNT (they
+ *  suppress reach ongoing, not per-reply), so this persists across navigations +
+ *  restarts: times = reply timestamps (rolling hour) for the volume guard,
+ *  authors = last-replied-at per handle for the spread guard, drafts = recent
+ *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
+interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; }
+let replyLog: ReplyLog = { times: [], authors: {}, drafts: [] };
+const HOUR_MS = 3_600_000;
+const AUTHOR_REPEAT_TTL = 3 * 24 * HOUR_MS; // "replied recently" window for the spread nudge
+const DRAFT_TTL = 24 * HOUR_MS;             // how long a reply counts toward the duplicate guard
+const DRAFT_MAX = 50;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
@@ -690,18 +699,25 @@ async function insertReply(text: string, postEl: HTMLElement | null): Promise<"o
 }
 
 let inserting = false;
-/** Gentle reply-pacing: spread across accounts and keep hourly volume sane —
- *  both a growth tactic and an anti-spam guard. Returns a one-off nudge or null. */
-function pacingNudge(): string | null {
+/** Record an inserted reply in the persisted reputation log and return the single
+ *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
+ *  Pattern-aware + cross-session, because X's penalties attach to the account. */
+function recordReplyAndNudge(text: string): string | null {
   const now = Date.now();
-  replyTimes = replyTimes.filter((t) => now - t < 3_600_000);
-  replyTimes.push(now);
-  const a = draftOppAuthor.toLowerCase();
-  const dup = !!a && repliedAuthors.has(a);
-  if (a) repliedAuthors.add(a);
-  if (dup) return `You already replied to @${draftOppAuthor} recently. Spreading across accounts grows faster.`;
-  if (replyTimes.length === 21) return "20+ replies this hour. X rewards quality over volume, so ease off.";
-  return null;
+  replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
+  const author = draftOppAuthor.toLowerCase();
+  const last = author ? replyLog.authors[author] : undefined;
+  const repeat = last != null && now - last < AUTHOR_REPEAT_TTL;
+  const norm = normalizeReply(text);
+  const recentNorms = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).map((d) => d.norm);
+  const duplicate = isDuplicateReply(norm, recentNorms);
+  // commit + persist (cross-session)
+  replyLog.times.push(now);
+  if (author) replyLog.authors[author] = now;
+  if (norm) replyLog.drafts.push({ norm, at: now });
+  replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
+  void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
+  return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
 }
 
 async function doInsert(text: string) {
@@ -715,7 +731,7 @@ async function doInsert(text: string) {
       // panel-open. Genuine, user-paced engagement, once per post.
       if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(el); }
       if (draftOppId) { opps.delete(draftOppId); renderDock(); }
-      const warn = pacingNudge();
+      const warn = recordReplyAndNudge(text);
       toast(warn || "Inserted into the reply box. Review it, then post.");
       dismissPanel();
     }
@@ -1181,6 +1197,15 @@ async function boot() {
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
   xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
   myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
+  const storedLog = await getLocal(CONFIG.X_REPLY_LOG_KEY);
+  if (storedLog && typeof storedLog === "object") {
+    const l = storedLog as Partial<ReplyLog>;
+    replyLog = {
+      times: Array.isArray(l.times) ? l.times : [],
+      authors: l.authors && typeof l.authors === "object" ? (l.authors as Record<string, number>) : {},
+      drafts: Array.isArray(l.drafts) ? l.drafts : [],
+    };
+  }
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
