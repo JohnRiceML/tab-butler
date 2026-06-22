@@ -201,6 +201,27 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
   return out;
 }
 
+/* ---------- Twttr (RapidAPI) X-data client ---------- */
+
+/** Call the user's BYO Twttr RapidAPI endpoint. Read-only enrichment (profiles,
+ *  tweets, search). Key + host live in storage (popup settings); never bundled. */
+async function twttrFetch(path: string, query?: Record<string, string>): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
+  const store = await chrome.storage.local.get([CONFIG.TWTTR_KEY_KEY, CONFIG.TWTTR_HOST_KEY]);
+  const key = (store[CONFIG.TWTTR_KEY_KEY] as string) || "";
+  const host = ((store[CONFIG.TWTTR_HOST_KEY] as string) || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (!key || !host) return { ok: false, error: "no-twttr-config" };
+  const qs = query && Object.keys(query).length ? "?" + new URLSearchParams(query).toString() : "";
+  try {
+    const res = await fetch(`https://${host}/${path.replace(/^\//, "")}${qs}`, {
+      headers: { "x-rapidapi-key": key, "x-rapidapi-host": host },
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: `twttr ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 /* ---------- popup messaging ---------- */
 
 chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
@@ -242,6 +263,9 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "GET_FAVICONS":
         sendResponse({ favicons: await fetchFavicons(msg.hosts) });
+        break;
+      case "TWTTR_GET":
+        sendResponse(await twttrFetch(msg.path, msg.query));
         break;
       case "GET_STATE":
         sendResponse({

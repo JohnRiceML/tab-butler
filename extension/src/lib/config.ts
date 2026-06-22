@@ -25,6 +25,8 @@ export const CONFIG = {
   X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
   X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
   X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
+  TWTTR_KEY_KEY: "twttrKey", // BYO RapidAPI key for the Twttr X-data API (read-only enrichment)
+  TWTTR_HOST_KEY: "twttrHost", // RapidAPI host for the Twttr API, e.g. twttrapi.p.rapidapi.com
 } as const;
 
 /**

@@ -87,6 +87,8 @@ interface ViewData {
   products: ProductItem[];
   xDefaultAngle: string;
   xDefaultProduct: string;
+  twttrKey: string;
+  twttrHost: string;
 }
 
 const MOCK: ViewData = {
@@ -108,6 +110,8 @@ const MOCK: ViewData = {
   products: [],
   xDefaultAngle: "",
   xDefaultProduct: "",
+  twttrKey: "",
+  twttrHost: "",
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -147,7 +151,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.TWTTR_HOST_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
@@ -166,6 +170,8 @@ async function getData(): Promise<ViewData> {
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
+    twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
+    twttrHost: (store[CONFIG.TWTTR_HOST_KEY] as string) || "",
   };
 }
 
@@ -280,6 +286,11 @@ function render(d: ViewData): string {
           ${d.products.filter((p) => p.name).map((p) => `<option value="${esc(p.name)}" ${d.xDefaultProduct === p.name ? "selected" : ""}>Product: ${esc(p.name)}</option>`).join("")}
         </select>` : ""}
       </div>
+    </div>
+    <div class="li" style="display:block">
+      <div class="name" style="margin-bottom:6px">X data API <span class="dim" style="font-weight:400">— RapidAPI key + host (powers reach-aware recs, search &amp; voice-learning)</span></div>
+      <input id="twttrhost" placeholder="host, e.g. twttrapi.p.rapidapi.com" value="${esc(d.twttrHost)}" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
+      <input id="twttrkey" type="password" placeholder="RapidAPI key" value="${esc(d.twttrKey)}" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -495,7 +506,9 @@ async function dispatch(el: HTMLElement) {
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
         const defAngle = (document.getElementById("xdefangle") as HTMLSelectElement | null)?.value ?? "";
         const defProduct = (document.getElementById("xdefproduct") as HTMLSelectElement | null)?.value ?? "";
-        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct });
+        const twttrHost = ((document.getElementById("twttrhost") as HTMLInputElement | null)?.value ?? "").trim();
+        const twttrKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.TWTTR_HOST_KEY]: twttrHost, [CONFIG.TWTTR_KEY_KEY]: twttrKey });
         const products = await saveProducts();
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
         await refresh(); // re-render so the product favicon previews update

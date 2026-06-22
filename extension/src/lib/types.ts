@@ -58,6 +58,7 @@ export type Message =
   | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string }[] }
   | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string }
   | { type: "GET_FAVICONS"; hosts: string[] }
+  | { type: "TWTTR_GET"; path: string; query?: Record<string, string> }
   | { type: "GET_STATE" };
 
 /** One of the user's products, for relevance-tagged promotion on X. */
