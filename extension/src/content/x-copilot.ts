@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus } from "../lib/reply-hygiene";
-import { humanDelayMs, typeChunks, jitterGap } from "../lib/human-pacing";
+import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -716,34 +716,12 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
       ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
     } catch { /* ignore */ }
   };
-  // Staggered insert: build the reply up in word-sized steps via insertText, so it
-  // doesn't land as one instant block. These are synthetic input events, NOT real
-  // keystrokes — the honest "mechanical" tell-reducer (the real anti-spam protection
-  // is the pattern layer; see human-pacing.ts). Best-effort: probes the first chunk
-  // and bails straight to the reliable instant-insert chain if DraftJS rejects it,
-  // and stops if the composer detaches mid-way.
-  const norm = (s: string) => s.replace(/​/g, "").replace(/\s+/g, " ").trim();
-  const want = norm(text);
-  const typeStaggered = async (): Promise<boolean> => {
-    if (!want) return false; // empty/whitespace — never report a phantom success
-    ce.focus();
-    await sleep(humanDelayMs("react"));
-    const chunks = typeChunks(text);
-    for (let i = 0; i < chunks.length; i++) {
-      if (!ce.isConnected) return false;        // composer navigated/recycled away — re-resolve via the fallback
-      placeCaretEnd(ce);
-      document.execCommand("insertText", false, chunks[i]);
-      if (i === 0 && norm(ce.textContent || "").length === 0) return false; // primitive rejected — bail fast
-      await sleep(humanDelayMs("type"));
-    }
-    return ce.isConnected && norm(ce.textContent || "").length >= want.length * 0.9; // landed (allow minor DraftJS normalization)
-  };
-
-  await sleep(80);
-  // Try the staggered path first; fall back to the instant-insert chain.
-  ce.focus();
-  if (await typeStaggered()) return true;
-  clear();
+  // Single reliable insert. DraftJS silently drops REPEATED programmatic inserts,
+  // so the reply goes in ONE shot via the proven exec/paste/beforeInput chain —
+  // typing it word-by-word left the box half-filled. A brief human pause before it
+  // is the only safe in-text cadence; the real human-pacing is the spaced-out
+  // like/follow actions (see likePost/followAuthor), not the keystrokes.
+  await sleep(80 + humanDelayMs("react"));
   for (const method of [exec, paste, beforeInput]) {
     ce.focus();
     if (filled()) clear();      // never stack onto a prior (slow) insert

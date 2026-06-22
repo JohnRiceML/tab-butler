@@ -304,7 +304,7 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
     ${row("ti-gauge", c, "Reply pace", `${s.repliesThisHour} in the last hour · X reads ~30/hr as automated`, bar)}
     ${row("ti-users", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
     ${row("ti-message-circle-check", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
-    ${row("ti-hand-finger", "#c68a4e", "Human-paced actions", "Replies build up in steps, not one instant block; likes &amp; follows spaced out, never fired in lockstep")}
+    ${row("ti-hand-finger", "#c68a4e", "Human-paced actions", "Likes &amp; follows are spaced out with human delays, never fired in lockstep — and nothing ever auto-posts")}
   </div>`;
 }
 
