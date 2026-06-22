@@ -1,7 +1,8 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
-import { isDuplicateReply, normalizeReply, pickReplyNudge } from "../lib/reply-hygiene";
+import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus } from "../lib/reply-hygiene";
+import { humanDelayMs, typeChunks, jitterGap } from "../lib/human-pacing";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -569,10 +570,17 @@ const liked = new Set<string>();
 /** Heart the OUTER post (skip the quoted tweet's bar). X's button is testid
  *  "like" only while UNliked — once liked it becomes "unlike", so a click here
  *  can only ever like, never un-like. No-op if the post is already liked. */
-function likePost(el: HTMLElement | null): void {
-  if (!el?.isConnected) return;
-  const btns = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="like"]'));
-  (btns.find((b) => !b.closest('[role="link"]')) || btns[0])?.click();
+function likePost(id: string | null, el: HTMLElement | null): void {
+  if (!id && !el?.isConnected) return;
+  // A human doesn't like in the same millisecond they finish a reply — land it a
+  // natural beat later. The timeline virtualizes, so re-resolve the post by id at
+  // click time (strict id match); never like a recycled element showing another tweet.
+  setTimeout(() => {
+    const target = id ? findPost(id) : (el?.isConnected ? el : null);
+    if (!target?.isConnected) return;
+    const btns = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="like"]'));
+    (btns.find((b) => !b.closest('[role="link"]')) || btns[0])?.click();
+  }, humanDelayMs("settle"));
 }
 
 /** Authors we've followed (or confirmed already-followed) this session. */
@@ -595,12 +603,14 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
   if (!el?.isConnected) return "failed";
   const now = Date.now();
   followTimes = followTimes.filter((t) => now - t < 3_600_000);
-  if ((followTimes.length && now - followTimes[followTimes.length - 1] < FOLLOW_MIN_GAP_MS) || followTimes.length >= FOLLOW_HOUR_CAP) return "paced";
+  // Jitter the floor so consecutive follows aren't a clockwork interval.
+  if ((followTimes.length && now - followTimes[followTimes.length - 1] < jitterGap(FOLLOW_MIN_GAP_MS)) || followTimes.length >= FOLLOW_HOUR_CAP) return "paced";
   const caret = Array.from(el.querySelectorAll<HTMLElement>('[data-testid="caret"]')).find((c) => !c.closest('[role="link"]'));
   if (!caret) return "failed";
   caret.click();
   const menu = await waitFor('[role="menu"]', 1500);
   if (!menu) return "failed";
+  await sleep(humanDelayMs("menu")); // a beat to "read" the menu before clicking
   const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'));
   const follow = items.find((it) => /^follow\b/i.test(it.textContent?.trim() || ""));
   if (follow) { follow.click(); followTimes.push(Date.now()); return "followed"; }
@@ -693,8 +703,34 @@ async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
       ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
     } catch { /* ignore */ }
   };
+  // Staggered insert: build the reply up in word-sized steps via insertText, so it
+  // doesn't land as one instant block. These are synthetic input events, NOT real
+  // keystrokes — the honest "mechanical" tell-reducer (the real anti-spam protection
+  // is the pattern layer; see human-pacing.ts). Best-effort: probes the first chunk
+  // and bails straight to the reliable instant-insert chain if DraftJS rejects it,
+  // and stops if the composer detaches mid-way.
+  const norm = (s: string) => s.replace(/​/g, "").replace(/\s+/g, " ").trim();
+  const want = norm(text);
+  const typeStaggered = async (): Promise<boolean> => {
+    if (!want) return false; // empty/whitespace — never report a phantom success
+    ce.focus();
+    await sleep(humanDelayMs("react"));
+    const chunks = typeChunks(text);
+    for (let i = 0; i < chunks.length; i++) {
+      if (!ce.isConnected) return false;        // composer navigated/recycled away — re-resolve via the fallback
+      placeCaretEnd(ce);
+      document.execCommand("insertText", false, chunks[i]);
+      if (i === 0 && norm(ce.textContent || "").length === 0) return false; // primitive rejected — bail fast
+      await sleep(humanDelayMs("type"));
+    }
+    return ce.isConnected && norm(ce.textContent || "").length >= want.length * 0.9; // landed (allow minor DraftJS normalization)
+  };
 
   await sleep(80);
+  // Try the staggered path first; fall back to the instant-insert chain.
+  ce.focus();
+  if (await typeStaggered()) return true;
+  clear();
   for (const method of [exec, paste, beforeInput]) {
     ce.focus();
     if (filled()) clear();      // never stack onto a prior (slow) insert
@@ -789,6 +825,7 @@ function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | 
 
 async function doInsert(text: string) {
   if (inserting) return; // ignore re-clicks while an insert is in flight (avoids doubling)
+  if (!text.replace(/​/g, "").trim()) { toast("The draft is empty — nothing to insert."); return; } // never like/count a phantom reply
   inserting = true;
   try {
     // Snapshot the opportunity + angle BEFORE we delete the card, for the feature log.
@@ -799,7 +836,7 @@ async function doInsert(text: string) {
     if (r === "ok") {
       // Like the post only now — once you've actually committed to replying, not on
       // panel-open. Genuine, user-paced engagement, once per post.
-      if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(el); }
+      if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(draftOppId, el); }
       const warn = recordReplyAndNudge(text, opp, angle); // counts today's reply + reputation guard + feature log
       if (draftOppId) opps.delete(draftOppId);
       renderDock(); // after the count, so the "N today" header reflects this reply
@@ -947,6 +984,7 @@ const DOCK_CSS = `
 .dh { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 8px; }
 .dt { font-weight:600; } .dt b { color:${ACCENT}; }
 .dsub { font-weight:400; font-size:10.5px; color:#8c7d68; margin-top:1px; }
+.pace { font-weight:500; white-space:nowrap; cursor:default; }
 .da { display:flex; align-items:center; gap:8px; }
 .re { background:none; border:.5px solid rgba(214,154,92,.28); color:${ACCENT}; border-radius:999px;
       font:600 11px -apple-system,system-ui,sans-serif; padding:3px 9px; cursor:pointer; line-height:1.4; }
@@ -1242,8 +1280,19 @@ function renderDock() {
   l1.append(document.createTextNode("Reply opportunities "), tb);
   const today = repliesToday();
   const sub = document.createElement("div"); sub.className = "dsub";
-  sub.textContent = today ? `${today} repl${today === 1 ? "y" : "ies"} sent today` : "no replies sent yet today";
-  sub.title = "Replies you've inserted through Tab Butler today (resets at local midnight).";
+  const cnt = document.createElement("span");
+  cnt.textContent = today ? `${today} sent today` : "none sent today";
+  cnt.title = "Replies you've inserted through Tab Butler today (resets at local midnight).";
+  sub.append(cnt);
+  // Live pace chip — surfaces the account-safety status in the moment you're replying.
+  const rhh = replyLog.times.filter((tm) => Date.now() - tm < HOUR_MS).length;
+  const st = reputationStatus(rhh);
+  const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
+  const chip = document.createElement("span"); chip.className = "pace";
+  chip.style.color = PACE_COLOR[st.level];
+  chip.textContent = `● ${st.label}`;
+  chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~${30}/hr as automated — Tab Butler keeps you under it and the on-page actions paced like a human.`;
+  sub.append(document.createTextNode(" · "), chip);
   t.append(l1, sub);
   const acts = document.createElement("div"); acts.className = "da";
   const re = document.createElement("button"); re.className = "re"; re.textContent = "⟳ Rescan";

@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/reply-hygiene.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { normalizeReply, jaccard, isDuplicateReply, pickReplyNudge } = mod;
+const { normalizeReply, jaccard, isDuplicateReply, pickReplyNudge, reputationStatus } = mod;
 
 let pass = 0, fail = 0;
 const eq = (a, b, l) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; else { fail++; console.error("  FAIL:", l, "got", JSON.stringify(a), "want", JSON.stringify(b)); } };
@@ -45,6 +45,14 @@ ok(/pace yourself/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 21, 
 eq(pickReplyNudge({ duplicate: false, repliesThisHour: 25, repeatAuthor: null }), null, "22-29 stays quiet (no nag)");
 ok(/@bob/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 5, repeatAuthor: "bob" })), "repeat author when calm");
 eq(pickReplyNudge({ duplicate: false, repliesThisHour: 5, repeatAuthor: null }), null, "no nudge when all clear");
+
+// reputationStatus: healthy < 20, caution 20-29, easeoff >= 30 (boundaries align with the nudges)
+eq(reputationStatus(0).level, "healthy", "0/hr healthy");
+eq(reputationStatus(19).level, "healthy", "19/hr healthy");
+eq(reputationStatus(20).level, "caution", "20/hr caution (soft line)");
+eq(reputationStatus(29).level, "caution", "29/hr caution");
+eq(reputationStatus(30).level, "easeoff", "30/hr easeoff (hard line)");
+eq(reputationStatus(45).level, "easeoff", "45/hr easeoff");
 
 console.log(fail === 0 ? `\n✓ reply hygiene: ${pass} assertions passed` : `\n✗ reply hygiene: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

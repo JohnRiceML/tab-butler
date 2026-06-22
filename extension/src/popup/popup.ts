@@ -2,6 +2,7 @@ import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
+import { reputationStatus, type RepLevel } from "../lib/reply-hygiene";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
@@ -121,6 +122,7 @@ interface ViewData {
   xMyHandle: string;
   twttrMeter: { requests: number; bytes: number } | null;
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
+  safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -169,6 +171,7 @@ const MOCK: ViewData = {
     { label: "Fr", count: 6, today: false }, { label: "Sa", count: 2, today: false },
     { label: "Su", count: 7, today: true },
   ] },
+  safety: { level: "healthy", label: "healthy pace", repliesThisHour: 6, accountsToday: 5 },
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -211,9 +214,13 @@ async function getData(): Promise<ViewData> {
   const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_REPLY_LOG_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number } | undefined;
+  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string }[] } | undefined;
   const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
   const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
+  const repliesThisHour = (log?.times || []).filter((t) => now - t < 3_600_000).length;
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+  const accountsToday = new Set((log?.sent || []).filter((s) => s.at >= midnight.getTime() && s.author).map((s) => s.author)).size;
+  const safety = { ...reputationStatus(repliesThisHour), repliesThisHour, accountsToday };
 
   let twttrMeter: { requests: number; bytes: number } | null = null;
   if (store[CONFIG.TWTTR_KEY_KEY]) {
@@ -239,6 +246,7 @@ async function getData(): Promise<ViewData> {
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
     twttrMeter,
     replyStats,
+    safety,
   };
 }
 
@@ -264,6 +272,39 @@ function replyShowcaseHTML(s: ViewData["replyStats"]): string {
     <div style="display:flex;gap:8px">${tile(s.today, "today")}${tile(s.week, "this week")}${tile(s.total, "all time")}</div>
     <div style="display:flex;align-items:flex-end;gap:7px;height:64px;margin-top:10px">${bars}</div>
     ${hint}
+  </div>`;
+}
+
+/** "Account safety" — surfaces the reputation/anti-spam protection so it's a
+ *  visible feature, not silent plumbing. Reads the same numbers the nudges use. */
+function accountSafetyHTML(s: ViewData["safety"]): string {
+  const HEX: Record<RepLevel, string> = { healthy: "#4fae6a", caution: "#e89a3c", easeoff: "#d6604a" };
+  const CAP: Record<RepLevel, string> = { healthy: "Healthy", caution: "Caution", easeoff: "Ease off" };
+  const SUB: Record<RepLevel, string> = {
+    healthy: "You're engaging like a person, not a bot — that's what keeps your reach safe.",
+    caution: "Approaching X's pace threshold — ease up a little to stay clearly human.",
+    easeoff: "You're near X's automation line — take a break before replying more.",
+  };
+  const c = HEX[s.level];
+  const pacePct = Math.min(100, Math.round((s.repliesThisHour / 30) * 100));
+  const row = (icon: string, color: string, title: string, detail: string, extra = "") =>
+    `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:.5px solid var(--line)">
+      <span style="flex:0 0 auto;width:24px;height:24px;border-radius:6px;background:${color}24;color:${color};display:inline-flex;align-items:center;justify-content:center;font-size:13px"><i class="ti ${icon}" aria-hidden="true"></i></span>
+      <div style="flex:1"><div style="font-size:12px;font-weight:500;color:var(--t1)">${title}</div><div style="font-size:10.5px;color:var(--t3);margin-top:2px;line-height:1.35">${detail}</div>${extra}</div>
+    </div>`;
+  const bar = `<div style="height:5px;border-radius:3px;background:var(--row);margin-top:6px;position:relative;overflow:hidden">
+    <div style="height:100%;width:${pacePct}%;background:${c};border-radius:3px"></div>
+    <div style="position:absolute;top:-2px;bottom:-2px;left:66%;width:1.5px;background:var(--t3)" title="pace-yourself line (20/hr)"></div></div>`;
+  return `<div class="li" style="display:block">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+      <div class="name">Account safety</div>
+      <span style="font-size:10.5px;font-weight:500;color:${c};background:${c}24;padding:3px 9px;border-radius:999px">● ${CAP[s.level]}</span>
+    </div>
+    <div style="font-size:10.5px;color:var(--t3);line-height:1.4">${SUB[s.level]}</div>
+    ${row("ti-gauge", c, "Reply pace", `${s.repliesThisHour} in the last hour · X reads ~30/hr as automated`, bar)}
+    ${row("ti-users", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
+    ${row("ti-message-circle-check", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
+    ${row("ti-hand-finger", "#c68a4e", "Human-paced actions", "Replies build up in steps, not one instant block; likes &amp; follows spaced out, never fired in lockstep")}
   </div>`;
 }
 
@@ -357,6 +398,7 @@ function render(d: ViewData): string {
   <div class="sec"><h2>X reply copilot</h2><label class="switch"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="list">
     ${replyShowcaseHTML(d.replyStats)}
+    ${accountSafetyHTML(d.safety)}
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— your niche/goals</span></div>
       <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>

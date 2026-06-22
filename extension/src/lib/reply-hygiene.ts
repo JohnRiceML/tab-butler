@@ -15,6 +15,17 @@
 export const REPLY_SOFT_PER_HOUR = 20; // gentle "pace yourself" nudge
 export const REPLY_HARD_PER_HOUR = 30; // X's automation-detection neighborhood — stay under
 
+export type RepLevel = "healthy" | "caution" | "easeoff";
+
+/** Overall reply-pace health from replies-in-the-last-hour, on the same soft/hard
+ *  lines the nudges use. Drives the dock pace chip + the popup "Account safety"
+ *  panel so the protection is visible: healthy < 20, caution 20–29, easeoff >= 30. */
+export function reputationStatus(repliesThisHour: number): { level: RepLevel; label: string } {
+  if (repliesThisHour >= REPLY_HARD_PER_HOUR) return { level: "easeoff", label: "ease off" };
+  if (repliesThisHour >= REPLY_SOFT_PER_HOUR) return { level: "caution", label: "pace yourself" };
+  return { level: "healthy", label: "healthy pace" };
+}
+
 /** Lowercase, drop links + punctuation, collapse whitespace — so trivial edits
  *  (caps, a different link, an added "!") still compare as the same reply. */
 export function normalizeReply(s: string): string {
