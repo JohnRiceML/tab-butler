@@ -8,7 +8,6 @@
     "https://api.anthropic.com/*",
     "http://localhost:3210/*",
     "https://YOUR-PROXY.vercel.app/*",
-    "https://www.google.com/s2/*",
     "https://*.p.rapidapi.com/*"
   ],
   "background": {

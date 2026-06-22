@@ -13,21 +13,22 @@ function esc(s: string): string {
   );
 }
 
-/** Favicon for a product URL, via Google's S2 service (works on extension pages). */
-function faviconUrl(url?: string): string | undefined {
-  if (!url || /^(javascript|data|blob|vbscript):/i.test(url.trim())) return undefined; // reject dangerous schemes
-  try {
-    const host = new URL(url.startsWith("http") ? url : `https://${url}`).hostname;
-    return host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32` : undefined;
-  } catch { return undefined; }
+/** A deterministic colored letter chip for a product — matches the on-page dock's
+ *  letter-avatars. No third-party favicon fetch (that path hit CORS + needed a host
+ *  permission re-add), so the popup has zero external image dependency. */
+function letterChip(name?: string): string {
+  const n = (name || "").trim();
+  const ch = (n[0] || "✦").toUpperCase();
+  let h = 0; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
+  const bg = n ? `hsl(${h % 360} 55% 42%)` : "#5a4a36";
+  return `<span style="flex:0 0 auto;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;background:${bg}">${esc(ch)}</span>`;
 }
 /** One editable product row: separate Name / URL / Description fields. */
 function productRow(p?: ProductItem): string {
   const ist = "width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:8px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none";
-  const fav = faviconUrl(p?.url);
   return `<div class="prodrow" style="border:.5px solid var(--line-strong);border-radius:10px;padding:8px;margin-bottom:8px">
     <div style="display:flex;gap:6px;align-items:center">
-      ${fav ? `<img src="${esc(fav)}" width="16" height="16" style="border-radius:4px;flex:0 0 auto" alt=""/>` : `<span style="flex:0 0 auto;width:16px;text-align:center;color:#c68a4e">✦</span>`}
+      ${letterChip(p?.name)}
       <input class="pname" placeholder="Product name" value="${esc(p?.name ?? "")}" style="${ist}"/>
       <button data-action="del-product" title="Remove product" style="flex:0 0 auto;background:none;border:0;color:#8c7d68;font-size:14px;cursor:pointer;padding:0 4px">✕</button>
     </div>

@@ -176,32 +176,6 @@ async function applyRec(
   return { done, label };
 }
 
-/* ---------- favicons ---------- */
-
-/** Fetch product favicons (google s2) and inline as data URLs so the content
- *  script can render them under x.com's CSP. Cached for the SW's lifetime. */
-const faviconMem = new Map<string, string>();
-async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  await Promise.all((hosts || []).map(async (host) => {
-    if (faviconMem.has(host)) { out[host] = faviconMem.get(host)!; return; }
-    let data = "";
-    try {
-      const res = await fetch(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`);
-      const ct = res.headers.get("content-type") || "";
-      if (res.ok && ct.startsWith("image/")) {
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        let bin = "";
-        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        data = `data:${ct};base64,${btoa(bin)}`;
-      }
-    } catch { /* ignore */ }
-    faviconMem.set(host, data); // cache success or negative ("") so we don't refetch a bad host
-    out[host] = data;
-  }));
-  return out;
-}
-
 /* ---------- Twttr (RapidAPI) X-data client ---------- */
 
 /** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
@@ -253,9 +227,6 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
-        break;
-      case "GET_FAVICONS":
-        sendResponse({ favicons: await fetchFavicons(msg.hosts) });
         break;
       case "TWTTR_GET":
         sendResponse(await twttrFetch(msg.path, msg.query, msg.intent));
