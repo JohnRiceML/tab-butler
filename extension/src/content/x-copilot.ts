@@ -1046,6 +1046,14 @@ function effectiveScore(o: Opp): number {
   return Math.max(0, Math.min(1, o.score * freshnessFactor(o.postedAt) * reach * buried));
 }
 
+/** An at-a-glance "is this good?" verdict for a spot, from its live effectiveScore
+ *  (which already folds in fit, freshness, reach, reply-pileup, and reciprocity). */
+function scoreVerdict(s: number): { label: string; color: string } {
+  if (s >= 0.55) return { label: "Strong", color: "#6fcf7f" }; // fresh + reachable + genuine fit
+  if (s >= 0.4) return { label: "Decent", color: ACCENT };
+  return { label: "Skip", color: "#8c7d68" };                  // stale, tiny audience, or engagement bait
+}
+
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
   return [...opps.values()]
@@ -1089,7 +1097,8 @@ function renderList(list: HTMLElement) {
       sp.title = "This account is 5-25x your size. Replying here reaches a meaningfully bigger, still-attainable audience.";
       ia.append(sp);
     }
-    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
+    const es = effectiveScore(o); const v = scoreVerdict(es);
+    const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${v.label} · ${Math.round(es * 100)}%`; sc.style.color = v.color; sc.title = "Is this worth replying to right now? Strong = fresh, reachable, genuine fit; Skip = stale, tiny audience, or engagement bait."; ia.append(sc);
     const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text;
     const metaParts: string[] = [];
     if (o.source === "search") metaParts.push("🔎 search");
