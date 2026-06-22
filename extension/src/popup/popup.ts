@@ -1,6 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
+import { REPLY_ANGLES } from "../lib/prompts";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -84,6 +85,8 @@ interface ViewData {
   xNiche: string;
   xVoice: string;
   products: ProductItem[];
+  xDefaultAngle: string;
+  xDefaultProduct: string;
 }
 
 const MOCK: ViewData = {
@@ -103,6 +106,8 @@ const MOCK: ViewData = {
   xNiche: "",
   xVoice: "",
   products: [],
+  xDefaultAngle: "",
+  xDefaultProduct: "",
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -142,7 +147,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
 
@@ -159,6 +164,8 @@ async function getData(): Promise<ViewData> {
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
+    xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
+    xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
   };
 }
 
@@ -260,6 +267,19 @@ function render(d: ViewData): string {
       <div id="prodrows">${(d.products.length ? d.products : [undefined]).map((p) => productRow(p)).join("")}</div>
       <button class="btn" data-action="add-product" style="padding:6px 11px;font-size:12px">+ Add product</button>
       <div class="dim" style="font-size:10.5px;margin-top:6px">On a "drop your product" post, the copilot tags the best-fit product and drafts with it.</div>
+    </div>
+    <div class="li" style="display:block">
+      <div class="name" style="margin-bottom:6px">Draft defaults <span class="dim" style="font-weight:400">— what each draft opens with</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="xdefangle" style="flex:1;min-width:130px;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none">
+          <option value="">Angle: Auto (per post)</option>
+          ${REPLY_ANGLES.map((a) => `<option value="${a.id}" ${d.xDefaultAngle === a.id ? "selected" : ""}>Angle: ${esc(a.label)}</option>`).join("")}
+        </select>
+        ${d.products.some((p) => p.name) ? `<select id="xdefproduct" style="flex:1;min-width:130px;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none">
+          <option value="">Product: Auto (best fit)</option>
+          ${d.products.filter((p) => p.name).map((p) => `<option value="${esc(p.name)}" ${d.xDefaultProduct === p.name ? "selected" : ""}>Product: ${esc(p.name)}</option>`).join("")}
+        </select>` : ""}
+      </div>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -473,7 +493,9 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
-        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice });
+        const defAngle = (document.getElementById("xdefangle") as HTMLSelectElement | null)?.value ?? "";
+        const defProduct = (document.getElementById("xdefproduct") as HTMLSelectElement | null)?.value ?? "";
+        await chrome.storage.local.set({ [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct });
         const products = await saveProducts();
         toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
         await refresh(); // re-render so the product favicon previews update

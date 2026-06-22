@@ -129,7 +129,7 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 /* ---------- X reply copilot (BYO-key) ---------- */
 
 export interface XPost { i: number; author: string; text: string; meta?: string; }
-export interface XScore { i: number; score: number; reason: string; category?: string; product?: number; }
+export interface XScore { i: number; score: number; reason: string; category?: string; products?: number[]; }
 
 /** Score posts for reply-worthiness given the user's niche. Cheap (Haiku).
  *  When products are supplied, the scorer also tags each PROMOTE post with the

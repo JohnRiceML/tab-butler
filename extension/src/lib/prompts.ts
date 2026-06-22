@@ -47,15 +47,15 @@ Calibrate hard — be selective: across a normal timeline only about 1 in 8–10
 Open-call posts that invite sharing (a roll call, build in public, "what are you building", "drop your project", "who's hiring", "show your work") are HIGH value to reply to when the user has something relevant to share: the reply is invited, not spam, and these threads drive real engagement. Score them 0.7+ when they fit the user's niche.
 
 Also CATEGORIZE each post with the single best reply angle for the user — exactly one id:
-- promote: an open call to share what you're building or your product ("drop your startup", "what are you building", build in public, show your work). The user can drop one of their products here. If a product list is provided, also set "product" to the 0-based index of the single best-fit product (omit if none clearly fits).
+- promote: an open call to share what you're building or your product ("drop your startup", "what are you building", build in public, show your work). The user can drop one of their products here. If a product list is provided, also set "products" to the 0-based indices of the product(s) that genuinely fit, most relevant first, up to 2 (omit if none clearly fits).
 - value: you can add a specific insight, tip, or piece of expertise
 - ask: a good place to ask one sharp, genuine question
 - support: worth backing with a substantive, specific endorsement
 - connect: a chance to relate personally and build rapport
 - joke: best met with a witty, on-point one-liner
 
-Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string,"category":"promote"|"value"|"ask"|"support"|"connect"|"joke","product"?:number}]}
-("product" is OPTIONAL — omit it entirely for every non-promote post, and for promote posts when no product list was given or none clearly fits.)`;
+Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":number,"reason":string,"category":"promote"|"value"|"ask"|"support"|"connect"|"joke","products"?:number[]}]}
+("products" is OPTIONAL — omit it entirely for every non-promote post, and for promote posts when no product list was given or none clearly fits.)`;
 
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
 

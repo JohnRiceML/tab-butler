@@ -175,6 +175,29 @@ async function applyRec(
   return { done, label };
 }
 
+/* ---------- favicons ---------- */
+
+/** Fetch product favicons (google s2) and inline as data URLs so the content
+ *  script can render them under x.com's CSP. Cached for the SW's lifetime. */
+const faviconMem = new Map<string, string>();
+async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await Promise.all((hosts || []).map(async (host) => {
+    if (faviconMem.has(host)) { out[host] = faviconMem.get(host)!; return; }
+    try {
+      const res = await fetch(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`);
+      if (!res.ok) return;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      const data = `data:${res.headers.get("content-type") || "image/png"};base64,${btoa(bin)}`;
+      faviconMem.set(host, data);
+      out[host] = data;
+    } catch { /* ignore */ }
+  }));
+  return out;
+}
+
 /* ---------- popup messaging ---------- */
 
 chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
@@ -213,6 +236,9 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
+        break;
+      case "GET_FAVICONS":
+        sendResponse({ favicons: await fetchFavicons(msg.hosts) });
         break;
       case "GET_STATE":
         sendResponse({

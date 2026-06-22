@@ -27,6 +27,40 @@ let scanCapNotified = false; // surface the per-session scan cap once, instead o
  *  Read from storage on boot and kept fresh via storage.onChanged. */
 let xProducts: ProductItem[] = [];
 let legacyProduct = "";
+let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
+let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
+
+/** product host -> favicon data URL. Fetched via the SW (google s2) and inlined
+ *  as a data URL, since x.com's CSP blocks a direct external favicon <img>. */
+const faviconCache = new Map<string, string>();
+function faviconHost(url?: string): string | undefined {
+  if (!url) return undefined;
+  try { return new URL(url.startsWith("http") ? url : `https://${url}`).hostname; } catch { return undefined; }
+}
+function faviconImg(url?: string): HTMLImageElement | undefined {
+  const host = faviconHost(url);
+  const data = host ? faviconCache.get(host) : undefined;
+  if (!data) return undefined;
+  const im = document.createElement("img"); im.className = "pfav"; im.src = data; im.alt = ""; im.onerror = () => im.remove();
+  return im;
+}
+async function loadFavicons(): Promise<void> {
+  const hosts = [...new Set(xProducts.map((p) => faviconHost(p.url)).filter((h): h is string => !!h && !faviconCache.has(h)))];
+  if (!hosts.length) return;
+  const resp = await send<{ favicons?: Record<string, string> }>({ type: "GET_FAVICONS", hosts });
+  let any = false;
+  for (const [h, d] of Object.entries(resp?.favicons || {})) if (d) { faviconCache.set(h, d); any = true; }
+  if (any) renderDock();
+}
+
+/** The angle a draft should open with: the user's default if set, else the scorer's pick. */
+function initialAngle(category?: string): string | undefined { return xDefaultAngle || category; }
+/** Which product to preselect among candidates: the user's default if present, else the first. */
+function defaultProductIndex(candidates: ProductItem[]): number {
+  if (!xDefaultProduct) return 0;
+  const i = candidates.findIndex((p) => p.name === xDefaultProduct);
+  return i >= 0 ? i : 0;
+}
 
 /** The product context string sent to the drafter: the (snapshotted) tagged
  *  product for a promote opp, else all current products (the drafter picks if a
@@ -39,10 +73,10 @@ function productContext(product?: ProductItem): string | undefined {
 }
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string; product?: ProductItem }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; product?: ProductItem; name?: string; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -259,7 +293,7 @@ async function flush() {
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
   batch.forEach((b) => inFlight.add(b.id));
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; product?: number }[]; error?: string }>({
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: number[] }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
@@ -276,13 +310,15 @@ async function flush() {
     if (!b) continue;
     const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
     const category = catId(s.category);
-    // Snapshot the resolved product OBJECT (not the index) so a later product
+    // Snapshot the resolved product OBJECT(s) (not indices) so a later product
     // edit can't make a stored index point at the wrong/missing product.
-    const product = category === "promote" && typeof s.product === "number" ? xProducts[s.product] : undefined;
+    const products = category === "promote" && Array.isArray(s.products)
+      ? s.products.map((i) => xProducts[i]).filter((p): p is ProductItem => !!p).slice(0, 2)
+      : undefined;
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category, product });
+    seen.set(b.id, { score: s.score, reason, category, products });
     if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, product, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
     } else {
@@ -375,6 +411,8 @@ const PANEL_CSS = `
 .ctx { font-size: 12px; color: #b6a892; max-height: 60px; overflow: auto; margin-bottom: 10px;
        border-left: 2px solid rgba(214,154,92,.25); padding-left: 8px; }
 .angles { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.prods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
+.plabel { font-size: 10.5px; color: #8c7d68; text-transform: uppercase; letter-spacing: .3px; }
 .ang { font: inherit; font-size: 11px; font-weight: 500; border-radius: 999px; padding: 4px 10px; cursor: pointer;
        border: .5px solid rgba(214,154,92,.28); background: #221c15; color: #cbb89c; }
 .ang:hover { background: rgba(214,154,92,.10); }
@@ -413,7 +451,7 @@ let replyTimes: number[] = [];
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; product?: string; name?: string; }
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; }
 let lastDraft: DraftReq | null = null;
 
 /** Posts already liked this session, so re-drafts / angle switches don't re-toggle. */
@@ -613,17 +651,31 @@ async function doInsert(text: string) {
 }
 
 async function draftFor(req: DraftReq) {
-  const { author, text, context, getEl, oppId, angle, avatar, product, name } = req;
+  const { author, text, context, getEl, oppId, angle, avatar, name } = req;
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
   draftOppAuthor = author;
+  // The picker lists ALL products when promoting (choose any); default-select the
+  // opp's best-fit product, else the user's default, else the first.
+  const candidates = angle === "promote" && xProducts.length ? xProducts : undefined;
+  let productIndex = req.productIndex;
+  if (productIndex == null && candidates) {
+    const preferred = req.products?.[0]?.name;
+    const pi = preferred ? candidates.findIndex((p) => p.name === preferred) : -1;
+    productIndex = pi >= 0 ? pi : defaultProductIndex(candidates);
+  }
+  productIndex = productIndex ?? 0;
+  req = { ...req, productIndex };
   lastDraft = req;
+  // The product to weave in: the chosen one when promoting, else all (drafter picks).
+  const product = candidates ? productContext(candidates[productIndex]) : productContext(undefined);
+  const ui = { angle, avatar, name, products: candidates, productIndex };
   const root = ensurePanel();
-  paintPanel(root, author, text, { loading: true, angle, avatar, name });
+  paintPanel(root, author, text, { loading: true, ...ui });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
-  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", angle, avatar, name });
-  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", angle, avatar, name });
-  else paintPanel(root, author, text, { draft: resp.reply ?? "", angle, avatar, name });
+  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", ...ui });
+  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
+  else paintPanel(root, author, text, { draft: resp.reply ?? "", ...ui });
 }
 
 /** The angle chips. Clicking re-drafts with that steer; clicking the active one
@@ -645,13 +697,28 @@ function angleRow(active?: string): HTMLElement {
   return row;
 }
 
+/** Product picker, shown when the active angle is Promote: pick which product to plug. */
+function productRow(candidates: ProductItem[], selected: number): HTMLElement {
+  const row = document.createElement("div"); row.className = "prods";
+  const lbl = document.createElement("span"); lbl.className = "plabel"; lbl.textContent = "Promote:"; row.append(lbl);
+  candidates.forEach((p, i) => {
+    const c = document.createElement("button");
+    c.className = "ang" + (i === selected ? " on" : "");
+    c.textContent = p.name;
+    c.title = p.blurb || p.name;
+    c.onclick = () => { const d = lastDraft; if (d) void draftFor({ ...d, productIndex: i }); };
+    row.appendChild(c);
+  });
+  return row;
+}
+
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
   const meta = info ? (opps.get(info.id) ?? seen.get(info.id)) : undefined;
-  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), getEl: () => el, oppId: info?.id, angle: meta?.category, avatar: avatarUrl(el), product: productContext(meta?.product), name: displayName(el) });
+  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), getEl: () => el, oppId: info?.id, angle: initialAngle(meta?.category), avatar: avatarUrl(el), products: meta?.products, name: displayName(el) });
 }
 
-function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string }) {
+function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
   const h = document.createElement("div"); h.className = "h";
@@ -663,6 +730,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
   h.append(th, x);
   const ctx = document.createElement("div"); ctx.className = "ctx"; ctx.textContent = text;
   p.append(h, ctx, angleRow(opts.angle));
+  if (opts.angle === "promote" && opts.products && opts.products.length) p.append(productRow(opts.products, opts.productIndex ?? 0));
   if (opts.loading) {
     const l = document.createElement("div"); l.className = "load"; l.textContent = "Drafting in your voice…"; p.append(l);
   } else if (opts.note) {
@@ -731,7 +799,9 @@ const DOCK_CSS = `
 .ir { color:#8c7d68; font-size:11px; }
 .cat { margin-left:7px; font-size:10px; font-weight:600; letter-spacing:.2px; text-transform:uppercase;
        padding:1px 7px; border-radius:999px; background:rgba(214,154,92,.16); color:${ACCENT};
-       max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:0 1 auto; }
+       max-width:170px; overflow:hidden; white-space:nowrap; flex:0 1 auto;
+       display:inline-flex; align-items:center; }
+.pfav { width:13px; height:13px; border-radius:3px; margin-right:4px; flex:0 0 auto; }
 .ib { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .bt { font:inherit; font-size:11.5px; font-weight:500; border-radius:8px; padding:4px 10px; cursor:pointer;
       border:.5px solid rgba(214,154,92,.18); background:#221c15; color:#f3ead9; }
@@ -807,8 +877,9 @@ function renderList(list: HTMLElement) {
     if (o.name) { const hd = document.createElement("span"); hd.className = "hndl"; hd.textContent = `@${o.author}`; ia.append(hd); }
     if (o.category) {
       const cc = document.createElement("span"); cc.className = "cat";
-      const pname = o.product?.name;
-      cc.textContent = pname ? `${catLabel(o.category)} · ${pname}` : catLabel(o.category);
+      for (const p of o.products || []) { const ic = faviconImg(p.url); if (ic) cc.append(ic); } // url icons show what fits
+      const names = (o.products || []).map((p) => p.name).filter(Boolean);
+      cc.append(document.createTextNode(names.length ? `${catLabel(o.category)} · ${names.join(" + ")}` : catLabel(o.category)));
       ia.append(cc);
     }
     const sc = document.createElement("span"); sc.className = "sc"; sc.textContent = `${Math.round(effectiveScore(o) * 100)}%`; ia.append(sc);
@@ -817,7 +888,7 @@ function renderList(list: HTMLElement) {
     const ir = document.createElement("div"); ir.className = "ir"; ir.textContent = o.reason;
     const ib = document.createElement("div"); ib.className = "ib";
     const draft = document.createElement("button"); draft.className = "bt p"; draft.textContent = "Draft reply";
-    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text, o.author), oppId: o.id, angle: o.category, avatar: o.avatar, product: productContext(o.product), name: o.name });
+    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.text, o.author), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
     const follow = document.createElement("button"); follow.className = "bt";
     const isFollowed = followed.has(o.author);
     follow.textContent = isFollowed ? "Following ✓" : "Follow";
@@ -903,10 +974,15 @@ async function boot() {
   const storedProducts = await getLocal(CONFIG.X_PRODUCTS_KEY);
   xProducts = Array.isArray(storedProducts) ? (storedProducts as ProductItem[]) : [];
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
+  xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
+  xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
+  void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes[CONFIG.X_PRODUCTS_KEY]) xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || [];
+    if (changes[CONFIG.X_PRODUCTS_KEY]) { xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || []; void loadFavicons(); }
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
   });
   renderDock();
   new MutationObserver(() => requestScan()).observe(document.body, { childList: true, subtree: true });

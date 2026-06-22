@@ -23,6 +23,8 @@ export const CONFIG = {
   X_VOICE_KEY: "xVoice", // reply voice / examples
   X_PRODUCT_KEY: "xProduct", // legacy single-product string (fallback)
   X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
+  X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
+  X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
 } as const;
 
 /**

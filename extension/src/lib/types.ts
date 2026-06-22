@@ -57,6 +57,7 @@ export type Message =
   | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
   | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string }[] }
   | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string }
+  | { type: "GET_FAVICONS"; hosts: string[] }
   | { type: "GET_STATE" };
 
 /** One of the user's products, for relevance-tagged promotion on X. */
