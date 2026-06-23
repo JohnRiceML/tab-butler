@@ -1119,6 +1119,26 @@ const DOCK_CSS = `
 .paused { padding:26px 18px 22px; text-align:center; }
 .pttl { font-weight:600; font-size:14px; color:#cbb89c; }
 .pcopy { font-size:12px; color:#8c7d68; line-height:1.5; margin:7px 0 14px; }
+/* Goobi's in-dock playground — springs open when you tap him */
+.dplay { overflow:hidden; }
+.dpg { padding:8px 14px 16px; }
+.dpg-stage { position:relative; height:128px; border-radius:14px; background:#221c15; border:.5px solid rgba(214,154,92,.12); display:flex; align-items:flex-end; justify-content:center; padding-bottom:18px; cursor:pointer; }
+.dpg-shadow { position:absolute; bottom:14px; width:46px; height:9px; background:rgba(0,0,0,.3); border-radius:50%; filter:blur(2px); }
+.dpg-msg { text-align:center; font-size:12.5px; color:#cbb89c; min-height:17px; margin:11px 0 9px; }
+.dpg-meter { height:9px; border-radius:6px; background:#221c15; border:.5px solid rgba(214,154,92,.12); overflow:hidden; }
+.dpg-fill { height:100%; width:0%; background:linear-gradient(90deg,#f4b07e,#f4411f); border-radius:6px; transition:width .4s cubic-bezier(.34,1.56,.64,1); }
+.dpg-lbl { display:flex; justify-content:space-between; font-size:10.5px; color:#8c7d68; margin-top:5px; }
+.dpg-treats { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; min-height:6px; }
+.dpg-treat { width:28px; height:28px; border-radius:50%; border:0; cursor:pointer; background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f); box-shadow:0 1px 3px rgba(0,0,0,.35); transition:transform .1s; }
+.dpg-treat:hover { transform:scale(1.14); }
+.dpg-treat:active { transform:scale(.9); }
+.dpg-row { display:flex; gap:8px; align-items:center; margin-top:16px; }
+.dpg-hunt { flex:1; border:0; border-radius:10px; padding:10px; font:600 13px inherit; cursor:pointer; background:#3a322a; color:#8c7d68; transition:background .25s,color .25s,box-shadow .25s; }
+.dpg-hunt.ready { background:linear-gradient(90deg,#f4b07e,#f4411f); color:#1a1206; box-shadow:0 4px 14px rgba(244,65,31,.35); animation:dpg-pulse 1.7s ease-in-out infinite; }
+.dpg-hunt:disabled { cursor:default; }
+.dpg-back { border:0; background:none; color:#8c7d68; font:600 13px inherit; cursor:pointer; padding:10px 12px; }
+.dpg-back:hover { color:#cbb89c; }
+@keyframes dpg-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.03)} }
 `;
 
 let dockHost: HTMLElement | null = null;
@@ -1518,6 +1538,146 @@ function renderList(list: HTMLElement) {
   }
 }
 
+/* ---------- Goobi's in-dock playground ---------- */
+
+let dockPlayOpen = false;                          // the playground is expanded inside the dock
+let goobiPlayHandle: GoobiHandle | null = null;    // the big, interactive Goobi in the playground
+let goobiFed = 0, goobiPets = 0;                   // this session's care → earns a hunt
+const goobiFedIds = new Set<string>();             // treats eaten this open-session (so re-renders don't re-show them)
+const PLAY_HAPPY = 3;                              // fed×2 + pets needed before Goobi will go hunting
+function playHappiness(): number { return goobiFed * 2 + goobiPets; }
+function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
+function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }
+
+/** Sync the meter + hunt button to the live happiness (called after every feed/pet). */
+function syncPlay(): void {
+  if (!dockRoot) return;
+  const pct = Math.min(100, Math.round((playHappiness() / PLAY_HAPPY) * 100));
+  const ready = playReady();
+  const fill = dockRoot.querySelector<HTMLElement>("#dpg-fill"); if (fill) fill.style.width = pct + "%";
+  const en = dockRoot.querySelector("#dpg-energy"); if (en) en.textContent = ready ? "ready!" : pct + "%";
+  const hunt = dockRoot.querySelector<HTMLButtonElement>("#dpg-hunt");
+  if (hunt) {
+    hunt.classList.toggle("ready", ready);
+    hunt.disabled = !ready;
+    hunt.textContent = ready ? "↻ Let's go hunt!" : "Cheer Goobi up first…";
+    hunt.title = ready ? "Goobi's pumped — rescan the page for fresh reply spots" : "Feed or pet Goobi until he's happy, then he'll go find posts for you.";
+  }
+}
+
+function petGoobi(): void {
+  goobiPets++;
+  goobiPlayHandle?.setMood("cheer");
+  setTimeout(() => goobiPlayHandle?.setMood(playReady() ? "cheer" : "idle"), 1200);
+  const msg = dockRoot?.querySelector("#dpg-msg");
+  if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥", "more!"]; msg.textContent = playReady() ? "Goobi's pumped — send him hunting! ↻" : lines[Math.floor(Math.random() * lines.length)]; }
+  syncPlay();
+}
+
+function feedTreat(b: HTMLButtonElement, rec: SentRecord, snip: string): void {
+  const id = String(rec.at);
+  if (goobiFedIds.has(id)) return;
+  goobiFedIds.add(id);
+  const stage = dockRoot?.querySelector<HTMLElement>(".dpg-stage");
+  const r = b.getBoundingClientRect();
+  b.remove(); // pull it from the row now; the chomp + meter land when it arrives
+  const arrive = () => {
+    goobiFed++;
+    goobiPlayHandle?.setMood("love");
+    setTimeout(() => goobiPlayHandle?.setMood(playReady() ? "cheer" : "idle"), 1400);
+    const msg = dockRoot?.querySelector("#dpg-msg");
+    if (msg) msg.textContent = playReady() ? "Goobi's pumped — send him hunting! ↻" : `nom! "${snip.length > 32 ? snip.slice(0, 32) + "…" : snip}"`;
+    syncPlay();
+  };
+  if (stage && typeof b.animate === "function") {
+    const sr = stage.getBoundingClientRect();
+    const fly = document.createElement("div");
+    fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none`;
+    document.documentElement.appendChild(fly);
+    const dx = sr.left + sr.width / 2 - (r.left + r.width / 2);
+    const dy = sr.top + sr.height * 0.6 - (r.top + r.height / 2);
+    fly.animate([
+      { transform: "translate(0,0) scale(1)", opacity: 1 },
+      { transform: `translate(${dx * 0.5}px,${dy * 0.5 - 30}px) scale(.85)`, opacity: 1, offset: 0.55 },
+      { transform: `translate(${dx}px,${dy}px) scale(.2)`, opacity: 0 },
+    ], { duration: 440, easing: "cubic-bezier(.5,0,.6,1)" }).onfinish = () => { fly.remove(); arrive(); };
+  } else { arrive(); }
+}
+
+/** Build the playground panel (rendered at natural size; togglePlay handles the spring). */
+function buildPlay(): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "dplay";
+  const pg = document.createElement("div"); pg.className = "dpg";
+
+  const stage = document.createElement("div"); stage.className = "dpg-stage"; stage.title = "Tap to pet Goobi";
+  stage.append(Object.assign(document.createElement("div"), { className: "dpg-shadow" }));
+  stage.onclick = () => petGoobi();
+  pg.append(stage);
+
+  const today = todaySent();
+  const msg = document.createElement("div"); msg.className = "dpg-msg"; msg.id = "dpg-msg";
+  msg.textContent = today.length ? "Feed Goobi today's replies — tap a treat." : "Pet Goobi to pep him up, then send him hunting.";
+  pg.append(msg);
+
+  const meter = document.createElement("div"); meter.className = "dpg-meter";
+  meter.append(Object.assign(document.createElement("div"), { className: "dpg-fill", id: "dpg-fill" }));
+  pg.append(meter);
+  const lbl = document.createElement("div"); lbl.className = "dpg-lbl";
+  lbl.append(Object.assign(document.createElement("span"), { textContent: "Goobi's energy" }), Object.assign(document.createElement("span"), { id: "dpg-energy" }));
+  pg.append(lbl);
+
+  const treats = document.createElement("div"); treats.className = "dpg-treats"; treats.id = "dpg-treats";
+  today.forEach((rec) => {
+    if (goobiFedIds.has(String(rec.at))) return;
+    const snip = rec.snippet || "a reply you sent";
+    const b = document.createElement("button"); b.className = "dpg-treat"; b.title = snip;
+    b.onclick = () => feedTreat(b, rec, snip);
+    treats.append(b);
+  });
+  pg.append(treats);
+
+  const row = document.createElement("div"); row.className = "dpg-row";
+  const back = document.createElement("button"); back.className = "dpg-back"; back.textContent = "‹ Posts"; back.title = "Back to your reply spots"; back.onclick = () => closePlay();
+  const hunt = document.createElement("button"); hunt.className = "dpg-hunt"; hunt.id = "dpg-hunt"; hunt.onclick = () => { if (playReady()) closePlay(() => rescan()); };
+  row.append(back, hunt);
+  pg.append(row);
+
+  wrap.append(pg);
+  return wrap;
+}
+
+/** Framer-ish spring: panel height eases open, inner content overshoots in. */
+function springOpen(panel: HTMLElement): void {
+  if (typeof panel.animate !== "function") return;
+  const inner = panel.firstElementChild as HTMLElement | null;
+  const h = panel.scrollHeight;
+  panel.animate([{ height: "0px" }, { height: h + "px" }], { duration: 380, easing: "cubic-bezier(.16,1,.3,1)" })
+    .onfinish = () => { panel.style.height = ""; };
+  inner?.animate([
+    { opacity: 0, transform: "translateY(10px) scale(.98)" },
+    { opacity: 1, transform: "translateY(0) scale(1)" },
+  ], { duration: 460, easing: "cubic-bezier(.34,1.56,.64,1)" });
+}
+function springClose(panel: HTMLElement, done: () => void): void {
+  if (typeof panel.animate !== "function") { done(); return; }
+  const h = panel.scrollHeight;
+  panel.animate([{ height: h + "px", opacity: 1 }, { height: "0px", opacity: 0 }], { duration: 260, easing: "cubic-bezier(.4,0,1,1)" }).onfinish = done;
+}
+
+function openPlay(): void {
+  if (dockPlayOpen || paused) return;
+  dockPlayOpen = true; goobiFed = 0; goobiPets = 0; goobiFedIds.clear();
+  renderDock();
+  const panel = dockRoot?.querySelector<HTMLElement>(".dplay");
+  if (panel) springOpen(panel);
+}
+function closePlay(then?: () => void): void {
+  const panel = dockRoot?.querySelector<HTMLElement>(".dplay");
+  const finish = () => { dockPlayOpen = false; goobiPlayHandle?.destroy(); goobiPlayHandle = null; renderDock(); then?.(); };
+  if (panel) springClose(panel, finish); else finish();
+}
+function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : openPlay(); }
+
 function renderDock() {
   if (!enabled || invalidated) return;
   const root = ensureDock();
@@ -1546,7 +1706,7 @@ function renderDock() {
   }
   const d = document.createElement("div"); d.className = "d";
   const gstat = goobiStatus();
-  const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to look for posts`; gh.onclick = () => rescan();
+  const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to play`; gh.onclick = () => togglePlay();
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
   const today = repliesToday();
@@ -1567,7 +1727,7 @@ function renderDock() {
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
-  if (!paused) {
+  if (!paused && !dockPlayOpen) {
     const re = document.createElement("button"); re.className = "scanb"; re.textContent = findingSpots ? "Searching…" : "↻ Scan again";
     re.title = "Rescan the page for new posts worth replying to";
     re.disabled = findingSpots;
@@ -1607,6 +1767,18 @@ function renderDock() {
     d.append(p);
     root.appendChild(d);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood("sleeping"); // resting while paused
+    return;
+  }
+
+  // Goobi's playground — tap him to expand it in place of the post list.
+  if (dockPlayOpen) {
+    const play = buildPlay();
+    d.append(play);
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    const stage = play.querySelector<HTMLElement>(".dpg-stage");
+    if (stage) { goobiPlayHandle?.destroy(); goobiPlayHandle = mountGoobi(stage, { cell: 4, playful: true }); goobiPlayHandle.setMood(playReady() ? "cheer" : "idle"); }
+    syncPlay();
     return;
   }
 

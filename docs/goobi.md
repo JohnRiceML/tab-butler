@@ -69,8 +69,18 @@ Working-state flips (search/analyze/draft) update Goobi **in place** via
 
 ## Where he lives
 
-- **On-page X dock** (`x-copilot.ts`): top of the dock as its face (tap → rescan),
-  and as the icon on the minimized launcher pill (dark pill so the coral pops).
+- **On-page X dock** (`x-copilot.ts`): top of the dock as its face (**tap → the
+  in-dock playground**, see below), and as the icon on the minimized launcher pill
+  (dark pill so the coral pops).
+- **In-dock playground** (`x-copilot.ts`, `dockPlayOpen` + `buildPlay`): tapping
+  the dock Goobi springs a playground open in place of the post list (Framer-ish —
+  `springOpen`/`springClose` ease the panel height while the inner content
+  overshoots in). A bigger interactive Goobi (cell 4, `playful`), today's replies
+  as treats (`todaySent`, each flies into his mouth on feed), and tap-to-pet. Care
+  fills an **energy meter** (`playHappiness` = fed×2 + pets); at `PLAY_HAPPY` the
+  **"↻ Let's go hunt!"** button unlocks and glows — clicking it collapses the
+  playground and triggers `rescan()`. So a scan is something you *earn* by looking
+  after him. Happiness resets each time the playground opens.
 - **Side-panel header** (`popup.ts`): the logo; mirrors pace (`worn` at ease-off,
   else `idle`). Click him → **the playground**.
 - **Playground** (`popup.ts` `renderPlayground`): a Tamagotchi room. Treats = the
