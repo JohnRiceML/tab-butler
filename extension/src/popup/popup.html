@@ -55,7 +55,11 @@
       .g-wobble { animation: g-wobble 1.6s ease-in-out infinite; }
       .g-tada { animation: g-tada .9s ease-in-out infinite; }
       .g-trick { animation: g-trick 1.05s ease-in-out infinite; }
+      .g-spin { animation: g-spin .9s ease-in-out infinite; }
+      .g-flip { animation: g-flip .85s ease-in-out infinite; }
       @keyframes g-trick { 0% { transform: rotate(0) translateY(0) scale(1); } 18% { transform: rotate(-12deg) translateY(-34%) scale(1.06); } 60% { transform: rotate(360deg) translateY(0) scale(1.06); } 80% { transform: rotate(360deg) translateY(-12%) scale(1); } 100% { transform: rotate(360deg) translateY(0) scale(1); } }
+      @keyframes g-spin { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(1.08); } 100% { transform: rotate(360deg) scale(1); } }
+      @keyframes g-flip { 0% { transform: translateY(0) rotate(0); } 40% { transform: translateY(-48%) rotate(-180deg); } 70% { transform: translateY(-12%) rotate(-360deg); } 100% { transform: translateY(0) rotate(-360deg); } }
       .g-think { animation: g-think 1.5s ease-in-out infinite; }
       .g-love { animation: g-love .85s ease-in-out infinite; }
       @keyframes g-love { 0%,100% { transform: translateY(0) scale(1,1) rotate(0); } 25% { transform: translateY(-13%) scale(1.04,.96) rotate(-4deg); } 50% { transform: translateY(0) scale(1.07,.93); } 75% { transform: translateY(-13%) scale(1.04,.96) rotate(4deg); } }

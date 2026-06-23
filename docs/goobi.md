@@ -35,7 +35,7 @@ a timer or lets one animation bleed into the next.
 | `thinking` | eyes scan up-around | `g-think` | analyzing (Claude scoring) / drafting |
 | `happy` | `^‿^` | `g-bob` | follow; (legacy reply beat) |
 | `cheer` | `^‿^` + shimmy | `g-tada` | streak / welcome-back / pet |
-| `trick` | `^‿^` + hop-and-360-spin | `g-trick` | playground: pet/feed once he's "ready" (happy) → he shows off |
+| `trick` | `^‿^` + a **random** show-off move (dance/spin/flip/jump/bounce/wiggle/tada, dance-weighted) via `GoobiHandle.trick()` | (varies) | playground: pet/feed once he's "ready" (happy) → fresh move each time |
 | `love` | red heart eyes + smitten bounce | `g-love` | the reply reaction (after cheer) |
 | `worn` | dizzy X-eyes, body turns red | `g-wobble` | ease-off (≥30 replies/hr) |
 
@@ -78,7 +78,8 @@ Working-state flips (search/analyze/draft) update Goobi **in place** via
   `springOpen`/`springClose` ease the panel height while the inner content
   overshoots in). A bigger interactive Goobi (cell 4, `playful`), today's replies
   as treats (`todaySent`, each flies into his mouth on feed), and tap-to-pet. Care
-  fills an **energy meter** (`playHappiness` = fed×2 + pets); at `PLAY_HAPPY` the
+  fills an **energy meter** (`playHappiness` = fed×2 + pets×0.2 — feeding is what
+  makes him happy; petting barely counts); at `PLAY_HAPPY` the
   **"↻ Let's go hunt!"** button unlocks and glows — clicking it collapses the
   playground and triggers `rescan()`. So a scan is something you *earn* by looking
   after him. Energy resets each time the playground opens.

@@ -1113,8 +1113,16 @@ const DOCK_CSS = `
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
 .g-trick { animation:g-trick 1.05s ease-in-out infinite; }
+.g-dance { animation:g-dance .9s ease-in-out infinite; }
+.g-jump { animation:g-jump .8s ease-in-out infinite; }
+.g-spin { animation:g-spin .9s ease-in-out infinite; }
+.g-flip { animation:g-flip .85s ease-in-out infinite; }
 .g-love { animation:g-love .85s ease-in-out infinite; }
 @keyframes g-trick { 0%{transform:rotate(0) translateY(0) scale(1)} 18%{transform:rotate(-12deg) translateY(-34%) scale(1.06)} 60%{transform:rotate(360deg) translateY(0) scale(1.06)} 80%{transform:rotate(360deg) translateY(-12%) scale(1)} 100%{transform:rotate(360deg) translateY(0) scale(1)} }
+@keyframes g-dance { 0%{transform:translateY(0) rotate(5deg) scale(1.05,.95)} 25%{transform:translateY(-14%) rotate(2deg) scale(.95,1.05)} 50%{transform:translateY(0) rotate(-5deg) scale(1.05,.95)} 75%{transform:translateY(-14%) rotate(-2deg) scale(.95,1.05)} 100%{transform:translateY(0) rotate(5deg) scale(1.05,.95)} }
+@keyframes g-jump { 0%{transform:translateY(0) scale(1,1)} 15%{transform:translateY(0) scale(1.1,.9)} 35%{transform:translateY(-45%) scale(.94,1.08)} 50%{transform:translateY(-50%) scale(1,1)} 65%{transform:translateY(0) scale(1.1,.9)} 85%,100%{transform:translateY(0) scale(1,1)} }
+@keyframes g-spin { 0%{transform:rotate(0) scale(1)} 50%{transform:rotate(180deg) scale(1.08)} 100%{transform:rotate(360deg) scale(1)} }
+@keyframes g-flip { 0%{transform:translateY(0) rotate(0)} 40%{transform:translateY(-48%) rotate(-180deg)} 70%{transform:translateY(-12%) rotate(-360deg)} 100%{transform:translateY(0) rotate(-360deg)} }
 @keyframes g-love { 0%,100%{transform:translateY(0) scale(1,1) rotate(0)} 25%{transform:translateY(-13%) scale(1.04,.96) rotate(-4deg)} 50%{transform:translateY(0) scale(1.07,.93)} 75%{transform:translateY(-13%) scale(1.04,.96) rotate(4deg)} }
 .g-think { animation:g-think 1.5s ease-in-out infinite; }
 .g-hunt { animation:g-hunt 1.1s ease-in-out infinite; }
@@ -1568,7 +1576,8 @@ let goobiFed = 0, goobiPets = 0;                   // this session's care → ea
 const fedEver = new Set<string>();                 // ids of replies Goobi has eaten (persisted) — fed treats don't come back
 let fedTotal = 0;                                  // lifetime treats eaten (persisted), shown in the playground
 const PLAY_HAPPY = 3;                              // fed×2 + pets needed before Goobi will go hunting
-function playHappiness(): number { return goobiFed * 2 + goobiPets; }
+function playHappiness(): number { return goobiFed * 2 + goobiPets * 0.2; } // feeding is what makes him happy; pets barely count
+function goobiCelebrate(): void { goobiPlayHandle?.setMood("cheer"); goobiPlayHandle?.trick(); } // resting-happy + a random show-off move
 function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
 function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }
 function treatId(rec: SentRecord): string { return rec.id ?? String(rec.at); }
@@ -1597,10 +1606,10 @@ function syncPlay(): void {
 
 function petGoobi(): void {
   goobiPets++;
-  if (playReady()) { goobiPlayHandle?.setMood("trick"); setTimeout(() => goobiPlayHandle?.setMood("cheer"), 1100); } // happy enough → he shows off
+  if (playReady()) goobiCelebrate(); // pumped → a fresh random move every pet
   else { goobiPlayHandle?.setMood("cheer"); setTimeout(() => goobiPlayHandle?.setMood("idle"), 1200); }
   const msg = dockRoot?.querySelector("#dpg-msg");
-  if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥", "more!"]; msg.textContent = playReady() ? "🎪 ta-da! send him hunting ↻" : lines[Math.floor(Math.random() * lines.length)]; }
+  if (msg) { const happy = ["🎪 ta-da!", "🕺 he's dancing!", "✨ show-off!", "wheee!"]; const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥", "more!"]; msg.textContent = playReady() ? `${happy[Math.floor(Math.random() * happy.length)]} send him hunting ↻` : lines[Math.floor(Math.random() * lines.length)]; }
   syncPlay();
 }
 
@@ -1613,10 +1622,7 @@ function feedTreat(b: HTMLButtonElement, rec: SentRecord, id: string, snip: stri
   const arrive = () => {
     goobiFed++;
     goobiPlayHandle?.setMood("love"); // chomp
-    setTimeout(() => {
-      if (playReady()) { goobiPlayHandle?.setMood("trick"); setTimeout(() => goobiPlayHandle?.setMood("cheer"), 1100); } // so happy he does a trick
-      else goobiPlayHandle?.setMood("idle");
-    }, 1400);
+    setTimeout(() => { if (playReady()) goobiCelebrate(); else goobiPlayHandle?.setMood("idle"); }, 1400); // pumped → a random show-off move
     const msg = dockRoot?.querySelector("#dpg-msg");
     if (msg) msg.textContent = playReady() ? "🎪 Goobi's pumped — send him hunting! ↻" : `nom! "${snip.length > 32 ? snip.slice(0, 32) + "…" : snip}"`;
     const stat = dockRoot?.querySelector("#dpg-stat"); if (stat) stat.textContent = `🍪 ${fedTotal} ${fedTotal === 1 ? "treat" : "treats"} eaten`;
