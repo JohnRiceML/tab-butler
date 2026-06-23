@@ -1495,7 +1495,7 @@ function renderDock() {
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
     root.appendChild(l);
-    goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood(mood);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
   }
   const d = document.createElement("div"); d.className = "d";
@@ -1560,7 +1560,7 @@ function renderDock() {
     p.append(pt, pp, rb);
     d.append(p);
     root.appendChild(d);
-    goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood("sleeping"); // resting while paused
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood("sleeping"); // resting while paused
     return;
   }
 
@@ -1592,7 +1592,7 @@ function renderDock() {
 
   root.appendChild(d);
   renderList(list);
-  goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood(gstat.mood); // Goobi lives at the top, mood-driven
+  goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood); // Goobi lives at the top, mood-driven
 }
 
 /* ---------- boot + SPA route handling ---------- */
