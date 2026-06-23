@@ -1,124 +1,101 @@
-# Tab Butler — Architecture
+# Goobi — Architecture
 
-## Goal & scope
+## What this is
 
-Two simple pieces: a Chrome/Edge **extension** that auto-bundles tabs, safely
-auto-archives idle ones, and is made *smart* by Claude (semantic naming, ranked
-cleanup); and a zero-dep **CLI** for localhost dev-server hygiene (list / kill /
-Claude-clean). Claude is the brain via plain Messages-API calls — no agent
-framework, no embedded Claude Code.
+**Goobi** is a Chrome/Edge (MV3) extension with two surfaces that share one tree:
 
-- **In scope (v1):** trust-core auto-archive · heuristic + Claude grouping ·
-  search · cleanup advisor (extension); `ls` / `kill` / `clean` (CLI).
-- **Out (v1):** always-on per-process RAM widget (was a Swift menubar app —
-  removed in favor of the CLI), mobile, team sync.
+1. **X/Twitter reply copilot** *(the product today)* — scans your timeline, scores
+   posts for reply-worthiness with Claude, badges the good ones in-feed, and drafts
+   replies in *your* voice on demand. **Draft-only: it never posts.** A pixel pet,
+   **Goobi**, mirrors your real activity and gamifies healthy engagement.
+2. **Tab manager** *(the origin, still shipped)* — auto-groups tabs by domain, safely
+   archives idle ones (archive-not-delete + undo), and is made smart by Claude
+   (semantic group names, ranked cleanup). A separate zero-dep **CLI** (`cli/`)
+   does localhost dev-server hygiene in the terminal.
+
+Claude is the brain via plain Messages-API calls — no agent framework, no embedded
+Claude Code. See [SYSTEM.md](SYSTEM.md) for the file-level map and
+[goobi.md](goobi.md) for the mascot.
+
+> History: this started as **Tab Butler** and pivoted to the X copilot. Many internal
+> names still say "tab-butler" (see [CHANGELOG.md](../CHANGELOG.md)). The Swift
+> menubar app + native-messaging host were removed in favor of the CLI (2026-06-19);
+> they live in git history if an always-on RAM widget is ever wanted.
 
 ## Components
 
-**Two pieces, both JavaScript, both verifiable.** (Decided 2026-06-19 — collapsed
-from 4 components/3 languages after the localhost-kill logic ended up duplicated
-across a Swift menubar app and a Node native-messaging host. Both removed; the
-CLI does their job more simply. They live in git history if the always-on RAM
-widget is ever wanted.)
-
 | Component | Tech | Role | Ships |
 |---|---|---|---|
-| Extension | MV3, TS, esbuild | The product surface for **browser tabs**: groups, idle-archive, search, Claude cleanup | v1 |
-| Heuristic engine | In the SW, no network | Offline base: group-by-domain/opener, dedupe, idle-detect, archive, undo | v1 |
-| CLI | Zero-dep Node | **Dev servers**: `ls` / `kill <port>` / `clean` (Claude picks stale ones). Lives in the terminal — no native messaging, no Swift | v1 |
-| Proxy | Next.js route | **Parked.** Optional hosted Claude tier for a future paid plan; not required to run (default is local + BYO-key) | later |
+| Content script | MV3, TS, esbuild | **The X copilot**: scan → score → badge → draft, the always-on dock, Goobi + playground | v1 |
+| Service worker | MV3 background, ES module | Broker for Claude + the Twttr (RapidAPI) provider; tab-manager features (idle-archive alarm, grouping) | v1 |
+| Side panel | `chrome.sidePanel` | Settings: BYO key, voice capture, products, niche, account-safety, the side-panel playground | v1 |
+| CLI | Zero-dep Node | **Dev servers**: `ls` / `kill <port>` / `clean` (Claude picks stale ones) | v1 |
+| Proxy | Next.js route | **Parked.** Optional hosted Claude tier for a future paid plan; not on the live path | later |
 
-## The honest RAM caveat
+## The X copilot, end to end
 
-Per-*tab* RAM is impossible on stable Chrome: the only API that maps a tab to a
-renderer PID with memory (`chrome.processes`) is Dev-channel only, and Site
-Isolation breaks the one-tab-one-process model anyway (same-site tabs share a
-renderer; one tab spawns many). Chrome's own Task Manager reports
-per-**process**, not per-tab — so do we. The extension popup shows a system-wide
-number; the **CLI** (`tab-butler ls`) shows real per-process Chrome RAM and
-per-dev-server RAM in the terminal, where it belongs.
+A `MutationObserver` on the timeline drives an rAF-coalesced `scan()` that collects
+tweet articles (skipping ads, your own posts, and already-seen ones). Batches go to
+the service worker, which calls Claude (**Haiku**) to score each post 0–1 with a
+reason + category. Posts ≥ `0.6` become **opportunities**: badged on the post and
+surfaced in the dock, ranked live by `effectiveScore` = model-score × freshness ×
+reach × reply-pileup × community-tier (freshness dominates — the first ~15 min is the
+window). Reach comes from best-effort, budgeted **Twttr** (`twitter241` on RapidAPI)
+`/user` lookups for follower/following/bio.
 
-## Privacy tiers
+Drafting calls Claude (**Sonnet**) with the user's saved *voice*, the post, an
+optional angle/product, and a free-text *steer*. The result is typed once into X's
+reply box (DraftJS), the post is liked, and the reply is logged. The reply log drives
+today's count, the rate/reputation guards, the "✓ commented" badge, and the
+playground treats.
 
-| Tier | Data path | Who sees tabs | MVP? |
-|---|---|---|---|
-| Local | Heuristics only, no network | No one | ✅ default base |
-| BYO key | Extension → Claude direct (user's key in storage) | No one but Anthropic | ✅ default smart path |
-| Managed | Extension → parked Vercel proxy → Claude | You (request no-training retention) | later — paid "Smart" tier |
+**Hardening:** id-dedup + a `seen` cache + per-session call caps for X's
+virtualization; a clean `teardown()` on extension-context invalidation; `trapKeys`
+so X's single-key shortcuts don't steal focus from our shadow-DOM inputs.
 
-**Hard default: send id/title/url/idle only — never page content.** Full content
-goes up only for the active tab on explicit "summarize/file this" (`activeTab`).
-Sending titles/URLs triggers Chrome Web Store limited-use policy → posted
-privacy policy + explicit opt-in (`smartEnabled`) before any Claude call.
+## Privacy
+
+Goobi is local-first and BYO-key, but **be precise about what leaves the browser** —
+the two surfaces differ, and this matters for Chrome Web Store compliance:
+
+| Surface | What goes to Claude | When |
+|---|---|---|
+| **X copilot — scoring** | The **post text** + author handle of timeline posts | Automatically as you scroll, once the copilot is enabled + a key is set |
+| **X copilot — drafting** | The post text, your saved voice, optional quoted-tweet context + product | On demand when you click Draft |
+| **X copilot — reach** | Author **handles** to the Twttr/RapidAPI provider | Best-effort enrichment |
+| **Tab manager** | Tab **id/title/url/idle** only — **never page content** (except the active tab on an explicit "summarize/file this") | When the smart tier is opted in |
+
+So the **tab manager's** "never page content" guarantee holds, but the **X copilot
+sends post text to Claude** — that's inherent to scoring/drafting. The store
+limited-use disclosures + posted privacy policy must cover the X post text, and
+Claude use stays gated behind an explicit opt-in (`smartEnabled` / a set key). Keys
+live in `chrome.storage` / the service worker — never bundled or placed on the page.
 
 ## Claude integration
 
-- **Models:** `claude-haiku-4-5` ($1/$5 per MTok) is the always-on workhorse
-  (classify/name/label/rank). `claude-opus-4-8` ($5/$25) is the once-a-day
-  advisor. Bulk/nightly work → Batches API (−50%).
-- **Always structured output:** `messages.parse` + `zodOutputFormat(schema)`;
-  `response.parsed_output` is validated. See `proxy/src/lib/claude.ts`.
-- **Cache the taxonomy:** the system prompt (category rules + colors + naming
-  house style) is frozen → `cache_control: { type: "ephemeral" }`. Per-batch
-  classify input then bills ~0.1× once the prompt exceeds the model minimum
-  (~4096 tokens for Haiku).
-- **Cost:** regroup 100 tabs ≈ 1¢; per-page label ≈ $0.0005; nightly Opus
-  advisor ≈ 3¢ (half via Batches). Pennies/day for a heavy user.
+- **Models:** `claude-haiku-4-5` scores + classifies (the always-on workhorse);
+  `claude-sonnet-4-6` drafts replies (quality matters); `claude-opus-4-8` is the
+  once-a-day tab "cleanup advisor". BYO-key calls go direct to `api.anthropic.com`.
+- **No SDK on the page** — the content script can't reach Anthropic (x.com CSP); all
+  calls go through the service worker's `send()` broker.
+- **Tab classify/advise** use structured output (`messages.parse` + a Zod schema) and
+  cache the frozen taxonomy prompt (`cache_control: ephemeral`). The X scorer/drafter
+  return plain text (free-form prose is fragile to JSON-wrap).
+- The **parked proxy** (`proxy/`) is a future managed tier; its auth is a placeholder
+  and its advise-model differs from the extension — not on the shipping path.
 
-Endpoints: `POST /api/classify` (tabs→groups, Haiku), `POST /api/advise`
-(state→ranked recs, Opus). Each is one stateless Messages call.
+## Permissions (manifest)
 
-## Extension internals
+`tabs`, `tabGroups`, `alarms`, `idle`, `storage`, `sessions`, `bookmarks`,
+`system.memory`, `history`, `favicon`, `sidePanel`; host permissions
+`api.anthropic.com`, `localhost:3210` (dev), `*.p.rapidapi.com` (Twttr), and a
+**placeholder** `YOUR-PROXY.vercel.app` that must be removed or replaced before store
+submission. The `tabs`/`tabGroups`/`history`/`system.memory`/`bookmarks` set serves
+the tab-manager surface; `favicon` + `sidePanel` serve the copilot UI.
 
-- **Permissions (minimal):** `tabs`, `tabGroups`, `alarms`, `idle`, `storage`,
-  `sessions`, `bookmarks`. Add `history` only when palette-history ships (harsh
-  install warning). Avoid `all_urls`; use `activeTab` for opt-in summarize.
-- **Ephemeral SW (~30s):** re-hydrate from `chrome.storage.local` on wake;
-  schedule scans with `chrome.alarms` (min 30s), never `setTimeout`.
-- **Idle-archive:** track `tab.lastAccessed`; past threshold → persist
-  `{url,title,favicon,ts,tags}` to `storage.local` **before** close; undo toast.
-- **Storage:** `storage.local` (archive + group map — Chrome doesn't persist
-  groups), `storage.session` (transient), `storage.sync` (small prefs only).
+## The honest RAM caveat (tab manager)
 
-## Trust & safety model (the actual moat)
-
-- Archive-not-delete → everything recoverable; never a hard delete.
-- Undo toast on every auto-action (≈30s), ⌘Z bound.
-- Always-exempt: pinned, active, audible tabs.
-- Web-app allowlist (Figma/Notion/Slack/Docs…) never auto-suspended.
-- Claude recs are propose-then-confirm — nothing reorganizes silently.
-
-## Build order (2–4 weeks)
-
-1. **Week 1 — trust core:** idle-archive + archive store + undo + exemptions +
-   allowlist. Prove it never "eats a tab." *(scaffolded)*
-2. **Week 2 — heuristic grouping + ⌘K palette** over open/archive/recently-closed.
-3. **Week 3 — Smart tier:** proxy + `/classify` + `/advise`, structured outputs,
-   taxonomy cache, opt-in + privacy policy. *(scaffolded)*
-4. **Week 4 — auto-bookmark + `/label` + `/recall`,** polish, store submissions.
-
-**Done since:** the `tab-butler` CLI (dev-server `ls`/`kill`/Claude `clean`) —
-this replaced the planned Swift menubar app + native-messaging host (simpler,
-runs anywhere). Next: BYO-key Claude direct from the extension (drops the server
-from the smart path).
-
-**v2 — "Keep safe" shelf (deferred, decided 2026-06-19).** A propose-then-confirm
-surface where Claude periodically flags tabs that look worth keeping ("these N
-tabs look worth keeping → Save?") with a reason and a few **editable** categories
-(Tools, References, Reading). Constraints, non-negotiable:
-- **No silent auto-save.** Suggested-and-confirmed only — silent background
-  collection makes a "we caught your important tab" promise the model can't keep,
-  over-collects, and adds privacy surface. The real safety net stays
-  archive-not-delete.
-- Importance from title+URL alone is weak; doing it well needs visit-frequency
-  (`history` permission) or page content (privacy cost) — gate behind opt-in.
-- **No affiliate-specific detection** (considered + dropped 2026-06-19).
-- Build only after the v1 core (trust-archive + grouping + cleanup) is validated.
-
-## Open decisions
-
-- **Managed-first or BYOK-first?** Decided 2026-06-19: **BYO-key first** — the
-  extension calls Claude directly with the user's key (no server to run). The
-  proxy stays parked for a future hosted paid tier.
-- **Bookmarks vs. own store** for auto-filing — probably both: write to
-  `chrome.bookmarks` (portable, user-visible) *and* index locally (tags/search).
+Per-*tab* RAM is impossible on stable Chrome (`chrome.processes` is Dev-channel only,
+and Site Isolation breaks one-tab-one-process). Chrome's own Task Manager reports
+per-**process** — so do we: the popup shows a system number; the **CLI** shows real
+per-process / per-dev-server RAM in the terminal, where it belongs.

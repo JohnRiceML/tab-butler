@@ -1,6 +1,12 @@
 # Goobi — pet/game design v1
 
-**Status:** design spec, ready to implement.
+> **⚠️ HISTORICAL — superseded by [goobi.md](goobi.md).** This early spec drove
+> Goobi's moods off **tab clutter + RAM** with a 4-stat care loop. The shipped Goobi
+> drives moods off **X reply activity** (pace / drafting / hunting) with a
+> feed-today's-replies playground. Read [goobi.md](goobi.md) for what's actually
+> built; keep this only as a record of the original direction.
+
+**Status:** historical design spec (not the shipped model).
 **Scope:** the virtual-pet layer ONLY — how Goobi's moods/care loop map to the tool's real signals. Out of scope: the reply scorer, the Claude prompts, the core tab logic.
 
 ## North star

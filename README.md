@@ -1,87 +1,98 @@
-# Tab Butler
+# Goobi
 
-Local-first browser tab hygiene with an opt-in Claude smart layer.
+A draft-only **X/Twitter reply copilot** with a cute pixel pet — plus the
+local-first **tab manager** it grew out of. Made smart by Claude (BYO key).
 
-- **Auto-bundles** related tabs into named, color-coded groups
-- **Safely archives** idle tabs (archive-not-delete + one-click undo)
-- **Made smart by Claude** (opt-in): semantic group names + ranked cleanup
-- **`tab-butler` CLI**: list / kill / Claude-clean localhost dev servers from
-  the terminal — where dev-server hygiene belongs
+- **Finds posts worth replying to** — scores your timeline with Claude, badges the
+  good ones in-feed (`82% · Add value`), and ranks them in an always-on dock.
+- **Drafts in *your* voice** — one click; steer it ("punchier, ask a question") and
+  regenerate. **Draft-only — it inserts into X's reply box, never auto-posts.**
+- **Keeps your account safe** — volume / repeat-author / duplicate guards and
+  human-paced likes, so you don't trip X's automation heuristics.
+- **Goobi, the pet** — a pixel blob that mirrors your real activity (hunting,
+  thinking, sleeping) and a playground where you feed him the replies you sent.
+- **Tab manager (the origin)** — auto-groups tabs by domain, safely archives idle
+  ones (archive-not-delete + undo), with a Claude smart tier.
+- **`tab-butler` CLI** — list / kill / Claude-clean localhost dev servers from the
+  terminal.
 
-Two simple pieces: a browser **extension** for tabs, and a terminal **CLI** for
-dev servers. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
+[docs/SYSTEM.md](docs/SYSTEM.md) for where things live, [docs/goobi.md](docs/goobi.md)
+for the mascot, and [CHANGELOG.md](CHANGELOG.md) for what shipped + what's next.
+
+> Renamed from **Tab Butler** → **Goobi** when the X copilot became the focus. Many
+> internal identifiers + the `cli/` still say "tab-butler" — tracked in the changelog.
 
 ## Layout
 
 ```
-extension/    MV3 Chrome/Edge extension (TypeScript, esbuild) — browser tabs
+extension/    MV3 Chrome/Edge extension (TypeScript, esbuild) — the X copilot + tab manager
 cli/          Zero-dep Node CLI — list/kill/Claude-clean localhost dev servers
-proxy/        Next.js proxy (parked) — optional hosted Claude tier; not required
-docs/         Architecture spec
+proxy/        Next.js proxy (parked) — optional hosted Claude tier; not on the live path
+docs/         Architecture, system map, mascot reference
 ```
 
 ## Quick start
 
-### Extension
-
 ```bash
 cd extension
 npm install
-npm run build        # → dist/
+npm run build        # node build.mjs (esbuild) → dist/
+npm run typecheck    # tsc --noEmit  (the type gate)
 ```
 
-Then load `extension/dist/` as an unpacked extension at
-`chrome://extensions` (Developer mode → Load unpacked). The local-first
-features (group-by-site, idle-archive, undo) work with no backend.
+Load `extension/dist/` at `chrome://extensions` (Developer mode → Load unpacked).
+Open the **side panel** (toolbar icon) to add your Anthropic key and turn on the X
+copilot, then visit `x.com`. The tab-manager features (group-by-site, idle-archive,
+undo) work with no key.
 
-### Proxy (the Claude "smart" tier)
+> New host/extension permissions need a full **remove + re-add** of the unpacked
+> extension — a reload won't grant them.
+
+## Tests
 
 ```bash
-cd proxy
-npm install
-npm i @anthropic-ai/sdk@latest    # ensure messages.parse + zod helpers
-cp .env.example .env.local        # add ANTHROPIC_API_KEY
-npm run dev                       # http://localhost:3210
+cd extension
+for t in twttr policy hygiene pacing community; do node scripts/test-$t.mjs; done
 ```
 
-The proxy runs on a dedicated port (**3210**) to avoid the common `:3000`
-collision with other dev servers. The extension calls `http://localhost:3210`
-by default (`extension/src/lib/config.ts` → `PROXY_BASE_URL`). Set it to your
-Vercel URL for production, and add that origin to `manifest.json`
-`host_permissions`.
-
-If a key is exported in your shell it shadows `.env.local` (Next won't override
-`process.env`). Run scrubbed if so: `env -u ANTHROPIC_API_KEY npm run dev`.
+Pure-lib unit suites (esbuild-transpiled, run on Node). `npm run typecheck` is the
+type gate.
 
 ## Dev servers — the CLI
 
-Killing a process is impossible from a browser extension, and the terminal is
-the natural home for dev-server hygiene anyway. The `cli/` tool handles it:
+A browser extension can't kill a process, and the terminal is the natural home for
+dev-server hygiene anyway:
 
 ```bash
 node cli/tab-butler.mjs ls          # list listening dev servers (port, RAM, uptime)
 node cli/tab-butler.mjs kill 6006   # SIGTERM whatever listens on :6006
-ANTHROPIC_API_KEY=sk-ant-... \
-  node cli/tab-butler.mjs clean     # Claude picks stale ones, asks before killing
-
+ANTHROPIC_API_KEY=sk-ant-... node cli/tab-butler.mjs clean   # Claude picks stale ones; asks first
 cd cli && npm link                  # optional: global `tb ls` / `tb clean`
 ```
 
-Zero dependencies. Only touches processes *listening* on a port, and only dev
-runtimes (node/python/vite/…). See [cli/README.md](cli/README.md).
+Zero dependencies. Only touches dev runtimes *listening* on a port. See
+[cli/README.md](cli/README.md).
 
-## Privacy
+## Privacy (read before publishing)
 
-The smart layer is **opt-in** (`smartEnabled` in `chrome.storage.local`) and
-only ever sends tab **id / title / url / idle-time** — never page content.
-Before publishing, wire real auth in `proxy/src/lib/http.ts` and post a privacy
-policy (Chrome Web Store limited-use requirement). The local-first base sends
-nothing off-device.
+Local-first + BYO-key, but the two surfaces differ:
+
+- **Tab manager** sends tab **id / title / url / idle** only — never page content.
+- **X copilot** sends **post text** to Claude — that's inherent to scoring + drafting
+  a reply. Author handles also go to the Twttr (RapidAPI) provider for follower
+  counts.
+
+Claude is gated behind an explicit opt-in / a set key; keys live in `chrome.storage`
+/ the service worker, never bundled or on-page. The Chrome Web Store limited-use
+disclosures + a posted privacy policy must cover the X post text. See the
+[architecture doc](docs/ARCHITECTURE.md) § Privacy and the
+[changelog](CHANGELOG.md) § Before store submission.
 
 ## Status
 
-v1 scaffold. The extension (tabs) + CLI (dev servers) both work. Not yet wired:
-real auth on the optional proxy, BYO-key Claude direct from the extension (so no
-server is needed), a settings/opt-in UI, auto-bookmarking, and semantic ⌘K
-recall. The Swift menubar app was removed in favor of the CLI (it's in git
-history if the always-on RAM widget is ever wanted). See the architecture doc.
+v1, actively iterated. The X copilot (scan → score → badge → draft, dock, Goobi +
+playground, account-safety) and the tab manager + CLI all work. Not yet wired: the
+"what's working" outcome-learning loop, the managed proxy tier (parked, placeholder
+auth), and a few store-prep items (the placeholder proxy host, privacy policy). See
+[CHANGELOG.md](CHANGELOG.md).
