@@ -315,7 +315,7 @@ function scan() {
     if (!info) return;
     if (inFlight.has(info.id)) return; // sent to Claude, awaiting its score
     const cached = seen.get(info.id);
-    if (cached) { if (cached.score >= THRESHOLD) badge(el, cached.reason, cached.category); return; }
+    if (cached) { if (cached.score >= THRESHOLD) { const o = opps.get(info.id); badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); } return; }
     if (el.dataset.tbx === "q") return; // this node already queued
     if (isPromoted(el)) return;
     if (selfHandle && info.author.toLowerCase() === selfHandle) return;
@@ -371,7 +371,7 @@ async function flush() {
     if (s.score >= THRESHOLD) {
       opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name, verified: stat.verified });
       changed = true;
-      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category);
+      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
       // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
       if (opps.delete(b.id)) changed = true;
@@ -488,16 +488,18 @@ function catSummary(): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, c]) => `${c} ${catLabel(id)}`).join(" · ");
 }
 
-function badge(el: HTMLElement, reason: string, category?: string) {
+function badge(el: HTMLElement, reason: string, category?: string, score?: number) {
+  // The badge mirrors the dock card: reply-fit score % + the category tag.
+  const pct = score != null ? Math.round(Math.max(0, Math.min(1, score)) * 100) : null;
+  const label = pct != null ? `✦ ${pct}% · ${catLabel(category)}` : `✦ ${catLabel(category)}`;
+  const tip = (pct != null ? `${scoreVerdict(score!).label} reply fit (${pct}%) — ` : "") + reason;
   const existing = el.querySelector<HTMLElement>("[data-tbx-badge]");
   if (existing) {
-    // Already badged — refresh the label/tooltip only if the category changed
-    // (e.g. a Rescan re-categorized it), so it never gets stuck on a stale value.
-    if (existing.dataset.tbxCat !== (category || "")) {
-      existing.dataset.tbxCat = category || "";
-      existing.textContent = `✦ ${catLabel(category)}`;
-      existing.title = reason;
-    }
+    // Already badged — keep the label/tooltip current (category re-classified on a
+    // Rescan, score drifts with freshness/reach), so it never shows a stale value.
+    existing.dataset.tbxCat = category || "";
+    existing.textContent = label;
+    existing.title = tip;
     return;
   }
   el.style.borderLeft = `3px solid ${ACCENT}`;
@@ -508,8 +510,8 @@ function badge(el: HTMLElement, reason: string, category?: string) {
   const b = document.createElement("button");
   b.setAttribute("data-tbx-badge", "1");
   b.dataset.tbxCat = category || "";
-  b.textContent = `✦ ${catLabel(category)}`;
-  b.title = reason;
+  b.textContent = label;
+  b.title = tip;
   Object.assign(b.style, {
     position: "absolute", top: "10px", right: "12px", zIndex: "9999",
     background: ACCENT, color: INK, border: "0", borderRadius: "999px",
