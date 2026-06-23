@@ -18,6 +18,7 @@ import type { ProductItem } from "../lib/types";
 
 const ACCENT = "#d69a5c";
 const INK = "#1a1206";
+const DONE = "#3aa564", DONE_INK = "#06210f"; // green "✓ commented" call-out on posts you've replied to
 const THRESHOLD = 0.6;
 const MAX_SCORE_CALLS = 40; // per page-session cost/ToS guard
 const BATCH = 12;
@@ -489,20 +490,29 @@ function catSummary(): string {
 }
 
 function badge(el: HTMLElement, reason: string, category?: string, score?: number) {
-  // The badge mirrors the dock card: reply-fit score % + the category tag.
+  // The badge mirrors the dock card (reply-fit score % + category tag) and flips to a
+  // green "✓ Commented" call-out once you've replied to this post.
+  const id = statusInfo(el)?.id;
+  const done = !!id && commentedIds.has(id);
   const pct = score != null ? Math.round(Math.max(0, Math.min(1, score)) * 100) : null;
-  const label = pct != null ? `✦ ${pct}% · ${catLabel(category)}` : `✦ ${catLabel(category)}`;
-  const tip = (pct != null ? `${scoreVerdict(score!).label} reply fit (${pct}%) — ` : "") + reason;
+  const core = pct != null ? `${pct}% · ${catLabel(category)}` : catLabel(category);
+  const label = done ? `✓ Commented · ${core}` : `✦ ${core}`;
+  const tip = (done ? "You've replied to this post. " : "") + (pct != null ? `${scoreVerdict(score!).label} reply fit (${pct}%) — ` : "") + reason;
+  const bg = done ? DONE : ACCENT;
+  const fg = done ? DONE_INK : INK;
   const existing = el.querySelector<HTMLElement>("[data-tbx-badge]");
   if (existing) {
-    // Already badged — keep the label/tooltip current (category re-classified on a
-    // Rescan, score drifts with freshness/reach), so it never shows a stale value.
+    // Already badged — keep the label/colors current (category re-classified on a
+    // Rescan, score drifts, or you just commented), so it never shows a stale value.
     existing.dataset.tbxCat = category || "";
     existing.textContent = label;
     existing.title = tip;
+    existing.style.background = bg;
+    existing.style.color = fg;
+    el.style.borderLeftColor = bg;
     return;
   }
-  el.style.borderLeft = `3px solid ${ACCENT}`;
+  el.style.borderLeft = `3px solid ${bg}`;
   el.style.borderTopLeftRadius = "4px";
   el.style.borderBottomLeftRadius = "4px";
   if (getComputedStyle(el).position === "static") el.style.position = "relative";
@@ -514,7 +524,7 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
   b.title = tip;
   Object.assign(b.style, {
     position: "absolute", top: "10px", right: "12px", zIndex: "9999",
-    background: ACCENT, color: INK, border: "0", borderRadius: "999px",
+    background: bg, color: fg, border: "0", borderRadius: "999px",
     font: "600 11px -apple-system, system-ui, sans-serif", padding: "3px 10px", cursor: "pointer",
   } as Partial<CSSStyleDeclaration>);
   b.addEventListener("click", (e) => {
@@ -614,6 +624,7 @@ interface SentRecord {
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
 let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
 let sentSeq = 0; // bump per reply so two in the same millisecond still get distinct ids
+const commentedIds = new Set<string>(); // post ids you've replied to — drives the "✓ commented" badge in the feed
 const SENT_MAX = 500; // cap the feature log
 
 /** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
@@ -853,6 +864,7 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
     avatar: opp?.avatar,
   };
   replyLog.sent.push(rec);
+  if (rec.postId) commentedIds.add(rec.postId); // mark this post as commented → "✓" badge in the feed
   if (replyLog.sent.length > SENT_MAX) replyLog.sent = replyLog.sent.slice(-SENT_MAX);
 }
 
@@ -874,6 +886,7 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
   }
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   renderDock(); // update "N replies sent today" immediately
+  requestScan(); // flip this post's in-feed badge to the green "✓ Commented" call-out
 }
 
 function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | null {
@@ -1937,6 +1950,7 @@ async function boot() {
       total,
       sent: Array.isArray(l.sent) ? (l.sent as SentRecord[]) : [],
     };
+    for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); // posts you've replied to → "✓ Commented" in the feed
   }
   goobiLastSeen = (await getLocal(CONFIG.X_GOOBI_SEEN_KEY)) as number || 0;
   if (goobiLastSeen && Date.now() - goobiLastSeen >= 2 * DAY_MS) goobiWelcomeBack = true; // away a while → he missed you
