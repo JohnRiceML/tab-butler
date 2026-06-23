@@ -181,19 +181,22 @@ function stripDashes(s: string): string {
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
  *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
-export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string): Promise<string> {
+export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string, steer?: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
   const prod = product?.trim() ? `\n\nThe user's own product/work (mention ONLY if this post invites it or it genuinely adds value):\n${product.trim()}` : "";
   const def = angle ? REPLY_ANGLES.find((a) => a.id === angle) : undefined;
   const angleLine = def ? `\n\n${def.directive}` : "";
+  // Free-text steer the user typed on the draft panel — honored strongly, but it never
+  // overrides the voice or the hard rules in the system prompt (no emojis/hashtags/etc.).
+  const steerLine = steer?.trim() ? `\n\nThe user wants this specific steer on the reply: ${steer.trim()}\nFollow it as closely as you can while keeping their voice and all the rules above.` : "";
   // Plain text, not JSON — free-form reply prose is fragile to JSON-wrap/parse.
   const reply = await rawCall(
     key,
     "claude-sonnet-4-6",
     X_DRAFT_SYSTEM,
-    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${prod}${angleLine}`,
+    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${prod}${angleLine}${steerLine}`,
     400,
   );
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));

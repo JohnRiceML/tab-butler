@@ -551,6 +551,10 @@ const PANEL_CSS = `
      border: .5px solid rgba(214,154,92,.18); background: #221c15; color: #f3ead9; cursor: pointer; }
 .b.primary { background: ${ACCENT}; color: ${INK}; border-color: transparent; font-weight: 600; }
 .foot { margin-top: 9px; font-size: 10.5px; color: #8c7d68; }
+.steer { width: 100%; box-sizing: border-box; margin-top: 10px; background: #1a1510; color: #f3ead9;
+         border: .5px solid rgba(214,154,92,.28); border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 12px; }
+.steer::placeholder { color: #8c7d68; }
+.steer:focus { outline: none; border-color: ${ACCENT}; }
 `;
 
 let panelHost: HTMLElement | null = null;
@@ -610,7 +614,7 @@ const DRAFT_MAX = 50;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; }
+interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; steer?: string; }
 let lastDraft: DraftReq | null = null;
 
 /** Posts already liked this session, so re-drafts / angle switches don't re-toggle. */
@@ -902,7 +906,7 @@ async function doInsert(text: string) {
 }
 
 async function draftFor(req: DraftReq) {
-  const { author, text, context, getEl, oppId, angle, avatar, name } = req;
+  const { author, text, context, getEl, oppId, angle, avatar, name, steer } = req;
   draftGetEl = getEl ?? null;
   draftOppId = oppId ?? null;
   draftOppAuthor = author;
@@ -922,11 +926,11 @@ async function draftFor(req: DraftReq) {
   lastDraft = req;
   // The product to weave in: the chosen one when promoting, else all (drafter picks).
   const product = candidates ? productContext(candidates[productIndex]) : productContext(undefined);
-  const ui = { angle, avatar, name, products: candidates, productIndex };
+  const ui = { angle, avatar, name, products: candidates, productIndex, steer };
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, ...ui });
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer });
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -973,7 +977,7 @@ function openDraftFromEl(el: HTMLElement) {
   void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), getEl: () => el, oppId: info?.id, angle: initialAngle(meta?.category), avatar: avatarUrl(el), products: meta?.products, name: displayName(el) });
 }
 
-function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number }) {
+function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number; steer?: string }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
   const h = document.createElement("div"); h.className = "h";
@@ -995,14 +999,20 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = "Insert into reply box";
     insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
     insert.onclick = () => void doInsert(ta.value);
+    // Steering: type how to nudge the reply, then Regenerate (or Enter) re-drafts with it.
+    const steer = document.createElement("input"); steer.className = "steer"; steer.type = "text";
+    steer.placeholder = "Steer it — e.g. punchier, ask a question, less formal…";
+    steer.value = opts.steer ?? "";
     const row = document.createElement("div"); row.className = "row";
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
     copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); } catch { /* ignore */ } };
-    const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "Regenerate";
-    regen.onclick = () => { if (lastDraft) void draftFor(lastDraft); };
+    const regen = document.createElement("button"); regen.className = "b"; regen.textContent = "↻ Regenerate";
+    regen.title = "Re-draft — applies the steer above if you've typed one";
+    regen.onclick = () => { if (lastDraft) void draftFor({ ...lastDraft, steer: steer.value.trim() || undefined }); };
+    steer.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); regen.click(); } };
     row.append(copy, regen);
     const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
-    p.append(ta, insert, row, foot);
+    p.append(ta, insert, steer, row, foot);
   }
   root.appendChild(p);
 }
@@ -1752,7 +1762,7 @@ function renderDock() {
   const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear";
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
   acts.append(kb);
-  const x = document.createElement("button"); x.className = "iconb"; x.textContent = "✕"; x.title = "Close";
+  const x = document.createElement("button"); x.className = "iconb"; x.textContent = "–"; x.title = "Minimize"; // collapses to the launcher pill — it minimizes, it doesn't close
   x.onclick = () => { kebabOpen = false; if (dockPlayOpen) resetPlay(); dockOpen = false; renderDock(); };
   acts.append(x);
   h.append(dhl, acts);
