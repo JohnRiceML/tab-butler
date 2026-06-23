@@ -3,6 +3,7 @@ import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { reputationStatus, type RepLevel } from "../lib/reply-hygiene";
+import { mountGoobi } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
@@ -488,6 +489,8 @@ function send<T>(msg: Message): Promise<T> {
 async function refresh() {
   app.innerHTML = render(await getData());
   hydrateProductIcons();
+  const face = document.getElementById("goobi-face");
+  if (face) mountGoobi(face); // bring the mascot to life in the header
 }
 
 let lastRecs: AdviceResult | null = null;

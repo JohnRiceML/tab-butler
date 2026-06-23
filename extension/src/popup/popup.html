@@ -46,6 +46,12 @@
       .vtab.on { background: rgba(214,154,92,.14); border-color: rgba(214,154,92,.42); color: #e0a45c; }
       [hidden] { display: none !important; }
 
+      #goobi-face { background: none !important; width: auto; height: auto; padding: 0; flex: none; }
+      .goobi-canvas { display: block; image-rendering: pixelated; transform-origin: bottom center;
+                      animation: goobi-bob 1.7s ease-in-out infinite; }
+      @keyframes goobi-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9%); } }
+      @media (prefers-reduced-motion: reduce) { .goobi-canvas { animation: none; } }
+
       .row-flex { display: flex; align-items: center; }
       .between { justify-content: space-between; }
       .gap8 { gap: 8px; } .gap10 { gap: 10px; } .gap12 { gap: 12px; }
