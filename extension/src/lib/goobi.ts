@@ -58,6 +58,7 @@ function eyesUp(): string[][] { // glancing up — concentrating
   [5, 6, 7].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c])));
   return faceWith(px);
 }
+function winkRight(): string[][] { const g = grid(); [12, 13].forEach((c) => { g[6][c] = "B"; g[7][c] = "B"; }); return g; }
 function sleepFrame(zpx: number[][]): string[][] {
   const g = eyesClosed();
   zpx.forEach((p) => (g[p[0]][p[1]] = "Z"));
@@ -117,17 +118,26 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
     } else if (m === "worn") {
       paint(ctx, faceWith(XEYES), cell, body); // dizzy + red + wobble (css)
-    } else { // idle — blink loop
+    } else { // idle — base bob + a varied, random rotation of little idle moves
+      const p = (g: string[][]) => { if (alive() && mood === "idle") paint(ctx, g, cell, body); };
       paint(ctx, grid(), cell, body);
-      const blink = () => {
+      // Eye flourishes (keep the bob; just repaint the eyes):
+      const blink = () => { p(eyesHalf()); window.setTimeout(() => p(eyesClosed()), 70); window.setTimeout(() => p(eyesHalf()), 160); window.setTimeout(() => p(grid()), 230); };
+      const look  = () => { p(eyesShift(1)); window.setTimeout(() => p(grid()), 620); window.setTimeout(() => p(eyesShift(-1)), 920); window.setTimeout(() => p(grid()), 1540); };
+      const wink  = () => { p(winkRight()); window.setTimeout(() => p(grid()), 340); };
+      // Body flourishes (swap the CSS animation for one cycle, then back to the bob):
+      const base = () => { if (alive() && mood === "idle") { canvas.className = "gcv g-bob"; paint(ctx, grid(), cell, body); } };
+      const css  = (cls: string, ms: number) => { if (alive() && mood === "idle") { canvas.className = "gcv " + cls; window.setTimeout(base, ms); } };
+      const FLOUR: Array<() => void> = [
+        blink, blink, blink, look, wink,
+        () => css("g-wiggle", 850), () => css("g-bounce", 1300), () => css("g-heartbeat", 1300), () => css("g-float", 3600),
+      ];
+      const tick = () => {
         if (!alive() || mood !== "idle") return;
-        paint(ctx, eyesHalf(), cell, body);
-        window.setTimeout(() => alive() && mood === "idle" && paint(ctx, eyesClosed(), cell, body), 70);
-        window.setTimeout(() => alive() && mood === "idle" && paint(ctx, eyesHalf(), cell, body), 150);
-        window.setTimeout(() => alive() && mood === "idle" && paint(ctx, grid(), cell, body), 220);
-        timer = window.setTimeout(blink, 2600 + Math.random() * 2800);
+        FLOUR[Math.floor(Math.random() * FLOUR.length)]();
+        timer = window.setTimeout(tick, 3000 + Math.random() * 4500);
       };
-      timer = window.setTimeout(blink, 1800 + Math.random() * 1500);
+      timer = window.setTimeout(tick, 1500 + Math.random() * 2000);
     }
   }
 

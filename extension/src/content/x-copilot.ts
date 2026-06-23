@@ -1075,7 +1075,15 @@ const DOCK_CSS = `
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
 .g-think { animation:g-think 1.5s ease-in-out infinite; }
+.g-wiggle { animation:g-wiggle .85s ease-in-out infinite; }
+.g-bounce { animation:g-bounce .65s ease-in-out infinite; }
+.g-heartbeat { animation:g-heartbeat 1.3s ease-in-out infinite; }
+.g-float { animation:g-float 3.6s ease-in-out infinite; }
 @keyframes g-think { 0%,100%{transform:translateY(0) scale(1,1)} 50%{transform:translateY(-5%) scale(1.02,1.03)} }
+@keyframes g-wiggle { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
+@keyframes g-bounce { 0%{transform:translateY(0) scale(1.06,.94)} 30%{transform:translateY(-34%) scale(1,1)} 50%{transform:translateY(0) scale(1.08,.92)} 68%{transform:translateY(-10%) scale(1,1)} 100%{transform:translateY(0) scale(1.06,.94)} }
+@keyframes g-heartbeat { 0%,42%,100%{transform:scale(1)} 10%,30%{transform:scale(1.1)} 20%{transform:scale(1)} }
+@keyframes g-float { 0%{transform:translateY(0) rotate(-2deg)} 50%{transform:translateY(-9%) rotate(2deg)} 100%{transform:translateY(0) rotate(-2deg)} }
 @keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
 @keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
 @keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
