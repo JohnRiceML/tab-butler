@@ -561,6 +561,16 @@ const PANEL_CSS = `
 
 let panelHost: HTMLElement | null = null;
 let panelRoot: ShadowRoot | null = null;
+/** X registers single-key shortcuts (n=new post, /=search, l=like, …) on `document` and
+ *  decides whether to fire them by inspecting the event target. Our inputs live in CLOSED
+ *  shadow roots, so a keystroke is retargeted to the host (a plain div) — X doesn't see an
+ *  editable field and fires the shortcut, stealing focus mid-type. Key events that bubble
+ *  through our host originated in OUR UI, so we can safely stop them from reaching X. Our
+ *  own in-shadow handlers (e.g. Enter-to-regenerate) already ran before this bubble point. */
+function trapKeys(host: HTMLElement): void {
+  for (const ev of ["keydown", "keyup", "keypress"]) host.addEventListener(ev, (e) => e.stopPropagation());
+}
+
 function ensurePanel(): ShadowRoot {
   if (panelHost?.isConnected && panelRoot) return panelRoot;
   panelHost = document.createElement("div");
@@ -569,6 +579,7 @@ function ensurePanel(): ShadowRoot {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(PANEL_CSS);
   panelRoot.adoptedStyleSheets = [sheet];
+  trapKeys(panelHost); // keep X's keyboard shortcuts from hijacking typing in the draft/steer fields
   document.documentElement.appendChild(panelHost);
   return panelRoot;
 }
@@ -1186,6 +1197,7 @@ function ensureDock(): ShadowRoot {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(DOCK_CSS);
   dockRoot.adoptedStyleSheets = [sheet];
+  trapKeys(dockHost); // same: keep X shortcuts off the dock's filter / playground inputs
   document.documentElement.appendChild(dockHost);
   return dockRoot;
 }
