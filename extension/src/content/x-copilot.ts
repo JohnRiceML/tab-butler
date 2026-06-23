@@ -1468,7 +1468,6 @@ function renderDock() {
   const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to look for posts`; gh.onclick = () => rescan();
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
-  const ti = document.createElement("div"); ti.className = "dtitle"; ti.textContent = "Posts worth replying to";
   const today = repliesToday();
   const sub = document.createElement("div"); sub.className = "dsub";
   const cnt = document.createElement("span");
@@ -1483,7 +1482,7 @@ function renderDock() {
   if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
   else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Goobi keeps you under it.`; }
   sub.append(document.createTextNode(" · "), chip);
-  t.append(ti, sub);
+  t.append(sub);
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
