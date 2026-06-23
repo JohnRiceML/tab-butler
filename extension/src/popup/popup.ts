@@ -521,7 +521,7 @@ async function refresh() {
   if (playground) {
     pgTotal = d.replyStats.today;
     const stage = document.getElementById("goobi-pg");
-    if (stage) { pgGoobi = mountGoobi(stage, { cell: 4 }); pgGoobi.setMood(d.todaySent.length ? "happy" : "idle"); }
+    if (stage) { pgGoobi = mountGoobi(stage, { cell: 4, playful: true }); pgGoobi.setMood("idle"); }
     return;
   }
   hydrateProductIcons();
@@ -729,9 +729,9 @@ async function dispatch(el: HTMLElement) {
         break;
       }
       case "pg-pet": {
-        pgGoobi?.setMood("happy");
-        setTimeout(() => pgGoobi?.setMood("idle"), 1100);
-        const msg = document.getElementById("pg-msg"); if (msg) msg.textContent = "hehe ♥";
+        pgGoobi?.setMood("cheer"); // poppy squish-shimmy
+        setTimeout(() => pgGoobi?.setMood("idle"), 1200);
+        const msg = document.getElementById("pg-msg"); if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥"]; msg.textContent = lines[Math.floor(Math.random() * lines.length)]; }
         break;
       }
       case "save-x": {

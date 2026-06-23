@@ -86,8 +86,9 @@ const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", 
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
-export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHandle {
+export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: boolean }): GoobiHandle {
   const cell = opts?.cell ?? 2;
+  const playful = opts?.playful ?? false; // energetic idle (jumps/dances) for the playground
   host.replaceChildren();
   const canvas = document.createElement("canvas");
   const dpr = window.devicePixelRatio || 1;
@@ -143,16 +144,22 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       // Body flourishes (swap the CSS animation for one cycle, then back to the bob):
       const base = () => { if (alive() && mood === "idle") { canvas.className = "gcv g-bob"; paint(ctx, grid(), cell, body); } };
       const css  = (cls: string, ms: number) => { if (alive() && mood === "idle") { canvas.className = "gcv " + cls; window.setTimeout(base, ms); } };
-      const FLOUR: Array<() => void> = [
+      const calm: Array<() => void> = [
         blink, blink, blink, look, wink,
         () => css("g-wiggle", 850), () => css("g-bounce", 1300), () => css("g-heartbeat", 1300), () => css("g-float", 3600),
       ];
+      const lively: Array<() => void> = [ // playground: big, frequent, playful moves
+        blink, look, wink,
+        () => css("g-jump", 1100), () => css("g-bounce", 1300), () => css("g-wiggle", 850),
+        () => css("g-dance", 1800), () => css("g-tada", 900), () => css("g-heartbeat", 1300),
+      ];
+      const FLOUR = playful ? lively : calm;
       const tick = () => {
         if (!alive() || mood !== "idle") return;
         FLOUR[Math.floor(Math.random() * FLOUR.length)]();
-        timer = window.setTimeout(tick, 1700 + Math.random() * 2600); // fidget more often
+        timer = window.setTimeout(tick, playful ? 1100 + Math.random() * 1500 : 1700 + Math.random() * 2600);
       };
-      timer = window.setTimeout(tick, 1000 + Math.random() * 1400);
+      timer = window.setTimeout(tick, playful ? 500 + Math.random() * 800 : 1000 + Math.random() * 1400);
     }
   }
 
