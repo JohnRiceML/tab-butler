@@ -37,8 +37,9 @@ const EYE = "#141413", HILITE = "#faf9f5", ZZZ = "#b0aea5", LOVE_RED = "#d23b2e"
 const HAPPY: number[][] = [[6, 8], [7, 7], [7, 9], [6, 12], [7, 11], [7, 13]];           // ^‿^ squint
 const XEYES: number[][] = [[6, 7], [6, 9], [7, 8], [8, 7], [8, 9], [6, 11], [6, 13], [7, 12], [8, 11], [8, 13]]; // dizzy
 const LOVE: number[][] = [[6, 7], [6, 9], [7, 7], [7, 8], [7, 9], [8, 8], [6, 11], [6, 13], [7, 11], [7, 12], [7, 13], [8, 12]]; // heart eyes
-const ZLOW: number[][] = [[2, 18], [2, 19], [3, 18], [4, 18], [4, 19]];
-const ZHIGH: number[][] = [[0, 17], [0, 18], [0, 19], [1, 18], [2, 17], [2, 18]];
+const ZLOW: number[][] = [[3, 18], [3, 19], [4, 18]];                                            // small z, low
+const ZHIGH: number[][] = [[1, 18], [1, 19], [2, 18], [3, 17], [3, 18], [3, 19]];                // medium z, higher
+const ZBIG: number[][] = [[0, 17], [0, 18], [0, 19], [1, 18], [1, 19], [2, 17], [2, 18], [2, 19]]; // big z, highest
 
 function grid(): string[][] { return BASE.map((r) => r.split("")); }
 function eyesHalf(): string[][] { const g = grid(); EYE_COLS.forEach((c) => (g[6][c] = "B")); return g; }
@@ -82,7 +83,27 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   }
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
+/** A few little hearts that float up + fade from `host` — fired when Goobi loves something. */
+function emitHearts(host: HTMLElement): void {
+  try { if (getComputedStyle(host).position === "static") host.style.position = "relative"; } catch { /* ignore */ }
+  for (let i = 0; i < 3; i++) {
+    const heart = document.createElement("span");
+    heart.textContent = "♥";
+    heart.style.cssText = `position:absolute;left:${28 + Math.random() * 44}%;top:6%;color:${LOVE_RED};font-size:${11 + Math.round(Math.random() * 6)}px;pointer-events:none;z-index:6;opacity:0;`;
+    host.appendChild(heart);
+    const rise = 26 + Math.random() * 22;
+    heart.animate(
+      [
+        { transform: "translateY(0) scale(.5)", opacity: 0 },
+        { transform: `translateY(-${rise * 0.4}px) scale(1)`, opacity: 1, offset: 0.3 },
+        { transform: `translateY(-${rise}px) scale(.9)`, opacity: 0 },
+      ],
+      { duration: 1100 + Math.random() * 500, easing: "ease-out", delay: i * 130 },
+    ).onfinish = () => heart.remove();
+  }
+}
+
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-snooze", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -110,9 +131,9 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
     stop();
     const body = m === "worn" ? RED : CORAL;
     if (m === "sleeping") {
-      const frames = [sleepFrame(ZLOW), sleepFrame(ZHIGH), sleepFrame([])];
+      const frames = [sleepFrame(ZLOW), sleepFrame(ZHIGH), sleepFrame(ZBIG), sleepFrame([])]; // a z that grows + rises, then a beat of none
       let i = 0;
-      const tick = () => { if (!alive()) return; paint(ctx, frames[i % frames.length], cell, body); i++; timer = window.setTimeout(tick, 620); };
+      const tick = () => { if (!alive() || mood !== "sleeping") return; paint(ctx, frames[i % frames.length], cell, body); i++; timer = window.setTimeout(tick, 640); };
       tick();
     } else if (m === "searching") {
       // Eagerly scanning everywhere (right · center · up · left) over a hunting sway-hop.
@@ -130,6 +151,8 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
       tick();
     } else if (m === "love") {
       paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
+      emitHearts(host); // little hearts float up
+
     } else if (m === "happy" || m === "cheer") {
       paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
     } else if (m === "worn") {

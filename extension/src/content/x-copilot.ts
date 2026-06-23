@@ -1073,6 +1073,7 @@ const DOCK_CSS = `
 .gcv { display:block; image-rendering:pixelated; transform-origin:bottom center; }
 .g-bob { animation:g-bob 1.7s ease-in-out infinite; }
 .g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
+.g-snooze { animation:g-snooze 3.8s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
 .g-love { animation:g-love .85s ease-in-out infinite; }
@@ -1091,6 +1092,7 @@ const DOCK_CSS = `
 @keyframes g-float { 0%{transform:translateY(0) rotate(-2deg)} 50%{transform:translateY(-9%) rotate(2deg)} 100%{transform:translateY(0) rotate(-2deg)} }
 @keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
 @keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
+@keyframes g-snooze { 0%,100%{transform:scale(1,1) rotate(-3deg)} 50%{transform:scale(1.03,1.06) rotate(3deg)} }
 @keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
 @keyframes g-tada { 0%,100%{transform:scale(1) rotate(0)} 20%{transform:scale(1.12) rotate(-7deg)} 40%,60%,80%{transform:scale(1.14) rotate(7deg)} 50%,70%{transform:scale(1.14) rotate(-7deg)} }
 .empty { color:#8c7d68; font-size:12.5px; padding:24px 16px; text-align:center; }

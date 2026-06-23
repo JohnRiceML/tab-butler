@@ -717,15 +717,33 @@ async function dispatch(el: HTMLElement) {
       case "pg-close": { playground = false; await refresh(); break; }
       case "pg-feed": {
         const snip = el.dataset.snip || "a reply you sent";
-        el.remove(); // Goobi gobbles the treat
-        pgGoobi?.setMood("love");
-        setTimeout(() => pgGoobi?.setMood("idle"), 1500);
-        const remaining = document.querySelectorAll("#pg-treats .pg-treat").length;
-        const fed = pgTotal - remaining;
-        const fill = document.getElementById("pg-fill"); if (fill) fill.style.width = `${pgTotal ? Math.round((fed / pgTotal) * 100) : 0}%`;
-        const cnt = document.getElementById("pg-count"); if (cnt) cnt.textContent = `${fed} / ${pgTotal}`;
-        const msg = document.getElementById("pg-msg");
-        if (msg) msg.textContent = remaining === 0 ? "Goobi's stuffed and happy ♥" : `nom! "${snip.length > 38 ? snip.slice(0, 38) + "…" : snip}"`;
+        const stage = document.querySelector<HTMLElement>(".pg-stage");
+        const r = el.getBoundingClientRect();
+        el.remove(); // pull it from the row now; the chomp + belly update land when it arrives
+        const arrive = () => {
+          pgGoobi?.setMood("love"); // heart eyes + floating hearts
+          setTimeout(() => pgGoobi?.setMood("idle"), 1500);
+          const remaining = document.querySelectorAll("#pg-treats .pg-treat").length;
+          const fed = pgTotal - remaining;
+          const fill = document.getElementById("pg-fill"); if (fill) fill.style.width = `${pgTotal ? Math.round((fed / pgTotal) * 100) : 0}%`;
+          const cnt = document.getElementById("pg-count"); if (cnt) cnt.textContent = `${fed} / ${pgTotal}`;
+          const msg = document.getElementById("pg-msg");
+          if (msg) msg.textContent = remaining === 0 ? "Goobi's stuffed and happy ♥" : `nom! "${snip.length > 38 ? snip.slice(0, 38) + "…" : snip}"`;
+        };
+        if (stage && typeof (el as HTMLElement).animate === "function") {
+          const sr = stage.getBoundingClientRect();
+          const fly = document.createElement("div");
+          fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:9999;pointer-events:none`;
+          document.body.appendChild(fly);
+          const dx = sr.left + sr.width / 2 - (r.left + r.width / 2);
+          const dy = sr.top + sr.height * 0.6 - (r.top + r.height / 2);
+          const a = fly.animate([
+            { transform: "translate(0,0) scale(1)", opacity: 1 },
+            { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 34}px) scale(.85)`, opacity: 1, offset: 0.55 },
+            { transform: `translate(${dx}px, ${dy}px) scale(.2)`, opacity: 0 },
+          ], { duration: 440, easing: "cubic-bezier(.5,0,.6,1)" });
+          a.onfinish = () => { fly.remove(); arrive(); };
+        } else { arrive(); }
         break;
       }
       case "pg-pet": {
