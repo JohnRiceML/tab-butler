@@ -1077,6 +1077,8 @@ const DOCK_CSS = `
 .g-love { animation:g-love .85s ease-in-out infinite; }
 @keyframes g-love { 0%,100%{transform:translateY(0) scale(1,1) rotate(0)} 25%{transform:translateY(-13%) scale(1.04,.96) rotate(-4deg)} 50%{transform:translateY(0) scale(1.07,.93)} 75%{transform:translateY(-13%) scale(1.04,.96) rotate(4deg)} }
 .g-think { animation:g-think 1.5s ease-in-out infinite; }
+.g-hunt { animation:g-hunt 1.1s ease-in-out infinite; }
+@keyframes g-hunt { 0%{transform:translateX(-7%) translateY(0)} 25%{transform:translateX(-7%) translateY(-9%)} 50%{transform:translateX(7%) translateY(0)} 75%{transform:translateX(7%) translateY(-9%)} 100%{transform:translateX(-7%) translateY(0)} }
 .g-wiggle { animation:g-wiggle .85s ease-in-out infinite; }
 .g-bounce { animation:g-bounce .65s ease-in-out infinite; }
 .g-heartbeat { animation:g-heartbeat 1.3s ease-in-out infinite; }

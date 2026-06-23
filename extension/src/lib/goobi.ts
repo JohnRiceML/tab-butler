@@ -54,9 +54,9 @@ function eyesShift(d: number): string[][] {
   [6, 7, 8].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c + d])));
   return faceWith(px);
 }
-function eyesUp(): string[][] { // glancing up — concentrating
+function eyesUp(d = 0): string[][] { // glancing up (optionally shifted) — concentrating
   const px: number[][] = [];
-  [5, 6, 7].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c])));
+  [5, 6, 7].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c + d])));
   return faceWith(px);
 }
 function winkRight(): string[][] { const g = grid(); [12, 13].forEach((c) => { g[6][c] = "B"; g[7][c] = "B"; }); return g; }
@@ -82,7 +82,7 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   }
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -114,13 +114,19 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       const tick = () => { if (!alive()) return; paint(ctx, frames[i % frames.length], cell, body); i++; timer = window.setTimeout(tick, 620); };
       tick();
     } else if (m === "searching") {
-      const frames = [grid(), eyesShift(1), grid(), eyesShift(-1)];
-      const holds = [480, 420, 360, 420];
+      // Eagerly scanning everywhere (right · center · up · left) over a hunting sway-hop.
+      const frames = [eyesShift(1), grid(), eyesUp(), eyesShift(-1), grid()];
+      const holds = [320, 190, 300, 320, 190];
       let i = 0;
-      const tick = () => { if (!alive()) return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
+      const tick = () => { if (!alive() || mood !== "searching") return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
       tick();
     } else if (m === "thinking") {
-      paint(ctx, eyesUp(), cell, body); // looking up, concentrating + a gentle think-pulse (css)
+      // Eyes scan up-around while he concentrates (+ a gentle think-pulse css).
+      const frames = [eyesUp(0), eyesUp(-1), eyesUp(0), eyesUp(1)];
+      const holds = [560, 520, 560, 520];
+      let i = 0;
+      const tick = () => { if (!alive() || mood !== "thinking") return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
+      tick();
     } else if (m === "love") {
       paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
     } else if (m === "happy" || m === "cheer") {
@@ -144,9 +150,9 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       const tick = () => {
         if (!alive() || mood !== "idle") return;
         FLOUR[Math.floor(Math.random() * FLOUR.length)]();
-        timer = window.setTimeout(tick, 3000 + Math.random() * 4500);
+        timer = window.setTimeout(tick, 1700 + Math.random() * 2600); // fidget more often
       };
-      timer = window.setTimeout(tick, 1500 + Math.random() * 2000);
+      timer = window.setTimeout(tick, 1000 + Math.random() * 1400);
     }
   }
 
