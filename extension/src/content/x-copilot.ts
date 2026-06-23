@@ -589,6 +589,7 @@ interface SentRecord {
   angle?: string;        // the drafting angle used
   norm?: string;         // normalized reply text (match + dedup)
   snippet?: string;      // first 80 chars of the reply (match via /user-replies)
+  avatar?: string;       // the author's profile picture (so the playground treat wears their face)
   outcome?: { at: number; likes?: number; replies?: number; authorReplied?: boolean };
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
@@ -828,6 +829,7 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
     angle: angle || opp?.category,
     norm: normalizeReply(text) || undefined,
     snippet: text.slice(0, 80),
+    avatar: opp?.avatar,
   };
   replyLog.sent.push(rec);
   if (replyLog.sent.length > SENT_MAX) replyLog.sent = replyLog.sent.slice(-SENT_MAX);
@@ -1129,9 +1131,10 @@ const DOCK_CSS = `
 .dpg-fill { height:100%; width:0%; background:linear-gradient(90deg,#f4b07e,#f4411f); border-radius:6px; transition:width .4s cubic-bezier(.34,1.56,.64,1); }
 .dpg-lbl { display:flex; justify-content:space-between; font-size:10.5px; color:#8c7d68; margin-top:5px; }
 .dpg-treats { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; min-height:6px; }
-.dpg-treat { width:28px; height:28px; border-radius:50%; border:0; cursor:pointer; background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f); box-shadow:0 1px 3px rgba(0,0,0,.35); transition:transform .1s; }
+.dpg-treat { position:relative; overflow:hidden; width:30px; height:30px; border-radius:50%; border:1.5px solid rgba(244,176,126,.55); cursor:pointer; background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f); box-shadow:0 1px 3px rgba(0,0,0,.35); transition:transform .1s; }
 .dpg-treat:hover { transform:scale(1.14); }
 .dpg-treat:active { transform:scale(.9); }
+.dpg-av { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; }
 .dpg-row { display:flex; gap:8px; align-items:center; margin-top:16px; }
 .dpg-hunt { flex:1; border:0; border-radius:10px; padding:10px; font:600 13px inherit; cursor:pointer; background:#3a322a; color:#8c7d68; transition:background .25s,color .25s,box-shadow .25s; }
 .dpg-hunt.ready { background:linear-gradient(90deg,#f4b07e,#f4411f); color:#1a1206; box-shadow:0 4px 14px rgba(244,65,31,.35); animation:dpg-pulse 1.7s ease-in-out infinite; }
@@ -1592,7 +1595,8 @@ function feedTreat(b: HTMLButtonElement, rec: SentRecord, snip: string): void {
   if (stage && typeof b.animate === "function") {
     const sr = stage.getBoundingClientRect();
     const fly = document.createElement("div");
-    fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none`;
+    fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;overflow:hidden;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none`;
+    if (rec.avatar) { const fav = document.createElement("img"); fav.src = rec.avatar; fav.alt = ""; fav.referrerPolicy = "no-referrer"; fav.style.cssText = "width:100%;height:100%;object-fit:cover"; fav.onerror = () => fav.remove(); fly.append(fav); }
     document.documentElement.appendChild(fly);
     const dx = sr.left + sr.width / 2 - (r.left + r.width / 2);
     const dy = sr.top + sr.height * 0.6 - (r.top + r.height / 2);
@@ -1630,7 +1634,8 @@ function buildPlay(): HTMLElement {
   today.forEach((rec) => {
     if (goobiFedIds.has(String(rec.at))) return;
     const snip = rec.snippet || "a reply you sent";
-    const b = document.createElement("button"); b.className = "dpg-treat"; b.title = snip;
+    const b = document.createElement("button"); b.className = "dpg-treat"; b.title = (rec.author ? `@${rec.author} — ` : "") + snip;
+    if (rec.avatar) { const av = document.createElement("img"); av.className = "dpg-av"; av.src = rec.avatar; av.alt = ""; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); b.append(av); } // the face of whoever you replied to
     b.onclick = () => feedTreat(b, rec, snip);
     treats.append(b);
   });
