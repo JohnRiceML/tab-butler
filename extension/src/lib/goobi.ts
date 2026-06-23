@@ -32,14 +32,11 @@ const COLS = BASE[0].length, ROWS = BASE.length;
 const EYE_COLS = [7, 8, 12, 13];
 
 const CORAL = "rgb(215,119,87)", RED = "rgb(210,59,46)"; // Clawd coral · "unwell" red
-const EYE = "#141413", HILITE = "#faf9f5", ZZZ = "#b0aea5", LOVE_RED = "#d23b2e";
+const EYE = "#141413", HILITE = "#faf9f5", LOVE_RED = "#d23b2e";
 
 const HAPPY: number[][] = [[6, 8], [7, 7], [7, 9], [6, 12], [7, 11], [7, 13]];           // ^‿^ squint
 const XEYES: number[][] = [[6, 7], [6, 9], [7, 8], [8, 7], [8, 9], [6, 11], [6, 13], [7, 12], [8, 11], [8, 13]]; // dizzy
 const LOVE: number[][] = [[6, 7], [6, 9], [7, 7], [7, 8], [7, 9], [8, 8], [6, 11], [6, 13], [7, 11], [7, 12], [7, 13], [8, 12]]; // heart eyes
-const ZLOW: number[][] = [[3, 18], [3, 19], [4, 18]];                                            // small z, low
-const ZHIGH: number[][] = [[1, 18], [1, 19], [2, 18], [3, 17], [3, 18], [3, 19]];                // medium z, higher
-const ZBIG: number[][] = [[0, 17], [0, 18], [0, 19], [1, 18], [1, 19], [2, 17], [2, 18], [2, 19]]; // big z, highest
 
 function grid(): string[][] { return BASE.map((r) => r.split("")); }
 function eyesHalf(): string[][] { const g = grid(); EYE_COLS.forEach((c) => (g[6][c] = "B")); return g; }
@@ -67,18 +64,13 @@ function loveFace(): string[][] { // red heart eyes
   LOVE.forEach((p) => (g[p[0]][p[1]] = "R"));
   return g;
 }
-function sleepFrame(zpx: number[][]): string[][] {
-  const g = eyesClosed();
-  zpx.forEach((p) => (g[p[0]][p[1]] = "Z"));
-  return g;
-}
 
 function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body: string): void {
   ctx.clearRect(0, 0, COLS * cell, ROWS * cell);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     const ch = g[r][c];
     if (ch === ".") continue;
-    ctx.fillStyle = ch === "E" ? EYE : ch === "H" ? HILITE : ch === "Z" ? ZZZ : ch === "R" ? LOVE_RED : body;
+    ctx.fillStyle = ch === "E" ? EYE : ch === "H" ? HILITE : ch === "R" ? LOVE_RED : body;
     ctx.fillRect(c * cell, r * cell, cell + 0.5, cell + 0.5);
   }
 }
@@ -101,6 +93,24 @@ function emitHearts(host: HTMLElement): void {
       { duration: 1100 + Math.random() * 500, easing: "ease-out", delay: i * 130 },
     ).onfinish = () => heart.remove();
   }
+}
+
+/** A single sleepy "z" that drifts up-right and grows as it fades — emitted on a
+ *  timer while Goobi sleeps. Reads cleanly as a letter (vs the cramped pixel z's). */
+function emitSleepZ(host: HTMLElement): void {
+  try { if (getComputedStyle(host).position === "static") host.style.position = "relative"; } catch { /* ignore */ }
+  const z = document.createElement("span");
+  z.textContent = "z";
+  z.style.cssText = "position:absolute;right:14%;top:6%;color:#b0aea5;font:700 12px -apple-system,system-ui,sans-serif;pointer-events:none;opacity:0;z-index:6;";
+  host.appendChild(z);
+  z.animate(
+    [
+      { transform: "translate(0,3px) scale(.7)", opacity: 0 },
+      { transform: "translate(5px,-7px) scale(1)", opacity: 0.85, offset: 0.35 },
+      { transform: "translate(13px,-24px) scale(1.3)", opacity: 0 },
+    ],
+    { duration: 1700, easing: "ease-out" },
+  ).onfinish = () => z.remove();
 }
 
 const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-snooze", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
@@ -131,10 +141,9 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
     stop();
     const body = m === "worn" ? RED : CORAL;
     if (m === "sleeping") {
-      const frames = [sleepFrame(ZLOW), sleepFrame(ZHIGH), sleepFrame(ZBIG), sleepFrame([])]; // a z that grows + rises, then a beat of none
-      let i = 0;
-      const tick = () => { if (!alive() || mood !== "sleeping") return; paint(ctx, frames[i % frames.length], cell, body); i++; timer = window.setTimeout(tick, 640); };
-      tick();
+      paint(ctx, eyesClosed(), cell, body); // shut eyes; the z's float up as their own elements
+      const tick = () => { if (!alive() || mood !== "sleeping") return; emitSleepZ(host); timer = window.setTimeout(tick, 1700 + Math.random() * 900); };
+      timer = window.setTimeout(tick, 350);
     } else if (m === "searching") {
       // Eagerly scanning everywhere (right · center · up · left) over a hunting sway-hop.
       const frames = [eyesShift(1), grid(), eyesUp(), eyesShift(-1), grid()];
