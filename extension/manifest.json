@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Tab Butler",
+  "name": "Goobi",
   "version": "0.1.0",
-  "description": "Auto-bundles tabs, safely archives idle ones, and is made smart by Claude. Local-first; Claude is opt-in.",
+  "description": "A cute blob that tidies your tabs and helps you reply on X — made smart by Claude. Local-first; draft-only; Claude is opt-in.",
   "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history", "favicon", "sidePanel"],
   "host_permissions": [
     "https://api.anthropic.com/*",
@@ -15,7 +15,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Tab Butler"
+    "default_title": "Goobi"
   },
   "side_panel": {
     "default_path": "popup.html"

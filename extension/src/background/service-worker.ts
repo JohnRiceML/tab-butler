@@ -137,9 +137,9 @@ async function adviseNow(): Promise<AdviceResult> {
 }
 
 async function ensureBookmarkFolder(): Promise<chrome.bookmarks.BookmarkTreeNode> {
-  const found = await chrome.bookmarks.search({ title: "Tab Butler" });
+  const found = await chrome.bookmarks.search({ title: "Goobi" });
   const folder = found.find((b) => !b.url);
-  return folder ?? chrome.bookmarks.create({ title: "Tab Butler" });
+  return folder ?? chrome.bookmarks.create({ title: "Goobi" });
 }
 
 /**

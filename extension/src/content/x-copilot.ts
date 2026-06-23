@@ -6,7 +6,7 @@ import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import type { ProductItem } from "../lib/types";
 
 /**
- * Tab Butler — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
+ * Goobi — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
  * Scans timeline posts, asks the SW (Claude) to score reply-worthiness, badges
  * the worthwhile ones, and drafts a reply in the user's voice on demand.
  * DRAFT ONLY — never posts. Hardened (per adversarial review) for X's
@@ -325,7 +325,7 @@ async function flush() {
   });
   batch.forEach((b) => inFlight.delete(b.id));
   if (resp?.error === "no-key") {
-    if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Tab Butler popup to enable reply suggestions."); }
+    if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Goobi panel to enable reply suggestions."); }
     enabled = false; // stop hammering until reload
     return;
   }
@@ -372,7 +372,7 @@ function setPaused(v: boolean): void {
 }
 
 function rescan() {
-  if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to enable scanning."); return; }
+  if (!enabled) { toast("Add your Anthropic key in the Goobi panel to enable scanning."); return; }
   if (paused) return; // a paused copilot doesn't scan, even on an explicit rescan
   scoreCalls = 0;        // user explicitly asked for more — reset the guard
   scanCapNotified = false;
@@ -392,9 +392,9 @@ let findingSpots = false;
  *  a reply box needs the post opened (the panel/toast guide that). */
 async function findSpots() {
   if (findingSpots) return;
-  if (!enabled) { toast("Add your Anthropic key in the Tab Butler popup to score posts."); return; }
+  if (!enabled) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
   const q = xNiche.trim();
-  if (!q) { toast("Set your niche in the Tab Butler popup so it knows what to search for."); return; }
+  if (!q) { toast("Set your niche in the Goobi panel so it knows what to search for."); return; }
   findingSpots = true;
   renderDock();
   toast("Searching X for fresh posts in your niche…");
@@ -402,7 +402,7 @@ async function findSpots() {
     const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
       type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) }, intent: true,
     });
-    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Tab Butler popup to find spots."); return; }
+    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Goobi panel to find spots."); return; }
     if (search?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — Find spots is paused. It resets on the 1st."); return; }
     if (!search?.ok) {
       const s = search?.status;
@@ -417,7 +417,7 @@ async function findSpots() {
     if (!found.length) { toast("No new posts found for your niche right now."); return; }
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
     const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({ type: "SCORE_POSTS", posts });
-    if (resp?.error === "no-key") { toast("Add your Anthropic key in the Tab Butler popup to score posts."); return; }
+    if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
     if (!resp || resp.error) { toast("Couldn't score the posts — try again."); return; }
     let added = 0;
     for (const s of resp.scores ?? []) {
@@ -885,7 +885,7 @@ async function draftFor(req: DraftReq) {
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, ...ui });
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
-  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Tab Butler popup to draft replies.", ...ui });
+  if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
   else paintPanel(root, author, text, { draft: resp.reply ?? "", ...ui });
 }
@@ -1359,7 +1359,7 @@ function renderDock() {
     const l = document.createElement("button");
     l.className = "l";
     l.onclick = () => { dockOpen = true; renderDock(); };
-    if (!n) { l.textContent = "✦ Tab Butler"; root.appendChild(l); return; }
+    if (!n) { l.textContent = "✦ Goobi"; root.appendChild(l); return; }
     // Overlapped avatars from the top few spots (pbs.twimg.com loads under x.com CSP).
     const faces = topOpps().filter((o) => o.avatar).slice(0, 3);
     if (faces.length) {
@@ -1384,7 +1384,7 @@ function renderDock() {
   const sub = document.createElement("div"); sub.className = "dsub";
   const cnt = document.createElement("span");
   cnt.textContent = `${n} ready · ${today} sent today`;
-  cnt.title = "Posts ready to reply to · replies you've inserted through Tab Butler today (resets at local midnight).";
+  cnt.title = "Posts ready to reply to · replies you've inserted through Goobi today (resets at local midnight).";
   sub.append(cnt);
   // Live pace chip — surfaces the account-safety status in the moment you're replying.
   const rhh = replyLog.times.filter((tm) => Date.now() - tm < HOUR_MS).length;
@@ -1392,7 +1392,7 @@ function renderDock() {
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
   if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
-  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Tab Butler keeps you under it.`; }
+  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Goobi keeps you under it.`; }
   sub.append(document.createTextNode(" · "), chip);
   t.append(ti, sub);
 

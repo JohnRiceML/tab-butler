@@ -367,7 +367,7 @@ function render(d: ViewData): string {
     : "";
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><div class="sq" style="background:var(--brand)">${ICON.layout}</div><div class="wordmark"><div class="brand">Tab Butler</div><div class="tagline">Your tabs. Smarter.</div></div></div>
+    <div class="row-flex gap10"><div class="sq" id="goobi-face" style="background:var(--brand)">${ICON.layout}</div><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Your browser buddy.</div></div></div>
     <div class="row-flex gap12">
       <span class="muted" style="font-size:11.5px">Smart</span>
       <label class="switch"><input type="checkbox" id="smart" aria-label="Smart mode — use Claude for grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label>
