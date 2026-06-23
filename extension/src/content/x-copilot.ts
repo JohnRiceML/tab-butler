@@ -1575,8 +1575,8 @@ let goobiPlayHandle: GoobiHandle | null = null;    // the big, interactive Goobi
 let goobiFed = 0, goobiPets = 0;                   // this session's care → earns a hunt
 const fedEver = new Set<string>();                 // ids of replies Goobi has eaten (persisted) — fed treats don't come back
 let fedTotal = 0;                                  // lifetime treats eaten (persisted), shown in the playground
-const PLAY_HAPPY = 3;                              // fed×2 + pets needed before Goobi will go hunting
-function playHappiness(): number { return goobiFed * 2 + goobiPets * 0.2; } // feeding is what makes him happy; pets barely count
+const PLAY_HAPPY = 6;                              // a good few feeds to fully pump him up (pets barely move it)
+function playHappiness(): number { return goobiFed + goobiPets * 0.1; } // feeding is what makes him happy; pets barely count
 function goobiCelebrate(): void { goobiPlayHandle?.setMood("cheer"); goobiPlayHandle?.trick(); } // resting-happy + a random show-off move
 function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
 function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }

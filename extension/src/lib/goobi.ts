@@ -79,13 +79,16 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   }
 }
 
-/** A few little hearts that float up + fade from `host` — fired when Goobi loves something. */
-function emitHearts(host: HTMLElement): void {
+/** A few little hearts that float up + fade from Goobi — fired when he loves something.
+ *  Positioned by the CANVAS box (not the host), so they line up with Goobi even when the
+ *  host is much taller than him (e.g. the playground stage, where he sits at the bottom). */
+function emitHearts(host: HTMLElement, canvas: HTMLCanvasElement): void {
   try { if (getComputedStyle(host).position === "static") host.style.position = "relative"; } catch { /* ignore */ }
+  const cx = canvas.offsetLeft, cy = canvas.offsetTop, cw = canvas.offsetWidth || host.clientWidth;
   for (let i = 0; i < 3; i++) {
     const heart = document.createElement("span");
     heart.textContent = "♥";
-    heart.style.cssText = `position:absolute;left:${28 + Math.random() * 44}%;top:6%;color:${LOVE_RED};font-size:${11 + Math.round(Math.random() * 6)}px;pointer-events:none;z-index:6;opacity:0;`;
+    heart.style.cssText = `position:absolute;left:${cx + cw * (0.26 + Math.random() * 0.48)}px;top:${cy + 4}px;color:${LOVE_RED};font-size:${11 + Math.round(Math.random() * 6)}px;pointer-events:none;z-index:6;opacity:0;`;
     host.appendChild(heart);
     const rise = 26 + Math.random() * 22;
     heart.animate(
@@ -164,7 +167,7 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
       tick();
     } else if (m === "love") {
       paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
-      emitHearts(host); // little hearts float up
+      emitHearts(host, canvas); // little hearts float up from Goobi himself
 
     } else if (m === "happy" || m === "cheer" || m === "trick") {
       paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada/spin (css); 'trick' adds the g-trick flip

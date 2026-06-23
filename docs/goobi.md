@@ -78,8 +78,8 @@ Working-state flips (search/analyze/draft) update Goobi **in place** via
   `springOpen`/`springClose` ease the panel height while the inner content
   overshoots in). A bigger interactive Goobi (cell 4, `playful`), today's replies
   as treats (`todaySent`, each flies into his mouth on feed), and tap-to-pet. Care
-  fills an **energy meter** (`playHappiness` = fed×2 + pets×0.2 — feeding is what
-  makes him happy; petting barely counts); at `PLAY_HAPPY` the
+  fills an **energy meter** (`playHappiness` = fed + pets×0.1 — feeding is what makes
+  him happy; petting barely counts); at `PLAY_HAPPY` (6 — a good few feeds) the
   **"↻ Let's go hunt!"** button unlocks and glows — clicking it collapses the
   playground and triggers `rescan()`. So a scan is something you *earn* by looking
   after him. Energy resets each time the playground opens.
