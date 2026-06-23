@@ -54,6 +54,8 @@
       @keyframes g-snooze { 0%,100% { transform: scale(1,1) rotate(-3deg); } 50% { transform: scale(1.03,1.06) rotate(3deg); } }
       .g-wobble { animation: g-wobble 1.6s ease-in-out infinite; }
       .g-tada { animation: g-tada .9s ease-in-out infinite; }
+      .g-trick { animation: g-trick 1.05s ease-in-out infinite; }
+      @keyframes g-trick { 0% { transform: rotate(0) translateY(0) scale(1); } 18% { transform: rotate(-12deg) translateY(-34%) scale(1.06); } 60% { transform: rotate(360deg) translateY(0) scale(1.06); } 80% { transform: rotate(360deg) translateY(-12%) scale(1); } 100% { transform: rotate(360deg) translateY(0) scale(1); } }
       .g-think { animation: g-think 1.5s ease-in-out infinite; }
       .g-love { animation: g-love .85s ease-in-out infinite; }
       @keyframes g-love { 0%,100% { transform: translateY(0) scale(1,1) rotate(0); } 25% { transform: translateY(-13%) scale(1.04,.96) rotate(-4deg); } 50% { transform: translateY(0) scale(1.07,.93); } 75% { transform: translateY(-13%) scale(1.04,.96) rotate(4deg); } }

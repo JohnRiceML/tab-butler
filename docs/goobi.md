@@ -35,6 +35,7 @@ a timer or lets one animation bleed into the next.
 | `thinking` | eyes scan up-around | `g-think` | analyzing (Claude scoring) / drafting |
 | `happy` | `^‿^` | `g-bob` | follow; (legacy reply beat) |
 | `cheer` | `^‿^` + shimmy | `g-tada` | streak / welcome-back / pet |
+| `trick` | `^‿^` + hop-and-360-spin | `g-trick` | playground: pet/feed once he's "ready" (happy) → he shows off |
 | `love` | red heart eyes + smitten bounce | `g-love` | the reply reaction (after cheer) |
 | `worn` | dizzy X-eyes, body turns red | `g-wobble` | ease-off (≥30 replies/hr) |
 
@@ -80,7 +81,16 @@ Working-state flips (search/analyze/draft) update Goobi **in place** via
   fills an **energy meter** (`playHappiness` = fed×2 + pets); at `PLAY_HAPPY` the
   **"↻ Let's go hunt!"** button unlocks and glows — clicking it collapses the
   playground and triggers `rescan()`. So a scan is something you *earn* by looking
-  after him. Happiness resets each time the playground opens.
+  after him. Energy resets each time the playground opens.
+  - **Fed treats are remembered across sessions.** `fedEver` (a Set of reply ids,
+    `treatId(rec) = rec.id ?? at`) + a lifetime `fedTotal` persist under
+    `X_GOOBI_FED_KEY` (loaded at boot, saved on each feed, ids capped at 2000). A
+    reply he's already eaten never reappears as a treat; the "🍪 N eaten" stat shows
+    the running total. (`SentRecord.id` is a unique per-reply stamp so two replies in
+    the same millisecond can't collide.)
+  - **Tricks when happy.** Once he's `playReady`, petting or finishing a feed sends
+    him into the `trick` mood (a hop + 360° spin) before he settles — a little reward
+    for getting him pumped.
 - **Side-panel header** (`popup.ts`): the logo; mirrors pace (`worn` at ease-off,
   else `idle`). Click him → **the playground**.
 - **Playground** (`popup.ts` `renderPlayground`): a Tamagotchi room. Treats = the

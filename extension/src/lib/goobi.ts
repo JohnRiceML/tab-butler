@@ -7,7 +7,7 @@
  * animation system lives in mascot-lab.html; this is the lightweight in-app version.
  */
 
-export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer" | "love";
+export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer" | "love" | "trick";
 
 export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; destroy(): void; }
 
@@ -113,7 +113,7 @@ function emitSleepZ(host: HTMLElement): void {
   ).onfinish = () => z.remove();
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-snooze", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-snooze", searching: "g-hunt", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love", trick: "g-trick" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -162,8 +162,8 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
       paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
       emitHearts(host); // little hearts float up
 
-    } else if (m === "happy" || m === "cheer") {
-      paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
+    } else if (m === "happy" || m === "cheer" || m === "trick") {
+      paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada/spin (css); 'trick' adds the g-trick flip
     } else if (m === "worn") {
       paint(ctx, faceWith(XEYES), cell, body); // dizzy + red + wobble (css)
     } else { // idle — base bob + a varied, random rotation of little idle moves

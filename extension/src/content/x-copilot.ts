@@ -584,6 +584,7 @@ let draftOppAuthor = "";
  *  loop. `outcome` is filled later by the (paced, API-backed) measure pass that
  *  matches this to your posted reply via /user-replies and reads its engagement. */
 interface SentRecord {
+  id?: string;           // unique per reply (stable key for playground treats + fed-tracking; old records fall back to String(at))
   at: number;            // when we handed you the reply
   postId?: string;       // the tweet you replied to
   author?: string;       // that tweet's author handle
@@ -599,6 +600,7 @@ interface SentRecord {
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
 let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
+let sentSeq = 0; // bump per reply so two in the same millisecond still get distinct ids
 const SENT_MAX = 500; // cap the feature log
 
 /** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
@@ -824,6 +826,7 @@ function bumpDaily(now: number): void {
  *  the "what's working" loop will later correlate with outcomes. */
 function logSentReply(now: number, text: string, opp?: Opp, angle?: string): void {
   const rec: SentRecord = {
+    id: `${now}.${sentSeq++}`,
     at: now,
     postId: opp?.id ?? draftOppId ?? undefined,
     author: (opp?.author ?? draftOppAuthor) || undefined,
@@ -1109,7 +1112,9 @@ const DOCK_CSS = `
 .g-snooze { animation:g-snooze 3.8s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
+.g-trick { animation:g-trick 1.05s ease-in-out infinite; }
 .g-love { animation:g-love .85s ease-in-out infinite; }
+@keyframes g-trick { 0%{transform:rotate(0) translateY(0) scale(1)} 18%{transform:rotate(-12deg) translateY(-34%) scale(1.06)} 60%{transform:rotate(360deg) translateY(0) scale(1.06)} 80%{transform:rotate(360deg) translateY(-12%) scale(1)} 100%{transform:rotate(360deg) translateY(0) scale(1)} }
 @keyframes g-love { 0%,100%{transform:translateY(0) scale(1,1) rotate(0)} 25%{transform:translateY(-13%) scale(1.04,.96) rotate(-4deg)} 50%{transform:translateY(0) scale(1.07,.93)} 75%{transform:translateY(-13%) scale(1.04,.96) rotate(4deg)} }
 .g-think { animation:g-think 1.5s ease-in-out infinite; }
 .g-hunt { animation:g-hunt 1.1s ease-in-out infinite; }
@@ -1141,6 +1146,7 @@ const DOCK_CSS = `
 .dpg-meter { height:9px; border-radius:6px; background:#221c15; border:.5px solid rgba(214,154,92,.12); overflow:hidden; }
 .dpg-fill { height:100%; width:0%; background:linear-gradient(90deg,#f4b07e,#f4411f); border-radius:6px; transition:width .4s cubic-bezier(.34,1.56,.64,1); }
 .dpg-lbl { display:flex; justify-content:space-between; font-size:10.5px; color:#8c7d68; margin-top:5px; }
+.dpg-stat { text-align:center; font-size:10.5px; color:#8c7d68; margin-top:9px; }
 .dpg-treats { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; min-height:6px; }
 .dpg-treat { position:relative; overflow:hidden; width:30px; height:30px; border-radius:50%; border:1.5px solid rgba(244,176,126,.55); cursor:pointer; background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f); box-shadow:0 1px 3px rgba(0,0,0,.35); transition:transform .1s; }
 .dpg-treat:hover { transform:scale(1.14); }
@@ -1407,6 +1413,7 @@ function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
     thinking:  ["Reading the posts…", "thinking it over"],
     happy:     ["Nice reply!", "that's the good stuff"],
     cheer:     ["Nice!", "love that"],
+    trick:     ["Ta-da! 🎪", "he did a trick"],
     love:      ["Love it!", "that's the good stuff"],
     worn:      ["Let's ease off", "you're going fast — give it a minute"],
     idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
@@ -1558,11 +1565,14 @@ function renderList(list: HTMLElement) {
 let dockPlayOpen = false;                          // the playground is expanded inside the dock
 let goobiPlayHandle: GoobiHandle | null = null;    // the big, interactive Goobi in the playground
 let goobiFed = 0, goobiPets = 0;                   // this session's care → earns a hunt
-const goobiFedIds = new Set<string>();             // treats eaten this open-session (so re-renders don't re-show them)
+const fedEver = new Set<string>();                 // ids of replies Goobi has eaten (persisted) — fed treats don't come back
+let fedTotal = 0;                                  // lifetime treats eaten (persisted), shown in the playground
 const PLAY_HAPPY = 3;                              // fed×2 + pets needed before Goobi will go hunting
 function playHappiness(): number { return goobiFed * 2 + goobiPets; }
 function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
 function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }
+function treatId(rec: SentRecord): string { return rec.id ?? String(rec.at); }
+function persistFed(): void { void chrome.storage.local.set({ [CONFIG.X_GOOBI_FED_KEY]: { ids: Array.from(fedEver).slice(-2000), total: fedTotal } }).catch(() => { /* best-effort */ }); }
 const flyingTreats = new Set<HTMLElement>();        // in-flight treat clones, so we can clean them on close/teardown
 function clearFlyingTreats(): void { flyingTreats.forEach((el) => { try { el.getAnimations?.().forEach((a) => a.cancel()); } catch { /* ignore */ } el.remove(); }); flyingTreats.clear(); }
 /** Synchronous playground reset — every dock-dismissal path (✕, pause, relaunch, teardown) runs this
@@ -1587,25 +1597,29 @@ function syncPlay(): void {
 
 function petGoobi(): void {
   goobiPets++;
-  goobiPlayHandle?.setMood("cheer");
-  setTimeout(() => goobiPlayHandle?.setMood(playReady() ? "cheer" : "idle"), 1200);
+  if (playReady()) { goobiPlayHandle?.setMood("trick"); setTimeout(() => goobiPlayHandle?.setMood("cheer"), 1100); } // happy enough → he shows off
+  else { goobiPlayHandle?.setMood("cheer"); setTimeout(() => goobiPlayHandle?.setMood("idle"), 1200); }
   const msg = dockRoot?.querySelector("#dpg-msg");
-  if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥", "more!"]; msg.textContent = playReady() ? "Goobi's pumped — send him hunting! ↻" : lines[Math.floor(Math.random() * lines.length)]; }
+  if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥", "more!"]; msg.textContent = playReady() ? "🎪 ta-da! send him hunting ↻" : lines[Math.floor(Math.random() * lines.length)]; }
   syncPlay();
 }
 
 function feedTreat(b: HTMLButtonElement, rec: SentRecord, id: string, snip: string): void {
-  if (goobiFedIds.has(id)) return;
-  goobiFedIds.add(id);
+  if (fedEver.has(id)) return;
+  fedEver.add(id); fedTotal++; persistFed(); // Goobi remembers what he's eaten — it won't come back
   const stage = dockRoot?.querySelector<HTMLElement>(".dpg-stage");
   const r = b.getBoundingClientRect();
   b.remove(); // pull it from the row now; the chomp + meter land when it arrives
   const arrive = () => {
     goobiFed++;
-    goobiPlayHandle?.setMood("love");
-    setTimeout(() => goobiPlayHandle?.setMood(playReady() ? "cheer" : "idle"), 1400);
+    goobiPlayHandle?.setMood("love"); // chomp
+    setTimeout(() => {
+      if (playReady()) { goobiPlayHandle?.setMood("trick"); setTimeout(() => goobiPlayHandle?.setMood("cheer"), 1100); } // so happy he does a trick
+      else goobiPlayHandle?.setMood("idle");
+    }, 1400);
     const msg = dockRoot?.querySelector("#dpg-msg");
-    if (msg) msg.textContent = playReady() ? "Goobi's pumped — send him hunting! ↻" : `nom! "${snip.length > 32 ? snip.slice(0, 32) + "…" : snip}"`;
+    if (msg) msg.textContent = playReady() ? "🎪 Goobi's pumped — send him hunting! ↻" : `nom! "${snip.length > 32 ? snip.slice(0, 32) + "…" : snip}"`;
+    const stat = dockRoot?.querySelector("#dpg-stat"); if (stat) stat.textContent = `🍪 ${fedTotal} ${fedTotal === 1 ? "treat" : "treats"} eaten`;
     syncPlay();
   };
   if (stage && typeof b.animate === "function") {
@@ -1634,9 +1648,9 @@ function buildPlay(): HTMLElement {
   stage.onclick = () => petGoobi();
   pg.append(stage);
 
-  const today = todaySent();
+  const unfed = todaySent().filter((rec) => !fedEver.has(treatId(rec))); // fed treats stay eaten (persisted)
   const msg = document.createElement("div"); msg.className = "dpg-msg"; msg.id = "dpg-msg";
-  msg.textContent = today.length ? "Feed Goobi today's replies — tap a treat." : "Pet Goobi to pep him up, then send him hunting.";
+  msg.textContent = unfed.length ? "Feed Goobi today's replies — or tap him to pet." : "All caught up — tap Goobi to pet him, then send him hunting.";
   pg.append(msg);
 
   const meter = document.createElement("div"); meter.className = "dpg-meter";
@@ -1645,11 +1659,12 @@ function buildPlay(): HTMLElement {
   const lbl = document.createElement("div"); lbl.className = "dpg-lbl";
   lbl.append(Object.assign(document.createElement("span"), { textContent: "Goobi's energy" }), Object.assign(document.createElement("span"), { id: "dpg-energy" }));
   pg.append(lbl);
+  const stat = document.createElement("div"); stat.className = "dpg-stat"; stat.id = "dpg-stat"; stat.textContent = `🍪 ${fedTotal} ${fedTotal === 1 ? "treat" : "treats"} eaten`;
+  pg.append(stat);
 
   const treats = document.createElement("div"); treats.className = "dpg-treats"; treats.id = "dpg-treats";
-  today.forEach((rec, idx) => {
-    const id = rec.at + "#" + idx; // unique within a session even if two replies share a millisecond
-    if (goobiFedIds.has(id)) return;
+  unfed.forEach((rec) => {
+    const id = treatId(rec);
     const snip = rec.snippet || "a reply you sent";
     const b = document.createElement("button"); b.className = "dpg-treat"; b.title = (rec.author ? `@${rec.author} — ` : "") + snip;
     if (rec.avatar) { const av = document.createElement("img"); av.className = "dpg-av"; av.src = rec.avatar; av.alt = ""; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); b.append(av); } // the face of whoever you replied to
@@ -1688,7 +1703,7 @@ function springClose(panel: HTMLElement, done: () => void): void {
 
 function openPlay(): void {
   if (dockPlayOpen || paused) return;
-  dockPlayOpen = true; goobiFed = 0; goobiPets = 0; goobiFedIds.clear();
+  dockPlayOpen = true; goobiFed = 0; goobiPets = 0; // session energy resets; fedEver persists (he remembers what he ate)
   renderDock();
   const panel = dockRoot?.querySelector<HTMLElement>(".dplay");
   if (panel) springOpen(panel);
@@ -1868,6 +1883,12 @@ async function boot() {
   }
   goobiLastSeen = (await getLocal(CONFIG.X_GOOBI_SEEN_KEY)) as number || 0;
   if (goobiLastSeen && Date.now() - goobiLastSeen >= 2 * DAY_MS) goobiWelcomeBack = true; // away a while → he missed you
+  const storedFed = await getLocal(CONFIG.X_GOOBI_FED_KEY); // what Goobi has eaten, across sessions
+  if (storedFed && typeof storedFed === "object") {
+    const f = storedFed as { ids?: string[]; total?: number };
+    (f.ids || []).forEach((id) => fedEver.add(id));
+    fedTotal = Number(f.total) || fedEver.size;
+  }
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
