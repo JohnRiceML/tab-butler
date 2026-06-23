@@ -825,8 +825,8 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
   // The first reply of a day that extends a streak earns a bigger 'cheer' (tada).
   if (repliesLastHour() < REPLY_HARD_PER_HOUR) {
     const streak = replyStreak();
-    if (firstToday && streak >= 2) goobiReact("cheer", `${streak}-day streak!`, "love that you keep showing up", 2900);
-    else goobiReact("happy", "Nice reply!", "that's the good stuff", 2300);
+    if (firstToday && streak >= 2) goobiReactLove(`${streak}-day streak!`, "love that you keep showing up", 3800);
+    else goobiReactLove("Love it!", "that's the good stuff", 3200);
   }
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   renderDock(); // update "N replies sent today" immediately
@@ -1074,6 +1074,8 @@ const DOCK_CSS = `
 .g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
+.g-love { animation:g-love .85s ease-in-out infinite; }
+@keyframes g-love { 0%,100%{transform:translateY(0) scale(1,1) rotate(0)} 25%{transform:translateY(-13%) scale(1.04,.96) rotate(-4deg)} 50%{transform:translateY(0) scale(1.07,.93)} 75%{transform:translateY(-13%) scale(1.04,.96) rotate(4deg)} }
 .g-think { animation:g-think 1.5s ease-in-out infinite; }
 .g-wiggle { animation:g-wiggle .85s ease-in-out infinite; }
 .g-bounce { animation:g-bounce .65s ease-in-out infinite; }
@@ -1290,6 +1292,14 @@ function goobiReact(mood: GoobiMood, line: string, sub: string, ms: number): voi
   setTimeout(() => { if (Date.now() >= goobiReactUntil) renderDock(); }, ms + 100);
 }
 
+/** The reply reaction: a big happy cheer (^‿^ tada) that melts into heart-eyed love. */
+function goobiReactLove(line: string, sub: string, ms: number): void {
+  goobiReactUntil = Date.now() + ms; goobiReactMood = "cheer"; goobiReactCopy = [line, sub];
+  renderDock();
+  setTimeout(() => { if (Date.now() < goobiReactUntil) { goobiReactMood = "love"; refreshGoobi(); } }, 1100); // cheer → love
+  setTimeout(() => { if (Date.now() >= goobiReactUntil) renderDock(); }, ms + 100);
+}
+
 /** Goobi's mood from real dock signals: he naps when nothing's going on, looks
  *  around while searching, beams when you reply, and goes woozy when you're hot. */
 function goobiMood(): GoobiMood {
@@ -1318,6 +1328,7 @@ function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
     thinking:  ["Reading the posts…", "thinking it over"],
     happy:     ["Nice reply!", "that's the good stuff"],
     cheer:     ["Nice!", "love that"],
+    love:      ["Love it!", "that's the good stuff"],
     worn:      ["Let's ease off", "you're going fast — give it a minute"],
     idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
     sleeping:  ["All quiet", "tap me to go hunting"],

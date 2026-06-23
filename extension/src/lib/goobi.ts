@@ -7,7 +7,7 @@
  * animation system lives in mascot-lab.html; this is the lightweight in-app version.
  */
 
-export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer";
+export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer" | "love";
 
 export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; destroy(): void; }
 
@@ -32,10 +32,11 @@ const COLS = BASE[0].length, ROWS = BASE.length;
 const EYE_COLS = [7, 8, 12, 13];
 
 const CORAL = "rgb(215,119,87)", RED = "rgb(210,59,46)"; // Clawd coral · "unwell" red
-const EYE = "#141413", HILITE = "#faf9f5", ZZZ = "#b0aea5";
+const EYE = "#141413", HILITE = "#faf9f5", ZZZ = "#b0aea5", LOVE_RED = "#d23b2e";
 
 const HAPPY: number[][] = [[6, 8], [7, 7], [7, 9], [6, 12], [7, 11], [7, 13]];           // ^‿^ squint
 const XEYES: number[][] = [[6, 7], [6, 9], [7, 8], [8, 7], [8, 9], [6, 11], [6, 13], [7, 12], [8, 11], [8, 13]]; // dizzy
+const LOVE: number[][] = [[6, 7], [6, 9], [7, 7], [7, 8], [7, 9], [8, 8], [6, 11], [6, 13], [7, 11], [7, 12], [7, 13], [8, 12]]; // heart eyes
 const ZLOW: number[][] = [[2, 18], [2, 19], [3, 18], [4, 18], [4, 19]];
 const ZHIGH: number[][] = [[0, 17], [0, 18], [0, 19], [1, 18], [2, 17], [2, 18]];
 
@@ -59,6 +60,12 @@ function eyesUp(): string[][] { // glancing up — concentrating
   return faceWith(px);
 }
 function winkRight(): string[][] { const g = grid(); [12, 13].forEach((c) => { g[6][c] = "B"; g[7][c] = "B"; }); return g; }
+function loveFace(): string[][] { // red heart eyes
+  const g = grid();
+  [6, 7, 8].forEach((r) => EYE_COLS.forEach((c) => (g[r][c] = "B")));
+  LOVE.forEach((p) => (g[p[0]][p[1]] = "R"));
+  return g;
+}
 function sleepFrame(zpx: number[][]): string[][] {
   const g = eyesClosed();
   zpx.forEach((p) => (g[p[0]][p[1]] = "Z"));
@@ -70,12 +77,12 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     const ch = g[r][c];
     if (ch === ".") continue;
-    ctx.fillStyle = ch === "E" ? EYE : ch === "H" ? HILITE : ch === "Z" ? ZZZ : body;
+    ctx.fillStyle = ch === "E" ? EYE : ch === "H" ? HILITE : ch === "Z" ? ZZZ : ch === "R" ? LOVE_RED : body;
     ctx.fillRect(c * cell, r * cell, cell + 0.5, cell + 0.5);
   }
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada" };
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada", love: "g-love" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -114,6 +121,8 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       tick();
     } else if (m === "thinking") {
       paint(ctx, eyesUp(), cell, body); // looking up, concentrating + a gentle think-pulse (css)
+    } else if (m === "love") {
+      paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
     } else if (m === "happy" || m === "cheer") {
       paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
     } else if (m === "worn") {
