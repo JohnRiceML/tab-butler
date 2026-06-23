@@ -136,6 +136,7 @@ function teardown(): void {
   try { bodyObs?.disconnect(); } catch { /* ignore */ }
   if (urlPoll) clearInterval(urlPoll);
   if (flushTimer) clearTimeout(flushTimer);
+  try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
   try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
   try { dismissPanel(); } catch { /* ignore */ }
 }
@@ -389,7 +390,7 @@ async function flush() {
 function setPaused(v: boolean): void {
   paused = v;
   void chrome.storage.local.set({ [CONFIG.X_PAUSED_KEY]: v }).catch(() => { /* best-effort */ });
-  if (v) dismissPanel(); // close any open draft so nothing can be inserted while paused
+  if (v) { dismissPanel(); if (dockPlayOpen) resetPlay(); } // close any open draft + collapse the playground while paused
   renderDock();
   if (v) { toast("Paused — the copilot is quiet until you resume."); }
   else { toast("Resumed — finding reply spots again."); rescan(); }
@@ -1191,6 +1192,7 @@ function maybeFetchReach(handle?: string): void {
 }
 
 function pumpReach(): void {
+  if (invalidated) { reachQueue.length = 0; return; } // context gone — don't attempt sendMessage
   while (reachInFlight < REACH_CONCURRENCY && reachQueue.length && reachLookups < REACH_CAP && !twttrUnconfigured) {
     const key = reachQueue.shift()!;
     const cur = authorReach.get(key);
@@ -1551,6 +1553,11 @@ const PLAY_HAPPY = 3;                              // fed×2 + pets needed befor
 function playHappiness(): number { return goobiFed * 2 + goobiPets; }
 function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
 function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }
+const flyingTreats = new Set<HTMLElement>();        // in-flight treat clones, so we can clean them on close/teardown
+function clearFlyingTreats(): void { flyingTreats.forEach((el) => { try { el.getAnimations?.().forEach((a) => a.cancel()); } catch { /* ignore */ } el.remove(); }); flyingTreats.clear(); }
+/** Synchronous playground reset — every dock-dismissal path (✕, pause, relaunch, teardown) runs this
+ *  so we never reopen into a stale playground or leak the big Goobi / in-flight treats. */
+function resetPlay(): void { dockPlayOpen = false; goobiPlayHandle?.destroy(); goobiPlayHandle = null; clearFlyingTreats(); }
 
 /** Sync the meter + hunt button to the live happiness (called after every feed/pet). */
 function syncPlay(): void {
@@ -1577,8 +1584,7 @@ function petGoobi(): void {
   syncPlay();
 }
 
-function feedTreat(b: HTMLButtonElement, rec: SentRecord, snip: string): void {
-  const id = String(rec.at);
+function feedTreat(b: HTMLButtonElement, rec: SentRecord, id: string, snip: string): void {
   if (goobiFedIds.has(id)) return;
   goobiFedIds.add(id);
   const stage = dockRoot?.querySelector<HTMLElement>(".dpg-stage");
@@ -1597,14 +1603,14 @@ function feedTreat(b: HTMLButtonElement, rec: SentRecord, snip: string): void {
     const fly = document.createElement("div");
     fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;overflow:hidden;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none`;
     if (rec.avatar) { const fav = document.createElement("img"); fav.src = rec.avatar; fav.alt = ""; fav.referrerPolicy = "no-referrer"; fav.style.cssText = "width:100%;height:100%;object-fit:cover"; fav.onerror = () => fav.remove(); fly.append(fav); }
-    document.documentElement.appendChild(fly);
+    document.documentElement.appendChild(fly); flyingTreats.add(fly);
     const dx = sr.left + sr.width / 2 - (r.left + r.width / 2);
     const dy = sr.top + sr.height * 0.6 - (r.top + r.height / 2);
     fly.animate([
       { transform: "translate(0,0) scale(1)", opacity: 1 },
       { transform: `translate(${dx * 0.5}px,${dy * 0.5 - 30}px) scale(.85)`, opacity: 1, offset: 0.55 },
       { transform: `translate(${dx}px,${dy}px) scale(.2)`, opacity: 0 },
-    ], { duration: 440, easing: "cubic-bezier(.5,0,.6,1)" }).onfinish = () => { fly.remove(); arrive(); };
+    ], { duration: 440, easing: "cubic-bezier(.5,0,.6,1)" }).onfinish = () => { flyingTreats.delete(fly); fly.remove(); arrive(); };
   } else { arrive(); }
 }
 
@@ -1631,12 +1637,13 @@ function buildPlay(): HTMLElement {
   pg.append(lbl);
 
   const treats = document.createElement("div"); treats.className = "dpg-treats"; treats.id = "dpg-treats";
-  today.forEach((rec) => {
-    if (goobiFedIds.has(String(rec.at))) return;
+  today.forEach((rec, idx) => {
+    const id = rec.at + "#" + idx; // unique within a session even if two replies share a millisecond
+    if (goobiFedIds.has(id)) return;
     const snip = rec.snippet || "a reply you sent";
     const b = document.createElement("button"); b.className = "dpg-treat"; b.title = (rec.author ? `@${rec.author} — ` : "") + snip;
     if (rec.avatar) { const av = document.createElement("img"); av.className = "dpg-av"; av.src = rec.avatar; av.alt = ""; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); b.append(av); } // the face of whoever you replied to
-    b.onclick = () => feedTreat(b, rec, snip);
+    b.onclick = () => feedTreat(b, rec, id, snip);
     treats.append(b);
   });
   pg.append(treats);
@@ -1678,14 +1685,16 @@ function openPlay(): void {
 }
 function closePlay(then?: () => void): void {
   const panel = dockRoot?.querySelector<HTMLElement>(".dplay");
-  const finish = () => { dockPlayOpen = false; goobiPlayHandle?.destroy(); goobiPlayHandle = null; renderDock(); then?.(); };
+  const finish = () => { resetPlay(); renderDock(); then?.(); };
   if (panel) springClose(panel, finish); else finish();
 }
 function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : openPlay(); }
 
 function renderDock() {
   if (!enabled || invalidated) return;
+  if (dockPlayOpen && dockRoot?.querySelector(".dplay")) return; // playground is live — ambient re-renders must not tear it down under the user
   const root = ensureDock();
+  goobiDockHandle?.destroy(); goobiDockHandle = null; // stop the previous header Goobi before we rebuild (replaceChildren only detaches it)
   root.replaceChildren();
   const n = opps.size;
   if (!dockOpen) {
@@ -1694,6 +1703,7 @@ function renderDock() {
     l.title = `${line} — open Goobi`;
     l.onclick = () => {
       dockOpen = true;
+      if (dockPlayOpen) resetPlay(); // always open onto the posts list, never a stale playground
       if (goobiWelcomeBack) { goobiWelcomeBack = false; goobiReact("cheer", "Missed you!", "glad you're back", 4000); }
       touchGoobi();
       renderDock();
@@ -1743,7 +1753,7 @@ function renderDock() {
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
   acts.append(kb);
   const x = document.createElement("button"); x.className = "iconb"; x.textContent = "✕"; x.title = "Close";
-  x.onclick = () => { kebabOpen = false; dockOpen = false; renderDock(); };
+  x.onclick = () => { kebabOpen = false; if (dockPlayOpen) resetPlay(); dockOpen = false; renderDock(); };
   acts.append(x);
   h.append(dhl, acts);
   d.append(h);
@@ -1856,7 +1866,7 @@ async function boot() {
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
+    if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
