@@ -1045,6 +1045,11 @@ const DOCK_CSS = `
 .ltext { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
 .ll1 { font-weight:600; color:#f3ead9; }
 .ll2 { font-size:10.5px; font-weight:500; color:#8c7d68; margin-top:1px; }
+.lavs { display:inline-flex; align-items:center; margin-left:10px; flex:0 0 auto; }
+.lav { width:22px; height:22px; border-radius:50%; object-fit:cover; border:1.5px solid #1d1812; box-sizing:border-box; background:#221c15; }
+.lav + .lav { margin-left:-9px; }
+.lavinit { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#fff; }
+.lmore { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#cbb89c; background:#2a2118; }
 .d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
      background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
@@ -1463,6 +1468,37 @@ function avInitial(o: Opp): HTMLElement {
   s.style.background = `hsl(${h % 360} 50% 42%)`;
   return s;
 }
+/** Small colored-initial circle for the launcher's overlapping avatar stack. */
+function lavInitial(o: Opp): HTMLElement {
+  const s = document.createElement("span"); s.className = "lav lavinit";
+  const nm = o.name || o.author || "·";
+  s.textContent = (nm.trim()[0] || "·").toUpperCase();
+  let h = 0; for (let i = 0; i < nm.length; i++) h = (h * 31 + nm.charCodeAt(i)) >>> 0;
+  s.style.background = `hsl(${h % 360} 50% 42%)`;
+  return s;
+}
+/** The overlapping avatar stack on the launcher pill — top reply-spot authors, faces
+ *  first, so the minimized dock reads like "these people are worth replying to". */
+function launcherAvatars(): HTMLElement | null {
+  const ranked = [...opps.values()].sort((a, b) => effectiveScore(b) - effectiveScore(a));
+  if (!ranked.length) return null;
+  const shown = ranked.slice(0, 4);
+  const avs = document.createElement("span"); avs.className = "lavs";
+  shown.forEach((o, i) => {
+    let node: HTMLElement;
+    if (o.avatar) {
+      const im = document.createElement("img"); im.className = "lav"; im.src = o.avatar; im.alt = ""; im.referrerPolicy = "no-referrer";
+      im.title = o.name || `@${o.author}`;
+      im.onerror = () => { const fb = lavInitial(o); fb.style.zIndex = im.style.zIndex; im.replaceWith(fb); };
+      node = im;
+    } else { node = lavInitial(o); node.title = o.name || `@${o.author}`; }
+    node.style.zIndex = String(10 - i); // earlier (better) faces sit on top
+    avs.append(node);
+  });
+  const extra = ranked.length - shown.length;
+  if (extra > 0) { const more = document.createElement("span"); more.className = "lav lmore"; more.textContent = `+${extra}`; avs.append(more); }
+  return avs;
+}
 
 function renderList(list: HTMLElement) {
   list.replaceChildren();
@@ -1748,6 +1784,7 @@ function renderDock() {
     const summary = n ? catSummary() : sub;
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
+    if (n) { const avs = launcherAvatars(); if (avs) l.append(avs); } // overlapping faces of who to reply to
     root.appendChild(l);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
