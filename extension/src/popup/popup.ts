@@ -3,7 +3,7 @@ import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { reputationStatus, type RepLevel } from "../lib/reply-hygiene";
-import { mountGoobi } from "../lib/goobi";
+import { mountGoobi, type GoobiHandle } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
@@ -124,6 +124,7 @@ interface ViewData {
   twttrMeter: { requests: number; bytes: number } | null;
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
   safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
+  todaySent: string[]; // snippets of today's sent replies — the playground treats
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -173,6 +174,7 @@ const MOCK: ViewData = {
     { label: "Su", count: 7, today: true },
   ] },
   safety: { level: "healthy", label: "healthy pace", repliesThisHour: 6, accountsToday: 5 },
+  todaySent: ["Retention beats acquisition — the cost is already sunk", "Ship daily, measure weekly", "WhatsApp groups are underrated for GTM"],
 };
 
 function memInfo(): Promise<{ capacity: number; availableCapacity: number } | null> {
@@ -215,12 +217,14 @@ async function getData(): Promise<ViewData> {
   const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_REPLY_LOG_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string }[] } | undefined;
+  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string }[] } | undefined;
   const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
   const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
   const repliesThisHour = (log?.times || []).filter((t) => now - t < 3_600_000).length;
   const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
-  const accountsToday = new Set((log?.sent || []).filter((s) => s.at >= midnight.getTime() && s.author).map((s) => s.author)).size;
+  const sentToday = (log?.sent || []).filter((s) => s.at >= midnight.getTime());
+  const accountsToday = new Set(sentToday.filter((s) => s.author).map((s) => s.author)).size;
+  const todaySent = sentToday.filter((s) => s.snippet).map((s) => s.snippet as string).slice(-30);
   const safety = { ...reputationStatus(repliesThisHour), repliesThisHour, accountsToday };
 
   let twttrMeter: { requests: number; bytes: number } | null = null;
@@ -248,6 +252,7 @@ async function getData(): Promise<ViewData> {
     twttrMeter,
     replyStats,
     safety,
+    todaySent,
   };
 }
 
@@ -355,8 +360,32 @@ function keyRow(d: ViewData): string {
 let expanded = false;
 type PanelTab = "tabs" | "x";
 let activeTab: PanelTab = "tabs";
+let playground = false;                 // Goobi's playground screen (click the mascot to open)
+let pgGoobi: GoobiHandle | null = null; // the big playground Goobi
+let pgTotal = 0;                        // treats to feed = replies sent today
+
+/** Goobi's playground — feed him today's replies (one treat each) and pet him. */
+function renderPlayground(d: ViewData): string {
+  const n = d.replyStats.today;
+  const treats = Array.from({ length: n }, (_, i) => d.todaySent[i] || "a reply you sent");
+  const treatsHtml = treats.length
+    ? treats.map((s) => `<button class="pg-treat" data-action="pg-feed" data-snip="${esc(s)}" title="${esc(s)}" aria-label="Feed a treat"></button>`).join("")
+    : `<div class="dim" style="font-size:12px;text-align:center">No treats yet — reply to a post and Goobi gets a snack.</div>`;
+  return `
+  <button class="pg-back" data-action="pg-close">‹ Back</button>
+  <div class="pg-stage" data-action="pg-pet" title="Tap to pet Goobi">
+    <div class="pg-shadow"></div>
+    <div id="goobi-pg"></div>
+  </div>
+  <div class="pg-msg" id="pg-msg">${n ? "Feed Goobi today's replies — tap a treat." : "Reply to a post and come feed Goobi."}</div>
+  <div class="pg-meter"><div class="pg-fill" id="pg-fill" style="width:0%"></div></div>
+  <div class="pg-meterlbl"><span>Goobi's belly</span><span id="pg-count">0 / ${n}</span></div>
+  <div class="pg-treats" id="pg-treats">${treatsHtml}</div>
+  <div class="dim" style="font-size:11px;text-align:center;margin-top:12px">Tap Goobi to pet him · ${n} ${n === 1 ? "reply" : "replies"} today</div>`;
+}
 
 function render(d: ViewData): string {
+  if (playground) return renderPlayground(d);
   const all = d.groups;
   const shown = expanded ? all : all.slice(0, 3);
   const groupsList = shown.length
@@ -368,7 +397,7 @@ function render(d: ViewData): string {
     : "";
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><div class="sq" id="goobi-face" style="background:var(--brand)">${ICON.layout}</div><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Your browser buddy.</div></div></div>
+    <div class="row-flex gap10"><div class="sq" id="goobi-face" data-action="open-playground" title="Open Goobi's playground" style="background:var(--brand);cursor:pointer">${ICON.layout}</div><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Your browser buddy.</div></div></div>
     <div class="row-flex gap12">
       <span class="muted" style="font-size:11.5px">Smart</span>
       <label class="switch"><input type="checkbox" id="smart" aria-label="Smart mode — use Claude for grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label>
@@ -489,6 +518,12 @@ function send<T>(msg: Message): Promise<T> {
 async function refresh() {
   const d = await getData();
   app.innerHTML = render(d);
+  if (playground) {
+    pgTotal = d.replyStats.today;
+    const stage = document.getElementById("goobi-pg");
+    if (stage) { pgGoobi = mountGoobi(stage, { cell: 4 }); pgGoobi.setMood(d.todaySent.length ? "happy" : "idle"); }
+    return;
+  }
   hydrateProductIcons();
   const face = document.getElementById("goobi-face");
   if (face) mountGoobi(face).setMood(d.safety.level === "easeoff" ? "worn" : "idle"); // header Goobi mirrors your pace
@@ -676,6 +711,27 @@ async function dispatch(el: HTMLElement) {
         document.getElementById("view-tabs")?.toggleAttribute("hidden", activeTab !== "tabs");
         document.getElementById("view-x")?.toggleAttribute("hidden", activeTab !== "x");
         document.querySelectorAll<HTMLElement>(".vtab").forEach((b) => b.classList.toggle("on", b.dataset.tab === activeTab));
+        break;
+      }
+      case "open-playground": { playground = true; await refresh(); break; }
+      case "pg-close": { playground = false; await refresh(); break; }
+      case "pg-feed": {
+        const snip = el.dataset.snip || "a reply you sent";
+        el.remove(); // Goobi gobbles the treat
+        pgGoobi?.setMood("love");
+        setTimeout(() => pgGoobi?.setMood("idle"), 1500);
+        const remaining = document.querySelectorAll("#pg-treats .pg-treat").length;
+        const fed = pgTotal - remaining;
+        const fill = document.getElementById("pg-fill"); if (fill) fill.style.width = `${pgTotal ? Math.round((fed / pgTotal) * 100) : 0}%`;
+        const cnt = document.getElementById("pg-count"); if (cnt) cnt.textContent = `${fed} / ${pgTotal}`;
+        const msg = document.getElementById("pg-msg");
+        if (msg) msg.textContent = remaining === 0 ? "Goobi's stuffed and happy ♥" : `nom! "${snip.length > 38 ? snip.slice(0, 38) + "…" : snip}"`;
+        break;
+      }
+      case "pg-pet": {
+        pgGoobi?.setMood("happy");
+        setTimeout(() => pgGoobi?.setMood("idle"), 1100);
+        const msg = document.getElementById("pg-msg"); if (msg) msg.textContent = "hehe ♥";
         break;
       }
       case "save-x": {

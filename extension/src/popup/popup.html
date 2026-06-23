@@ -72,6 +72,24 @@
       @keyframes g-wobble { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
       @media (prefers-reduced-motion: reduce) { .gcv { animation: none; } }
 
+      /* ---------- Goobi's playground ---------- */
+      .pg-back { background: none; border: 0; color: var(--brand); font: 600 13px inherit; cursor: pointer; padding: 8px 2px; }
+      .pg-back:hover { color: var(--blue); }
+      .pg-stage { position: relative; height: 170px; margin: 4px 0 14px; border-radius: 14px; background: var(--row);
+                  border: 0.5px solid var(--line); display: flex; align-items: flex-end; justify-content: center;
+                  padding-bottom: 28px; cursor: pointer; overflow: hidden; }
+      .pg-shadow { position: absolute; bottom: 24px; width: 58px; height: 12px; background: rgba(0,0,0,.28); border-radius: 50%; filter: blur(2px); }
+      #goobi-pg { position: relative; z-index: 1; }
+      .pg-msg { text-align: center; font-size: 13.5px; color: var(--t1); min-height: 20px; margin-bottom: 12px; }
+      .pg-meter { height: 11px; border-radius: 6px; background: var(--row); border: 0.5px solid var(--line); overflow: hidden; }
+      .pg-fill { height: 100%; background: var(--brand); border-radius: 6px; transition: width .35s ease; }
+      .pg-meterlbl { display: flex; justify-content: space-between; font-size: 11px; color: var(--t3); margin-top: 5px; }
+      .pg-treats { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; margin-top: 18px; }
+      .pg-treat { width: 30px; height: 30px; border-radius: 50%; border: 0; cursor: pointer; transition: transform .1s;
+                  background: radial-gradient(circle at 35% 30%, #f0b07e, #c25e3f); box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+      .pg-treat:hover { transform: scale(1.14); }
+      .pg-treat:active { transform: scale(.92); }
+
       .row-flex { display: flex; align-items: center; }
       .between { justify-content: space-between; }
       .gap8 { gap: 8px; } .gap10 { gap: 10px; } .gap12 { gap: 12px; }
