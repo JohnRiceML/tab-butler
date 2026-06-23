@@ -487,10 +487,11 @@ function send<T>(msg: Message): Promise<T> {
 }
 
 async function refresh() {
-  app.innerHTML = render(await getData());
+  const d = await getData();
+  app.innerHTML = render(d);
   hydrateProductIcons();
   const face = document.getElementById("goobi-face");
-  if (face) mountGoobi(face); // bring the mascot to life in the header
+  if (face) mountGoobi(face).setMood(d.safety.level === "easeoff" ? "worn" : "idle"); // header Goobi mirrors your pace
 }
 
 let lastRecs: AdviceResult | null = null;

@@ -381,6 +381,7 @@ function rescan() {
   queue.length = 0;      // drop anything half-queued
   for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
   toast("Rescanning the page for reply spots…");
+  touchGoobi();
   goobiSearchUntil = Date.now() + 2200; // Goobi perks up + looks around
   renderDock();
   setTimeout(() => { if (Date.now() >= goobiSearchUntil) renderDock(); }, 2300); // settle his mood after
@@ -813,13 +814,17 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
  *  count it, log its features, persist, refresh the header. The click is the
  *  signal — no post-confirmation. */
 function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now()): void {
+  const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
   logSentReply(now, text, opp, angle);
+  touchGoobi();
   // Goobi beams when you reply — but NEVER when you're past the line (honest mirror:
   // he refuses to celebrate going too fast; at ease-off he stays woozy instead).
+  // The first reply of a day that extends a streak earns a bigger 'cheer' (tada).
   if (repliesLastHour() < REPLY_HARD_PER_HOUR) {
-    goobiReactUntil = now + 2300;
-    setTimeout(() => { if (Date.now() >= goobiReactUntil) renderDock(); }, 2400); // settle his mood after
+    const streak = replyStreak();
+    if (firstToday && streak >= 2) goobiReact("cheer", `${streak}-day streak!`, "love that you keep showing up", 2900);
+    else goobiReact("happy", "Nice reply!", "that's the good stuff", 2300);
   }
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   renderDock(); // update "N replies sent today" immediately
@@ -1067,9 +1072,11 @@ const DOCK_CSS = `
 .g-bob { animation:g-bob 1.7s ease-in-out infinite; }
 .g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
+.g-tada { animation:g-tada .9s ease-in-out infinite; }
 @keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
 @keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
 @keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
+@keyframes g-tada { 0%,100%{transform:scale(1) rotate(0)} 20%{transform:scale(1.12) rotate(-7deg)} 40%,60%,80%{transform:scale(1.14) rotate(7deg)} 50%,70%{transform:scale(1.14) rotate(-7deg)} }
 .empty { color:#8c7d68; font-size:12.5px; padding:24px 16px; text-align:center; }
 .paused { padding:26px 18px 22px; text-align:center; }
 .pttl { font-weight:600; font-size:14px; color:#cbb89c; }
@@ -1237,15 +1244,44 @@ type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 
-let goobiReactUntil = 0;  // "happy" window after a reply (only when pace is healthy)
-let goobiSearchUntil = 0; // "searching" window after a manual rescan
+let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
+let goobiReactMood: GoobiMood = "happy";
+let goobiReactCopy: [string, string] = ["Nice reply!", "that's the good stuff"];
+let goobiSearchUntil = 0;                         // "searching" window after a manual rescan
+let goobiLastSeen = 0;                            // last active use (persisted)
+let goobiWelcomeBack = false;                     // set at boot when you've been away a while
+const DAY_MS = 24 * HOUR_MS;
 
 function repliesLastHour(): number { return replyLog.times.filter((t) => Date.now() - t < HOUR_MS).length; }
+
+/** Consecutive days (ending today, or yesterday if today's still empty) with >=1 reply. */
+function replyStreak(): number {
+  let s = 0;
+  for (let i = (replyLog.daily[dayKey(Date.now())] ? 0 : 1); ; i++) {
+    if ((replyLog.daily[dayKey(Date.now() - i * DAY_MS)] || 0) > 0) s++;
+    else break;
+  }
+  return s;
+}
+
+/** Mark Goobi as actively used now (persisted) so the neglect/welcome-back beat resets. */
+function touchGoobi(): void {
+  goobiLastSeen = Date.now();
+  void chrome.storage.local.set({ [CONFIG.X_GOOBI_SEEN_KEY]: goobiLastSeen }).catch(() => { /* best-effort */ });
+}
+
+/** Fire a transient Goobi reaction (happy/cheer) with its own status copy, then settle. */
+function goobiReact(mood: GoobiMood, line: string, sub: string, ms: number): void {
+  goobiReactUntil = Date.now() + ms; goobiReactMood = mood; goobiReactCopy = [line, sub];
+  renderDock();
+  setTimeout(() => { if (Date.now() >= goobiReactUntil) renderDock(); }, ms + 100);
+}
+
 /** Goobi's mood from real dock signals: he naps when nothing's going on, looks
  *  around while searching, beams when you reply, and goes woozy when you're hot. */
 function goobiMood(): GoobiMood {
   const now = Date.now();
-  if (now < goobiReactUntil) return "happy";                      // just replied (healthy)
+  if (now < goobiReactUntil) return goobiReactMood;               // just reacted (happy/cheer)
   if (findingSpots || now < goobiSearchUntil) return "searching"; // hunting for posts
   if (repliesLastHour() >= REPLY_HARD_PER_HOUR) return "worn";    // ease-off — honest mirror
   return opps.size > 0 ? "idle" : "sleeping";                     // posts waiting vs all quiet
@@ -1394,7 +1430,12 @@ function renderDock() {
   if (!dockOpen) {
     const l = document.createElement("button");
     l.className = "l";
-    l.onclick = () => { dockOpen = true; renderDock(); };
+    l.onclick = () => {
+      dockOpen = true;
+      if (goobiWelcomeBack) { goobiWelcomeBack = false; goobiReact("cheer", "Missed you!", "glad you're back", 4000); }
+      touchGoobi();
+      renderDock();
+    };
     if (!n) { l.textContent = "✦ Goobi"; root.appendChild(l); return; }
     // Overlapped avatars from the top few spots (pbs.twimg.com loads under x.com CSP).
     const faces = topOpps().filter((o) => o.avatar).slice(0, 3);
@@ -1503,14 +1544,17 @@ function renderDock() {
   const gsub = document.createElement("div"); gsub.className = "gsub";
   gtext.append(gline, gsub); gw.append(gtext);
   const gmood = goobiMood();
+  const reacting = Date.now() < goobiReactUntil;
   const GOOBI_COPY: Record<GoobiMood, [string, string]> = {
     searching: ["Sniffing out posts…", "one sec"],
     happy:     ["Nice reply!", "that's the good stuff"],
+    cheer:     ["Nice!", "love that"],
     worn:      ["Let's ease off", "you're going fast — give it a minute"],
     idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
     sleeping:  ["All quiet", "tap me to go hunting"],
   };
-  gline.textContent = GOOBI_COPY[gmood][0]; gsub.textContent = GOOBI_COPY[gmood][1];
+  const [gl, gs] = reacting ? goobiReactCopy : GOOBI_COPY[gmood];
+  gline.textContent = gl; gsub.textContent = gs;
   gw.onclick = () => rescan(); // pet him → he goes looking
   foot.append(gw);
   d.append(foot);
@@ -1548,6 +1592,8 @@ async function boot() {
       sent: Array.isArray(l.sent) ? (l.sent as SentRecord[]) : [],
     };
   }
+  goobiLastSeen = (await getLocal(CONFIG.X_GOOBI_SEEN_KEY)) as number || 0;
+  if (goobiLastSeen && Date.now() - goobiLastSeen >= 2 * DAY_MS) goobiWelcomeBack = true; // away a while → he missed you
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;

@@ -7,7 +7,7 @@
  * animation system lives in mascot-lab.html; this is the lightweight in-app version.
  */
 
-export type GoobiMood = "idle" | "sleeping" | "searching" | "happy" | "worn";
+export type GoobiMood = "idle" | "sleeping" | "searching" | "happy" | "worn" | "cheer";
 
 export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; destroy(): void; }
 
@@ -69,7 +69,7 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   }
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", happy: "g-bob", worn: "g-wobble" };
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", happy: "g-bob", worn: "g-wobble", cheer: "g-tada" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -106,8 +106,8 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       let i = 0;
       const tick = () => { if (!alive()) return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
       tick();
-    } else if (m === "happy") {
-      paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob (css)
+    } else if (m === "happy" || m === "cheer") {
+      paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
     } else if (m === "worn") {
       paint(ctx, faceWith(XEYES), cell, body); // dizzy + red + wobble (css)
     } else { // idle — blink loop
