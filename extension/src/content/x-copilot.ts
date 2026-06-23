@@ -994,15 +994,14 @@ function toast(msg: string) {
 /* ---------- opportunities dock (always-on, ranked top posts) ---------- */
 
 const DOCK_CSS = `
-.l { display:flex; align-items:center; gap:10px; background:${ACCENT}; color:${INK}; border:0; border-radius:14px;
-     cursor:pointer; text-align:left; font:600 12px -apple-system,system-ui,sans-serif; padding:8px 14px;
+.l { display:flex; align-items:center; gap:9px; background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.3); border-radius:14px;
+     cursor:pointer; text-align:left; font:600 12px -apple-system,system-ui,sans-serif; padding:7px 14px 7px 9px;
      box-shadow:0 8px 28px rgba(0,0,0,.45); }
-.lav { display:inline-flex; flex:0 0 auto; }
-.lavi { width:22px; height:22px; border-radius:50%; object-fit:cover; border:2px solid ${ACCENT}; margin-left:-9px; background:#1d1812; }
-.lav .lavi:first-child { margin-left:0; }
+.l:hover { border-color:rgba(214,154,92,.55); }
+.lgoobi { display:inline-flex; flex:0 0 auto; }
 .ltext { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
-.ll1 { font-weight:700; }
-.ll2 { font-size:10px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; opacity:.78; margin-top:1px; }
+.ll1 { font-weight:600; color:#f3ead9; }
+.ll2 { font-size:10.5px; font-weight:500; color:#8c7d68; margin-top:1px; }
 .d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
      background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
@@ -1061,13 +1060,11 @@ const DOCK_CSS = `
 .draftb:hover { filter:brightness(1.06); }
 .lk { background:none; border:0; color:#8c7d68; font:500 12px -apple-system,system-ui,sans-serif; padding:6px 9px; border-radius:7px; cursor:pointer; white-space:nowrap; }
 .lk:hover { background:#221c15; color:#cbb89c; } .lk:disabled { opacity:.6; cursor:default; } .lk.skip { margin-left:auto; }
-.foot { padding:11px 14px; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
-.gwrap { display:flex; align-items:center; gap:11px; cursor:pointer; }
-.gwrap:hover .gline { color:#cbb89c; }
-.gface { flex:0 0 auto; }
-.gtext { display:flex; flex-direction:column; min-width:0; }
-.gline { font-size:12.5px; color:#b6a892; font-weight:500; }
-.gsub { font-size:11px; color:#8c7d68; margin-top:1px; }
+.foot { padding:13px 14px; text-align:center; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
+.foot1 { font-size:12.5px; color:#b6a892; } .foot2 { font-size:11.5px; color:#8c7d68; margin-top:2px; }
+.dhl { display:flex; align-items:center; gap:11px; min-width:0; flex:1 1 auto; }
+.dhgoobi { flex:0 0 auto; cursor:pointer; }
+.dt { min-width:0; flex:1 1 auto; }
 .gcv { display:block; image-rendering:pixelated; transform-origin:bottom center; }
 .g-bob { animation:g-bob 1.7s ease-in-out infinite; }
 .g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
@@ -1287,6 +1284,24 @@ function goobiMood(): GoobiMood {
   return opps.size > 0 ? "idle" : "sleeping";                     // posts waiting vs all quiet
 }
 
+/** Goobi's mood + status copy — shared by the dock header face, the minimized
+ *  launcher, and tooltips. */
+function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
+  const n = opps.size;
+  const mood = goobiMood();
+  const reacting = Date.now() < goobiReactUntil;
+  const COPY: Record<GoobiMood, [string, string]> = {
+    searching: ["Sniffing out posts…", "one sec"],
+    happy:     ["Nice reply!", "that's the good stuff"],
+    cheer:     ["Nice!", "love that"],
+    worn:      ["Let's ease off", "you're going fast — give it a minute"],
+    idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
+    sleeping:  ["All quiet", "tap me to go hunting"],
+  };
+  const [line, sub] = reacting ? goobiReactCopy : COPY[mood];
+  return { mood, line, sub };
+}
+
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
   const list = [...opps.values()].filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
@@ -1428,32 +1443,29 @@ function renderDock() {
   root.replaceChildren();
   const n = opps.size;
   if (!dockOpen) {
-    const l = document.createElement("button");
-    l.className = "l";
+    const { mood, line, sub } = goobiStatus();
+    const l = document.createElement("button"); l.className = "l";
+    l.title = `${line} — open Goobi`;
     l.onclick = () => {
       dockOpen = true;
       if (goobiWelcomeBack) { goobiWelcomeBack = false; goobiReact("cheer", "Missed you!", "glad you're back", 4000); }
       touchGoobi();
       renderDock();
     };
-    if (!n) { l.textContent = "✦ Goobi"; root.appendChild(l); return; }
-    // Overlapped avatars from the top few spots (pbs.twimg.com loads under x.com CSP).
-    const faces = topOpps().filter((o) => o.avatar).slice(0, 3);
-    if (faces.length) {
-      const av = document.createElement("span"); av.className = "lav";
-      for (const o of faces) { const im = document.createElement("img"); im.className = "lavi"; im.src = o.avatar!; im.alt = ""; im.referrerPolicy = "no-referrer"; im.onerror = () => im.remove(); av.append(im); }
-      l.append(av);
-    }
+    const gh = document.createElement("span"); gh.className = "lgoobi"; l.append(gh); // Goobi IS the launcher icon
     const txt = document.createElement("span"); txt.className = "ltext";
-    const l1 = document.createElement("span"); l1.className = "ll1"; l1.textContent = `✦ ${n} reply ${n === 1 ? "spot" : "spots"}`;
+    const l1 = document.createElement("span"); l1.className = "ll1"; l1.textContent = n ? `${n} reply ${n === 1 ? "spot" : "spots"}` : "Goobi";
     txt.append(l1);
-    const summary = catSummary();
+    const summary = n ? catSummary() : sub;
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
     root.appendChild(l);
+    mountGoobi(gh, { cell: 2 }).setMood(mood);
     return;
   }
   const d = document.createElement("div"); d.className = "d";
+  const gstat = goobiStatus();
+  const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to look for posts`; gh.onclick = () => rescan();
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
   const ti = document.createElement("div"); ti.className = "dtitle"; ti.textContent = "Posts worth replying to";
@@ -1472,6 +1484,7 @@ function renderDock() {
   else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Goobi keeps you under it.`; }
   sub.append(document.createTextNode(" · "), chip);
   t.append(ti, sub);
+  const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
   if (!paused) {
@@ -1487,7 +1500,7 @@ function renderDock() {
   const x = document.createElement("button"); x.className = "iconb"; x.textContent = "✕"; x.title = "Close";
   x.onclick = () => { kebabOpen = false; dockOpen = false; renderDock(); };
   acts.append(x);
-  h.append(t, acts);
+  h.append(dhl, acts);
   d.append(h);
 
   // ⋮ overflow menu + click-away backdrop.
@@ -1513,6 +1526,7 @@ function renderDock() {
     p.append(pt, pp, rb);
     d.append(p);
     root.appendChild(d);
+    mountGoobi(gh, { cell: 2 }).setMood("sleeping"); // resting while paused
     return;
   }
 
@@ -1537,31 +1551,14 @@ function renderDock() {
   d.append(f, list);
 
   const foot = document.createElement("div"); foot.className = "foot";
-  const gw = document.createElement("div"); gw.className = "gwrap"; gw.title = "Tap Goobi to look for fresh posts";
-  const gface = document.createElement("div"); gface.className = "gface"; gw.append(gface);
-  const gtext = document.createElement("div"); gtext.className = "gtext";
-  const gline = document.createElement("div"); gline.className = "gline";
-  const gsub = document.createElement("div"); gsub.className = "gsub";
-  gtext.append(gline, gsub); gw.append(gtext);
-  const gmood = goobiMood();
-  const reacting = Date.now() < goobiReactUntil;
-  const GOOBI_COPY: Record<GoobiMood, [string, string]> = {
-    searching: ["Sniffing out posts…", "one sec"],
-    happy:     ["Nice reply!", "that's the good stuff"],
-    cheer:     ["Nice!", "love that"],
-    worn:      ["Let's ease off", "you're going fast — give it a minute"],
-    idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
-    sleeping:  ["All quiet", "tap me to go hunting"],
-  };
-  const [gl, gs] = reacting ? goobiReactCopy : GOOBI_COPY[gmood];
-  gline.textContent = gl; gsub.textContent = gs;
-  gw.onclick = () => rescan(); // pet him → he goes looking
-  foot.append(gw);
+  const f1 = document.createElement("div"); f1.className = "foot1"; f1.textContent = n ? "✦ You're all caught up" : "✦ Watching your feed";
+  const f2 = document.createElement("div"); f2.className = "foot2"; f2.textContent = "We'll surface more great posts as you scroll.";
+  foot.append(f1, f2);
   d.append(foot);
 
   root.appendChild(d);
   renderList(list);
-  mountGoobi(gface, { cell: 2 }).setMood(gmood); // bring Goobi to life in the dock
+  mountGoobi(gh, { cell: 2 }).setMood(gstat.mood); // Goobi lives at the top, mood-driven
 }
 
 /* ---------- boot + SPA route handling ---------- */
