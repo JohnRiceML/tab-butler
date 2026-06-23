@@ -4,6 +4,7 @@ import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_SOFT_PER_HOUR, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
+import { builderTier } from "../lib/community";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -1116,7 +1117,7 @@ function ensureDock(): ShadowRoot {
 
 /** handle(lower) -> follower lookup. `followers` set once known; `pending`
  *  while a request is in flight; `failed` + `at` to back off transient misses. */
-const authorReach = new Map<string, { followers?: number; following?: number; at: number; pending?: boolean; failed?: boolean }>();
+const authorReach = new Map<string, { followers?: number; following?: number; bio?: string; at: number; pending?: boolean; failed?: boolean }>();
 const reachQueue: string[] = [];
 let reachInFlight = 0;
 let reachLookups = 0;            // lookup attempts this session (a failed author may retry after REACH_FAIL_TTL)
@@ -1156,7 +1157,7 @@ function pumpReach(): void {
         if (resp?.error === "no-twttr-config") { twttrUnconfigured = true; authorReach.delete(key); return; }
         if (resp?.error?.startsWith("budget-")) { authorReach.set(key, { failed: true, at: Date.now() }); reachLookups--; return; } // no network spent: free the cap slot, back off via the fail-TTL
         const u = resp?.ok ? parseUser(resp.data) : null;
-        if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, following: u.following, at: Date.now() });
+        if (u && u.followers >= 0) authorReach.set(key, { followers: u.followers, following: u.following, bio: u.bio, at: Date.now() });
         else authorReach.set(key, { failed: true, at: Date.now() });
       })
       .catch(() => authorReach.set(key, { failed: true, at: Date.now() }))
@@ -1225,6 +1226,17 @@ function freshnessFactor(postedAt?: number): number {
   if (m < 1440) return 0.16; // <24h
   return 0.08;
 }
+/** 0 = not a builder peer · 1 = reciprocal builder peer · 2 = and in your niche.
+ *  From the author's fetched bio + following/followers ratio — 0 until we've pulled
+ *  their profile (so it only ever lifts authors we actually know are peers). */
+function builderTierFor(o: Opp): 0 | 1 | 2 {
+  const e = authorReach.get(o.author.toLowerCase());
+  if (!e?.bio) return 0;
+  const f = e.followers ?? o.followers;
+  const ratio = e.following != null && f ? e.following / Math.max(f, 1) : undefined;
+  return builderTier(e.bio, xNiche, ratio);
+}
+
 function effectiveScore(o: Opp): number {
   const reach = reachFactor(o); // real follower count when known (Twttr), else the on-page likes proxy
   let buried = 1;
@@ -1232,7 +1244,15 @@ function effectiveScore(o: Opp): number {
     const ratio = o.replies / (o.likes + 1); // many replies per like = pile-on you get lost in
     buried = ratio > 1.5 ? 0.7 : ratio > 0.7 ? 0.85 : 1;
   } else if (o.replies && o.replies > 300) buried = 0.8;
-  return Math.max(0, Math.min(1, o.score * freshnessFactor(o.postedAt) * reach * buried));
+  const fresh = freshnessFactor(o.postedAt);
+  let s = o.score * fresh * reach * buried;
+  // Community lift: a peer/builder in your space is worth replying to even when the
+  // POST isn't on your niche topic — engaging peers compounds your community. Lift
+  // them; and floor a FRESH niche-peer so a low topic-fit score can't bury them.
+  const tier = builderTierFor(o);
+  if (tier) s *= tier === 2 ? 1.25 : 1.12;
+  if (tier === 2 && fresh >= 0.6) s = Math.max(s, 0.45);
+  return Math.max(0, Math.min(1, s));
 }
 
 /** An at-a-glance "reply fit" verdict for a spot, from its live effectiveScore
@@ -1407,6 +1427,8 @@ function renderList(list: HTMLElement) {
     const meta = document.createElement("div"); meta.className = "meta";
     if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎"; s.title = "Found via niche search (off your current page)"; meta.append(s); }
     if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = catLabel(o.category); meta.append(ct); }
+    const btier = builderTierFor(o);
+    if (btier) { const bc = document.createElement("span"); bc.className = "chip"; bc.style.background = "rgba(93,202,165,.16)"; bc.style.color = "#5dcaa5"; bc.textContent = btier === 2 ? "peer · your space" : "peer builder"; bc.title = "A builder/peer in your space — replying builds your community, even when the post isn't on your exact topic."; meta.append(bc); }
     const age = fmtAge(o.postedAt);
     if (age) meta.append(document.createTextNode((o.category ? " · " : "") + age));
     if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
