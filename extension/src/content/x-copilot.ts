@@ -122,6 +122,24 @@ function send<T>(msg: unknown): Promise<T | undefined> {
   });
 }
 
+/** The extension context dies when the unpacked extension is reloaded/updated while
+ *  a page stays open — the old content script keeps running but chrome.* is gone, so
+ *  the next call throws "Extension context invalidated". Detect it and shut down
+ *  cleanly (stop the loops, drop the UI) instead of spewing uncaught errors. */
+let invalidated = false;
+let bodyObs: MutationObserver | null = null;
+let urlPoll: ReturnType<typeof setInterval> | undefined;
+function contextOK(): boolean { try { return !!chrome.runtime?.id; } catch { return false; } }
+function teardown(): void {
+  if (invalidated) return;
+  invalidated = true;
+  try { bodyObs?.disconnect(); } catch { /* ignore */ }
+  if (urlPoll) clearInterval(urlPoll);
+  if (flushTimer) clearTimeout(flushTimer);
+  try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
+  try { dismissPanel(); } catch { /* ignore */ }
+}
+
 /* ---------- X DOM extraction (resilient to quote-tweets / virtualization) ---------- */
 
 function statusInfo(el: HTMLElement): { id: string; author: string } | null {
@@ -278,6 +296,7 @@ function metaLine(s: PostStats): string | undefined {
 
 let scanPending = false;
 function requestScan() {
+  if (invalidated || !contextOK()) { teardown(); return; } // extension reloaded out from under us
   if (scanPending || !enabled) return;
   scanPending = true;
   requestAnimationFrame(() => { scanPending = false; scan(); });
@@ -314,6 +333,7 @@ function scheduleFlush() {
 }
 
 async function flush() {
+  if (invalidated || !contextOK()) { teardown(); return; }
   if (!enabled || paused || scoreCalls >= MAX_SCORE_CALLS) return;
   const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
   if (!batch.length) return;
@@ -1136,7 +1156,7 @@ function knownFollowers(o: Opp): number | undefined {
 /** Queue a follower lookup for `handle` if we don't already have/aren't fetching
  *  it. Deduped, capped, and short-circuited when the X-data API isn't configured. */
 function maybeFetchReach(handle?: string): void {
-  if (twttrUnconfigured || reachLookups >= REACH_CAP) return;
+  if (invalidated || twttrUnconfigured || reachLookups >= REACH_CAP) return;
   const key = (handle || "").toLowerCase();
   if (!key) return;
   const e = authorReach.get(key);
@@ -1499,7 +1519,7 @@ function renderList(list: HTMLElement) {
 }
 
 function renderDock() {
-  if (!enabled) return;
+  if (!enabled || invalidated) return;
   const root = ensureDock();
   root.replaceChildren();
   const n = opps.size;
@@ -1668,11 +1688,13 @@ async function boot() {
     }
   });
   renderDock();
-  new MutationObserver(() => requestScan()).observe(document.body, { childList: true, subtree: true });
+  bodyObs = new MutationObserver(() => requestScan());
+  bodyObs.observe(document.body, { childList: true, subtree: true });
 
   // Content scripts can't intercept the page's history.pushState, so poll the URL.
   let lastUrl = location.href;
-  setInterval(() => {
+  urlPoll = setInterval(() => {
+    if (invalidated || !contextOK()) { teardown(); return; }
     if (location.href === lastUrl) return;
     lastUrl = location.href;
     dismissPanel();
