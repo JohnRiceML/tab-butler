@@ -1,8 +1,9 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
-import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus } from "../lib/reply-hygiene";
+import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_SOFT_PER_HOUR, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
+import { mountGoobi, type GoobiMood } from "../lib/goobi";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -380,6 +381,9 @@ function rescan() {
   queue.length = 0;      // drop anything half-queued
   for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
   toast("Rescanning the page for reply spots…");
+  goobiSearchUntil = Date.now() + 2200; // Goobi perks up + looks around
+  renderDock();
+  setTimeout(() => { if (Date.now() >= goobiSearchUntil) renderDock(); }, 2300); // settle his mood after
   scan();
 }
 
@@ -811,6 +815,12 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
 function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now()): void {
   bumpDaily(now);
   logSentReply(now, text, opp, angle);
+  // Goobi beams when you reply — but NEVER when you're past the line (honest mirror:
+  // he refuses to celebrate going too fast; at ease-off he stays woozy instead).
+  if (repliesLastHour() < REPLY_HARD_PER_HOUR) {
+    goobiReactUntil = now + 2300;
+    setTimeout(() => { if (Date.now() >= goobiReactUntil) renderDock(); }, 2400); // settle his mood after
+  }
   void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
   renderDock(); // update "N replies sent today" immediately
 }
@@ -1046,8 +1056,20 @@ const DOCK_CSS = `
 .draftb:hover { filter:brightness(1.06); }
 .lk { background:none; border:0; color:#8c7d68; font:500 12px -apple-system,system-ui,sans-serif; padding:6px 9px; border-radius:7px; cursor:pointer; white-space:nowrap; }
 .lk:hover { background:#221c15; color:#cbb89c; } .lk:disabled { opacity:.6; cursor:default; } .lk.skip { margin-left:auto; }
-.foot { padding:13px 14px; text-align:center; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
-.foot1 { font-size:12.5px; color:#b6a892; } .foot2 { font-size:11.5px; color:#8c7d68; margin-top:2px; }
+.foot { padding:11px 14px; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
+.gwrap { display:flex; align-items:center; gap:11px; cursor:pointer; }
+.gwrap:hover .gline { color:#cbb89c; }
+.gface { flex:0 0 auto; }
+.gtext { display:flex; flex-direction:column; min-width:0; }
+.gline { font-size:12.5px; color:#b6a892; font-weight:500; }
+.gsub { font-size:11px; color:#8c7d68; margin-top:1px; }
+.gcv { display:block; image-rendering:pixelated; transform-origin:bottom center; }
+.g-bob { animation:g-bob 1.7s ease-in-out infinite; }
+.g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
+.g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
+@keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
+@keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
+@keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
 .empty { color:#8c7d68; font-size:12.5px; padding:24px 16px; text-align:center; }
 .paused { padding:26px 18px 22px; text-align:center; }
 .pttl { font-weight:600; font-size:14px; color:#cbb89c; }
@@ -1214,6 +1236,20 @@ function easyScore(o: Opp): number {
 type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
+
+let goobiReactUntil = 0;  // "happy" window after a reply (only when pace is healthy)
+let goobiSearchUntil = 0; // "searching" window after a manual rescan
+
+function repliesLastHour(): number { return replyLog.times.filter((t) => Date.now() - t < HOUR_MS).length; }
+/** Goobi's mood from real dock signals: he naps when nothing's going on, looks
+ *  around while searching, beams when you reply, and goes woozy when you're hot. */
+function goobiMood(): GoobiMood {
+  const now = Date.now();
+  if (now < goobiReactUntil) return "happy";                      // just replied (healthy)
+  if (findingSpots || now < goobiSearchUntil) return "searching"; // hunting for posts
+  if (repliesLastHour() >= REPLY_HARD_PER_HOUR) return "worn";    // ease-off — honest mirror
+  return opps.size > 0 ? "idle" : "sleeping";                     // posts waiting vs all quiet
+}
 
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
@@ -1460,13 +1496,28 @@ function renderDock() {
   d.append(f, list);
 
   const foot = document.createElement("div"); foot.className = "foot";
-  const f1 = document.createElement("div"); f1.className = "foot1"; f1.textContent = n ? "✦ You're all caught up" : "✦ Watching your feed";
-  const f2 = document.createElement("div"); f2.className = "foot2"; f2.textContent = "We'll surface more great posts as you scroll.";
-  foot.append(f1, f2);
+  const gw = document.createElement("div"); gw.className = "gwrap"; gw.title = "Tap Goobi to look for fresh posts";
+  const gface = document.createElement("div"); gface.className = "gface"; gw.append(gface);
+  const gtext = document.createElement("div"); gtext.className = "gtext";
+  const gline = document.createElement("div"); gline.className = "gline";
+  const gsub = document.createElement("div"); gsub.className = "gsub";
+  gtext.append(gline, gsub); gw.append(gtext);
+  const gmood = goobiMood();
+  const GOOBI_COPY: Record<GoobiMood, [string, string]> = {
+    searching: ["Sniffing out posts…", "one sec"],
+    happy:     ["Nice reply!", "that's the good stuff"],
+    worn:      ["Let's ease off", "you're going fast — give it a minute"],
+    idle:      [`${n} ${n === 1 ? "post" : "posts"} to reply to`, "tap me to hunt for more"],
+    sleeping:  ["All quiet", "tap me to go hunting"],
+  };
+  gline.textContent = GOOBI_COPY[gmood][0]; gsub.textContent = GOOBI_COPY[gmood][1];
+  gw.onclick = () => rescan(); // pet him → he goes looking
+  foot.append(gw);
   d.append(foot);
 
   root.appendChild(d);
   renderList(list);
+  mountGoobi(gface, { cell: 2 }).setMood(gmood); // bring Goobi to life in the dock
 }
 
 /* ---------- boot + SPA route handling ---------- */

@@ -47,10 +47,14 @@
       [hidden] { display: none !important; }
 
       #goobi-face { background: none !important; width: auto; height: auto; padding: 0; flex: none; }
-      .goobi-canvas { display: block; image-rendering: pixelated; transform-origin: bottom center;
-                      animation: goobi-bob 1.7s ease-in-out infinite; }
-      @keyframes goobi-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9%); } }
-      @media (prefers-reduced-motion: reduce) { .goobi-canvas { animation: none; } }
+      .gcv { display: block; image-rendering: pixelated; transform-origin: bottom center; }
+      .g-bob { animation: g-bob 1.7s ease-in-out infinite; }
+      .g-breathe { animation: g-breathe 3.6s ease-in-out infinite; }
+      .g-wobble { animation: g-wobble 1.6s ease-in-out infinite; }
+      @keyframes g-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9%); } }
+      @keyframes g-breathe { 0%, 100% { transform: scale(1,1); } 50% { transform: scale(1.03,1.05); } }
+      @keyframes g-wobble { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+      @media (prefers-reduced-motion: reduce) { .gcv { animation: none; } }
 
       .row-flex { display: flex; align-items: center; }
       .between { justify-content: space-between; }
