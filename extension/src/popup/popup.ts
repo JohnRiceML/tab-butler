@@ -293,9 +293,10 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
   };
   const c = HEX[s.level];
   const pacePct = Math.min(100, Math.round((s.repliesThisHour / 30) * 100));
+  // Emoji glyphs (no icon font is bundled, so Tabler <i class="ti …"> rendered as tofu).
   const row = (icon: string, color: string, title: string, detail: string, extra = "") =>
     `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:.5px solid var(--line)">
-      <span style="flex:0 0 auto;width:24px;height:24px;border-radius:6px;background:${color}24;color:${color};display:inline-flex;align-items:center;justify-content:center;font-size:13px"><i class="ti ${icon}" aria-hidden="true"></i></span>
+      <span style="flex:0 0 auto;width:24px;height:24px;border-radius:6px;background:${color}24;display:inline-flex;align-items:center;justify-content:center;font-size:13px" aria-hidden="true">${icon}</span>
       <div style="flex:1"><div style="font-size:12px;font-weight:500;color:var(--t1)">${title}</div><div style="font-size:10.5px;color:var(--t3);margin-top:2px;line-height:1.35">${detail}</div>${extra}</div>
     </div>`;
   const bar = `<div style="height:5px;border-radius:3px;background:var(--row);margin-top:6px;position:relative;overflow:hidden">
@@ -307,10 +308,10 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
       <span style="font-size:10.5px;font-weight:500;color:${c};background:${c}24;padding:3px 9px;border-radius:999px">● ${CAP[s.level]}</span>
     </div>
     <div style="font-size:10.5px;color:var(--t3);line-height:1.4">${SUB[s.level]}</div>
-    ${row("ti-gauge", c, "Reply pace", `${s.repliesThisHour} in the last hour · X reads ~30/hr as automated`, bar)}
-    ${row("ti-users", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
-    ${row("ti-message-circle-check", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
-    ${row("ti-hand-finger", "#c68a4e", "Human-paced actions", "Likes &amp; follows are spaced out with human delays, never fired in lockstep — and nothing ever auto-posts")}
+    ${row("⏱️", c, "Reply pace", `${s.repliesThisHour} in the last hour · X reads ~30/hr as automated`, bar)}
+    ${row("👥", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
+    ${row("✅", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
+    ${row("🖐️", "#c68a4e", "Human-paced actions", "Likes &amp; follows are spaced out with human delays, never fired in lockstep — and nothing ever auto-posts")}
   </div>`;
 }
 
@@ -792,7 +793,7 @@ async function dispatch(el: HTMLElement) {
           const user = parseUser(ures.data);
           if (!user?.id) {
             let raw = ""; try { raw = JSON.stringify(ures.data).slice(0, 200); } catch { /* ignore */ }
-            console.warn("[tab-butler] /user found no user for", handle, raw || ures.data); // log the JSON, not [object Object]
+            console.warn("[goobi] /user found no user for", handle, raw || ures.data); // log the JSON, not [object Object]
             toast(`Couldn't find @${handle} via the API. Confirm the exact handle (copy it from your profile URL).${raw ? ` API said: ${raw}` : ""}`);
             return;
           }

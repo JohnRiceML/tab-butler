@@ -34,7 +34,7 @@ async function bumpMeter(now: number, bytes: number): Promise<void> {
       m.bytes += Math.max(0, bytes);
       await chrome.storage.local.set({ [METER_KEY]: m });
     } catch (e) {
-      console.warn("[tab-butler] twttr meter write failed", e);
+      console.warn("[goobi] twttr meter write failed", e);
     }
   });
   return meterChain;
@@ -91,7 +91,7 @@ export async function governedFetch(host: string, key: string, path: string, que
       await bumpMeter(now, bytes);
       if (!res.ok) {
         const detail = text.replace(/\s+/g, " ").trim().slice(0, 160);
-        console.warn("[tab-butler] twttr", path, res.status, detail);
+        console.warn("[goobi] twttr", path, res.status, detail);
         return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
       }
       try { return { ok: true, data: JSON.parse(text) }; }

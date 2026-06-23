@@ -1,5 +1,5 @@
 import { CONFIG } from "../lib/config";
-import { archiveAndClose, undoLast, getArchive } from "../lib/archive";
+import { archiveAndClose, undoLast } from "../lib/archive";
 import { advise, classify, draftReply, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter } from "../lib/twttr-governor";
@@ -269,12 +269,6 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "GET_TWTTR_METER":
         sendResponse(await readMeter());
-        break;
-      case "GET_STATE":
-        sendResponse({
-          smart: await isSmartEnabled(),
-          archived: (await getArchive()).length,
-        });
         break;
       default:
         sendResponse({ error: "unknown message" });

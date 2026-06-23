@@ -6,7 +6,7 @@ import { hostnameOf, isAllowlistedHost, CONFIG } from "./config";
  */
 
 /** Naive registrable domain: last two labels (good enough for grouping). */
-export function registrableDomain(url: string): string {
+function registrableDomain(url: string): string {
   const host = hostnameOf(url);
   if (!host) return "";
   const parts = host.split(".");
@@ -48,19 +48,6 @@ export function groupByDomain(
     if (ids.length < 2) byDomain.delete(d);
   }
   return byDomain;
-}
-
-/** Find duplicate tabs: returns the tab ids that are redundant (keep the first). */
-export function findDuplicates(tabs: chrome.tabs.Tab[]): number[] {
-  const seen = new Set<string>();
-  const dupes: number[] = [];
-  for (const t of tabs) {
-    if (t.id == null || !t.url) continue;
-    const key = normalizeUrl(t.url);
-    if (seen.has(key)) dupes.push(t.id);
-    else seen.add(key);
-  }
-  return dupes;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
-import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_SOFT_PER_HOUR, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
+import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
 import { builderTier } from "../lib/community";
@@ -285,15 +285,6 @@ function fmtCount(n?: number): string | undefined {
   return `${(n / 1e6).toFixed(1)}m`.replace(".0m", "m");
 }
 
-/** Compact, human stats line shared by the dock display and the scorer prompt. */
-function metaLine(s: PostStats): string | undefined {
-  const parts: string[] = [];
-  const age = fmtAge(s.postedAt); if (age) parts.push(`${age} old`);
-  if (s.likes !== undefined) parts.push(`${fmtCount(s.likes)} likes`);
-  if (s.replies !== undefined) parts.push(`${fmtCount(s.replies)} replies`);
-  return parts.length ? parts.join(" · ") : undefined;
-}
-
 /* ---------- scan / score ---------- */
 
 let scanPending = false;
@@ -504,7 +495,6 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
   if (existing) {
     // Already badged — keep the label/colors current (category re-classified on a
     // Rescan, score drifts, or you just commented), so it never shows a stale value.
-    existing.dataset.tbxCat = category || "";
     existing.textContent = label;
     existing.title = tip;
     existing.style.background = bg;
@@ -519,7 +509,6 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
 
   const b = document.createElement("button");
   b.setAttribute("data-tbx-badge", "1");
-  b.dataset.tbxCat = category || "";
   b.textContent = label;
   b.title = tip;
   Object.assign(b.style, {
@@ -603,9 +592,10 @@ let draftOppAuthor = "";
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
  *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
-/** One sent reply's features — the raw material for the "what's working" learning
- *  loop. `outcome` is filled later by the (paced, API-backed) measure pass that
- *  matches this to your posted reply via /user-replies and reads its engagement. */
+/** One sent reply's features — the raw material for the planned "what's working"
+ *  learning loop. NOT YET IMPLEMENTED: `outcome` is reserved for a future measure
+ *  pass (match to your posted reply via /user-replies, read its engagement) — nothing
+ *  currently writes it. See CHANGELOG.md "Next phase". */
 interface SentRecord {
   id?: string;           // unique per reply (stable key for playground treats + fed-tracking; old records fall back to String(at))
   at: number;            // when we handed you the reply
@@ -846,8 +836,8 @@ function bumpDaily(now: number): void {
   for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
 }
 
-/** Append a feature record for the reply we just helped send — the raw material
- *  the "what's working" loop will later correlate with outcomes. */
+/** Append a feature record for the reply we just helped send — the raw material a
+ *  future "what's working" loop could correlate with outcomes (not yet built). */
 function logSentReply(now: number, text: string, opp?: Opp, angle?: string): void {
   const rec: SentRecord = {
     id: `${now}.${sentSeq++}`,
@@ -1139,7 +1129,6 @@ const DOCK_CSS = `
 .dt { min-width:0; flex:1 1 auto; }
 .gcv { display:block; image-rendering:pixelated; transform-origin:bottom center; }
 .g-bob { animation:g-bob 1.7s ease-in-out infinite; }
-.g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
 .g-snooze { animation:g-snooze 3.8s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
@@ -1168,7 +1157,6 @@ const DOCK_CSS = `
 @keyframes g-heartbeat { 0%,42%,100%{transform:scale(1)} 10%,30%{transform:scale(1.1)} 20%{transform:scale(1)} }
 @keyframes g-float { 0%{transform:translateY(0) rotate(-2deg)} 50%{transform:translateY(-9%) rotate(2deg)} 100%{transform:translateY(0) rotate(-2deg)} }
 @keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
-@keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
 @keyframes g-snooze { 0%,100%{transform:scale(1,1) rotate(-3deg)} 50%{transform:scale(1.03,1.06) rotate(3deg)} }
 @keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
 @keyframes g-tada { 0%,100%{transform:scale(1) rotate(0)} 20%{transform:scale(1.12) rotate(-7deg)} 40%,60%,80%{transform:scale(1.14) rotate(7deg)} 50%,70%{transform:scale(1.14) rotate(-7deg)} }
