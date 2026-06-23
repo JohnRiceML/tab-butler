@@ -7,7 +7,7 @@
  * animation system lives in mascot-lab.html; this is the lightweight in-app version.
  */
 
-export type GoobiMood = "idle" | "sleeping" | "searching" | "happy" | "worn" | "cheer";
+export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer";
 
 export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; destroy(): void; }
 
@@ -53,6 +53,11 @@ function eyesShift(d: number): string[][] {
   [6, 7, 8].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c + d])));
   return faceWith(px);
 }
+function eyesUp(): string[][] { // glancing up — concentrating
+  const px: number[][] = [];
+  [5, 6, 7].forEach((r) => EYE_COLS.forEach((c) => px.push([r, c])));
+  return faceWith(px);
+}
 function sleepFrame(zpx: number[][]): string[][] {
   const g = eyesClosed();
   zpx.forEach((p) => (g[p[0]][p[1]] = "Z"));
@@ -69,7 +74,7 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
   }
 }
 
-const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", happy: "g-bob", worn: "g-wobble", cheer: "g-tada" };
+const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-breathe", searching: "g-bob", thinking: "g-think", happy: "g-bob", worn: "g-wobble", cheer: "g-tada" };
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
@@ -106,6 +111,8 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number }): GoobiHa
       let i = 0;
       const tick = () => { if (!alive()) return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
       tick();
+    } else if (m === "thinking") {
+      paint(ctx, eyesUp(), cell, body); // looking up, concentrating + a gentle think-pulse (css)
     } else if (m === "happy" || m === "cheer") {
       paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada (css)
     } else if (m === "worn") {

@@ -52,6 +52,8 @@
       .g-breathe { animation: g-breathe 3.6s ease-in-out infinite; }
       .g-wobble { animation: g-wobble 1.6s ease-in-out infinite; }
       .g-tada { animation: g-tada .9s ease-in-out infinite; }
+      .g-think { animation: g-think 1.5s ease-in-out infinite; }
+      @keyframes g-think { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-5%) scale(1.02,1.03); } }
       @keyframes g-tada { 0%,100% { transform: scale(1) rotate(0); } 20% { transform: scale(1.12) rotate(-7deg); } 40%,60%,80% { transform: scale(1.14) rotate(7deg); } 50%,70% { transform: scale(1.14) rotate(-7deg); } }
       @keyframes g-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9%); } }
       @keyframes g-breathe { 0%, 100% { transform: scale(1,1); } 50% { transform: scale(1.03,1.05); } }

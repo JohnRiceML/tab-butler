@@ -3,7 +3,7 @@ import { REPLY_ANGLES } from "../lib/prompts";
 import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_SOFT_PER_HOUR, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
-import { mountGoobi, type GoobiMood } from "../lib/goobi";
+import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -320,11 +320,13 @@ async function flush() {
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined, verified: b.el.isConnected ? isVerified(b.el) : undefined }));
   const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
   batch.forEach((b) => inFlight.add(b.id));
+  refreshGoobi(); // Goobi concentrates while Claude analyzes the batch
   const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
   batch.forEach((b) => inFlight.delete(b.id));
+  refreshGoobi();
   if (resp?.error === "no-key") {
     if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Goobi panel to enable reply suggestions."); }
     enabled = false; // stop hammering until reload
@@ -899,7 +901,9 @@ async function draftFor(req: DraftReq) {
   const ui = { angle, avatar, name, products: candidates, productIndex };
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, ...ui });
+  goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product });
+  goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
   else paintPanel(root, author, text, { draft: resp.reply ?? "", ...ui });
@@ -1070,6 +1074,8 @@ const DOCK_CSS = `
 .g-breathe { animation:g-breathe 3.6s ease-in-out infinite; }
 .g-wobble { animation:g-wobble 1.6s ease-in-out infinite; }
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
+.g-think { animation:g-think 1.5s ease-in-out infinite; }
+@keyframes g-think { 0%,100%{transform:translateY(0) scale(1,1)} 50%{transform:translateY(-5%) scale(1.02,1.03)} }
 @keyframes g-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-9%)} }
 @keyframes g-breathe { 0%,100%{transform:scale(1,1)} 50%{transform:scale(1.03,1.05)} }
 @keyframes g-wobble { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
@@ -1247,6 +1253,8 @@ let goobiReactCopy: [string, string] = ["Nice reply!", "that's the good stuff"];
 let goobiSearchUntil = 0;                         // "searching" window after a manual rescan
 let goobiLastSeen = 0;                            // last active use (persisted)
 let goobiWelcomeBack = false;                     // set at boot when you've been away a while
+let goobiDrafting = false;                        // a reply is being drafted (Claude)
+let goobiDockHandle: GoobiHandle | null = null;   // the live dock/pill Goobi, for in-place mood updates
 const DAY_MS = 24 * HOUR_MS;
 
 function repliesLastHour(): number { return replyLog.times.filter((t) => Date.now() - t < HOUR_MS).length; }
@@ -1279,10 +1287,17 @@ function goobiReact(mood: GoobiMood, line: string, sub: string, ms: number): voi
 function goobiMood(): GoobiMood {
   const now = Date.now();
   if (now < goobiReactUntil) return goobiReactMood;               // just reacted (happy/cheer)
-  if (findingSpots || now < goobiSearchUntil) return "searching"; // hunting for posts
+  if (goobiDrafting) return "thinking";                           // drafting a reply
+  if (findingSpots) return "searching";                           // hunting for new posts (API search)
+  if (inFlight.size > 0) return "thinking";                       // analyzing posts (Claude scoring)
+  if (now < goobiSearchUntil) return "searching";                 // just hit rescan
   if (repliesLastHour() >= REPLY_HARD_PER_HOUR) return "worn";    // ease-off — honest mirror
   return opps.size > 0 ? "idle" : "sleeping";                     // posts waiting vs all quiet
 }
+
+/** Update the live dock Goobi's mood in place (no full re-render) — for working
+ *  states that flip rapidly: searching, analyzing, drafting. */
+function refreshGoobi(): void { goobiDockHandle?.setMood(goobiMood()); }
 
 /** Goobi's mood + status copy — shared by the dock header face, the minimized
  *  launcher, and tooltips. */
@@ -1292,6 +1307,7 @@ function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
   const reacting = Date.now() < goobiReactUntil;
   const COPY: Record<GoobiMood, [string, string]> = {
     searching: ["Sniffing out posts…", "one sec"],
+    thinking:  ["Reading the posts…", "thinking it over"],
     happy:     ["Nice reply!", "that's the good stuff"],
     cheer:     ["Nice!", "love that"],
     worn:      ["Let's ease off", "you're going fast — give it a minute"],
@@ -1418,7 +1434,7 @@ function renderList(list: HTMLElement) {
     follow.onclick = async () => {
       follow.disabled = true; follow.textContent = "Following…";
       const r = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
-      if (r === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); }
+      if (r === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); touchGoobi(); goobiReact("happy", "New friend!", `following @${o.author}`, 2000); }
       else if (r === "already") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Already following @${o.author}.`); }
       else if (r === "paced") { follow.disabled = false; follow.textContent = "+ Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
       else { follow.disabled = false; follow.textContent = "+ Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
@@ -1460,7 +1476,7 @@ function renderDock() {
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
     root.appendChild(l);
-    mountGoobi(gh, { cell: 2 }).setMood(mood);
+    goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood(mood);
     return;
   }
   const d = document.createElement("div"); d.className = "d";
@@ -1525,7 +1541,7 @@ function renderDock() {
     p.append(pt, pp, rb);
     d.append(p);
     root.appendChild(d);
-    mountGoobi(gh, { cell: 2 }).setMood("sleeping"); // resting while paused
+    goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood("sleeping"); // resting while paused
     return;
   }
 
@@ -1557,7 +1573,7 @@ function renderDock() {
 
   root.appendChild(d);
   renderList(list);
-  mountGoobi(gh, { cell: 2 }).setMood(gstat.mood); // Goobi lives at the top, mood-driven
+  goobiDockHandle = mountGoobi(gh, { cell: 2 }); goobiDockHandle.setMood(gstat.mood); // Goobi lives at the top, mood-driven
 }
 
 /* ---------- boot + SPA route handling ---------- */
