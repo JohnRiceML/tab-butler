@@ -526,7 +526,7 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
   b.textContent = label;
   b.title = tip;
   Object.assign(b.style, {
-    position: "absolute", top: "10px", right: "12px", zIndex: "9999",
+    position: "absolute", top: "10px", right: "60px", zIndex: "9999",
     background: bg, color: fg, border: "0", borderRadius: "999px",
     font: "600 11px -apple-system, system-ui, sans-serif", padding: "3px 10px", cursor: "pointer",
   } as Partial<CSSStyleDeclaration>);
@@ -548,7 +548,7 @@ function addButton(el: HTMLElement) {
   a.textContent = "+ Add";
   a.title = "Goobi passed on this one — add it anyway to score it and pull it into your reply list.";
   Object.assign(a.style, {
-    position: "absolute", top: "10px", right: "12px", zIndex: "9998",
+    position: "absolute", top: "10px", right: "60px", zIndex: "9998",
     background: "transparent", color: "#8c7d68", border: "1px solid rgba(214,154,92,.45)", borderRadius: "999px",
     font: "600 11px -apple-system, system-ui, sans-serif", padding: "2px 9px", cursor: "pointer", opacity: "0.5",
   } as Partial<CSSStyleDeclaration>);
