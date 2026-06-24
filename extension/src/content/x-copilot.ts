@@ -111,7 +111,17 @@ const queue: Queued[] = [];
 const inFlight = new Set<string>();
 
 function getLocal(key: string): Promise<unknown> {
-  return new Promise((res) => chrome.storage.local.get(key, (o) => res(o[key])));
+  return new Promise((res) => {
+    try { chrome.storage.local.get(key, (o) => res(chrome.runtime.lastError ? undefined : o[key])); }
+    catch { res(undefined); } // context died mid-call
+  });
+}
+/** chrome.storage.local.set THROWS SYNCHRONOUSLY once the context is invalidated — before
+ *  it returns a promise — so a trailing `.catch()` never attaches and the error escapes.
+ *  Gate on the live context + wrap, so every persist is best-effort and never uncaught. */
+function safeSet(obj: Record<string, unknown>): void {
+  if (invalidated || !contextOK()) return;
+  try { void chrome.storage.local.set(obj).catch(() => { /* best-effort */ }); } catch { /* context died mid-call */ }
 }
 function send<T>(msg: unknown): Promise<T | undefined> {
   return new Promise((res) => {
@@ -394,7 +404,7 @@ async function flush() {
  *  dock goes quiet until resumed. Persisted so it survives navigation + reload. */
 function setPaused(v: boolean): void {
   paused = v;
-  void chrome.storage.local.set({ [CONFIG.X_PAUSED_KEY]: v }).catch(() => { /* best-effort */ });
+  safeSet({ [CONFIG.X_PAUSED_KEY]: v });
   if (v) { dismissPanel(); if (dockPlayOpen) resetPlay(); } // close any open draft + collapse the playground while paused
   renderDock();
   if (v) { toast("Paused — the copilot is quiet until you resume."); }
@@ -941,7 +951,7 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
     if (firstToday && streak >= 2) goobiReactLove(`${streak}-day streak!`, "love that you keep showing up", 3800);
     else goobiReactLove("Love it!", "that's the good stuff", 3200);
   }
-  void chrome.storage.local.set({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }).catch(() => { /* best-effort */ });
+  safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
   renderDock(); // update "N replies sent today" immediately
   requestScan(); // flip this post's in-feed badge to the green "✓ Commented" call-out
 }
@@ -1462,7 +1472,7 @@ function replyStreak(): number {
 /** Mark Goobi as actively used now (persisted) so the neglect/welcome-back beat resets. */
 function touchGoobi(): void {
   goobiLastSeen = Date.now();
-  void chrome.storage.local.set({ [CONFIG.X_GOOBI_SEEN_KEY]: goobiLastSeen }).catch(() => { /* best-effort */ });
+  safeSet({ [CONFIG.X_GOOBI_SEEN_KEY]: goobiLastSeen });
 }
 
 /** Fire a transient Goobi reaction (happy/cheer) with its own status copy, then settle. */
@@ -1699,7 +1709,7 @@ function goobiCelebrate(): void { goobiPlayHandle?.setMood("cheer"); goobiPlayHa
 function playReady(): boolean { return playHappiness() >= PLAY_HAPPY; }
 function todaySent(): SentRecord[] { const dk = dayKey(Date.now()); return replyLog.sent.filter((r) => dayKey(r.at) === dk); }
 function treatId(rec: SentRecord): string { return rec.id ?? String(rec.at); }
-function persistFed(): void { void chrome.storage.local.set({ [CONFIG.X_GOOBI_FED_KEY]: { ids: Array.from(fedEver).slice(-2000), total: fedTotal } }).catch(() => { /* best-effort */ }); }
+function persistFed(): void { safeSet({ [CONFIG.X_GOOBI_FED_KEY]: { ids: Array.from(fedEver).slice(-2000), total: fedTotal } }); }
 const flyingTreats = new Set<HTMLElement>();        // in-flight treat clones, so we can clean them on close/teardown
 function clearFlyingTreats(): void { flyingTreats.forEach((el) => { try { el.getAnimations?.().forEach((a) => a.cancel()); } catch { /* ignore */ } el.remove(); }); flyingTreats.clear(); }
 /** Synchronous playground reset — every dock-dismissal path (✕, pause, relaunch, teardown) runs this
