@@ -99,7 +99,7 @@ function productContext(product?: ProductItem): string | undefined {
 const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -307,7 +307,12 @@ function scan() {
     if (!info) return;
     if (inFlight.has(info.id)) return; // sent to Claude, awaiting its score
     const cached = seen.get(info.id);
-    if (cached) { if (cached.score >= THRESHOLD) { const o = opps.get(info.id); badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); } return; }
+    if (cached) {
+      const o = opps.get(info.id);
+      if (o) badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
+      else addButton(el); // scored but didn't make the cut → offer a manual "+ Add"
+      return;
+    }
     if (el.dataset.tbx === "q") return; // this node already queued
     if (isPromoted(el)) return;
     if (selfHandle && info.author.toLowerCase() === selfHandle) return;
@@ -365,9 +370,17 @@ async function flush() {
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
-      // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
-      if (opps.delete(b.id)) changed = true;
-      if (b.el.isConnected) b.el.querySelector("[data-tbx-badge]")?.remove();
+      const ex = opps.get(b.id);
+      if (ex?.manual) {
+        // You pinned this one with "+ Add" — keep it, just refresh its real score/tag.
+        ex.score = s.score; ex.reason = reason; ex.category = category;
+        changed = true;
+        if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(ex));
+      } else {
+        // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
+        if (opps.delete(b.id)) changed = true;
+        if (b.el.isConnected) b.el.querySelector("[data-tbx-badge]")?.remove();
+      }
     }
   }
   if (changed) renderDock();
@@ -502,6 +515,7 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
     el.style.borderLeftColor = bg;
     return;
   }
+  el.querySelector("[data-tbx-add]")?.remove(); // surfacing replaces the faint "+ Add" affordance
   el.style.borderLeft = `3px solid ${bg}`;
   el.style.borderTopLeftRadius = "4px";
   el.style.borderBottomLeftRadius = "4px";
@@ -522,6 +536,59 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
     void openDraftFromEl(el);
   });
   el.appendChild(b);
+}
+
+/** A faint "+ Add" affordance on a post the scorer saw but didn't surface (below
+ *  THRESHOLD). Lets you override the system and pull it into the dock + score it. */
+function addButton(el: HTMLElement) {
+  if (el.querySelector("[data-tbx-badge]") || el.querySelector("[data-tbx-add]")) return; // already surfaced or already offered
+  if (getComputedStyle(el).position === "static") el.style.position = "relative";
+  const a = document.createElement("button");
+  a.setAttribute("data-tbx-add", "1");
+  a.textContent = "+ Add";
+  a.title = "Goobi passed on this one — add it anyway to score it and pull it into your reply list.";
+  Object.assign(a.style, {
+    position: "absolute", top: "10px", right: "12px", zIndex: "9998",
+    background: "transparent", color: "#8c7d68", border: "1px solid rgba(214,154,92,.45)", borderRadius: "999px",
+    font: "600 11px -apple-system, system-ui, sans-serif", padding: "2px 9px", cursor: "pointer", opacity: "0.5",
+  } as Partial<CSSStyleDeclaration>);
+  a.addEventListener("mouseenter", () => Object.assign(a.style, { opacity: "1", background: ACCENT, color: INK, borderColor: "transparent" }));
+  a.addEventListener("mouseleave", () => Object.assign(a.style, { opacity: "0.5", background: "transparent", color: "#8c7d68", borderColor: "rgba(214,154,92,.45)" }));
+  a.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); void addManual(el); });
+  el.appendChild(a);
+}
+
+/** Pin a post into the dock by hand (from "+ Add"), then score it for real so it
+ *  gets a proper tag/angle. Manual opps are never pruned, even if they score low. */
+async function addManual(el: HTMLElement) {
+  const info = statusInfo(el);
+  const text = outerText(el);
+  if (!info || !text) { toast("Couldn't read that post."); return; }
+  el.querySelector("[data-tbx-add]")?.remove();
+  if (opps.has(info.id)) { dockOpen = true; renderDock(); toast("That post is already in your list."); return; }
+  const stat = snapStats(el);
+  const cached = seen.get(info.id);
+  const opp: Opp = {
+    id: info.id, author: info.author, text: text.slice(0, 400), manual: true,
+    score: cached?.score ?? 0.5, reason: cached?.reason || "Added by you", category: cached?.category,
+    context: quotedText(el), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
+    avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el),
+  };
+  opps.set(info.id, opp);
+  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category });
+  badge(el, opp.reason, opp.category, effectiveScore(opp));
+  dockOpen = true; renderDock();
+  toast("Added to your reply list — scoring it…");
+  // Score it for real (one call, bypasses the per-session cap) to fill in the tag/angle.
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text }] });
+  const s = resp?.scores?.[0];
+  const cur = opps.get(info.id);
+  if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
+    cur.score = s.score; cur.reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ") || cur.reason; cur.category = catId(s.category) ?? cur.category;
+    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category });
+    if (statusInfo(el)?.id === info.id) badge(el, cur.reason, cur.category, effectiveScore(cur));
+    renderDock();
+  }
 }
 
 /* ---------- draft panel (closed shadow root, CSP-safe) ---------- */
