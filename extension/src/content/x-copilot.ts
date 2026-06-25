@@ -1867,6 +1867,40 @@ function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : o
 
 /* ---------- post ideas (remix what's overperforming in your niche) ---------- */
 
+function dedupById(ts: TwttrTweet[]): TwttrTweet[] { const seen = new Set<string>(); return ts.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true))); }
+
+/** Accounts you actually engage — distinct authors of your recent replies, newest
+ *  first, minus yourself. The "others in your space" we mine for what's working. */
+function engagedAuthors(max: number): string[] {
+  const seen = new Set<string>(); const out: string[] = [];
+  for (let i = replyLog.sent.length - 1; i >= 0 && out.length < max; i--) {
+    const a = replyLog.sent[i].author; if (!a) continue;
+    const k = a.toLowerCase();
+    if (k === selfHandle || seen.has(k)) continue;
+    seen.add(k); out.push(a);
+  }
+  return out;
+}
+
+/** One account's GENUINE over-performers: recent original posts that beat THAT
+ *  account's own median engagement (the real "above their average"). Best-effort —
+ *  returns [] on any error (the niche search remains the primary error surface). */
+async function fetchAccountHits(handle: string): Promise<TwttrTweet[]> {
+  const r = await send<{ ok?: boolean; data?: unknown; error?: string }>({
+    type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "20", query: `from:${handle}` }, intent: true,
+  });
+  if (!r?.ok) return [];
+  const posts = parseTimelineTweets(r.data).filter((t) => t.author && t.text && !t.isReply && t.text.length >= 40);
+  if (posts.length < 4) return []; // too few to form a baseline
+  const engs = posts.map((t) => (t.likes ?? 0) + (t.reposts ?? 0)).sort((a, b) => a - b);
+  const median = engs[Math.floor(engs.length / 2)] || 0;
+  const bar = Math.max(median * 1.8, median + 10, 20); // clearly above their norm, with a noise floor
+  return posts
+    .filter((t) => (t.likes ?? 0) + (t.reposts ?? 0) >= bar)
+    .sort((a, b) => ((b.likes ?? 0) + (b.reposts ?? 0)) - ((a.likes ?? 0) + (a.reposts ?? 0)))
+    .slice(0, 2);
+}
+
 /** Pick posts punching ABOVE their account's usual reach — high engagement-per-follower,
  *  with an absolute-pull floor so we don't surface noise. Diversified to ≤2 per author. */
 function pickOverperformers(tweets: TwttrTweet[], max: number): TwttrTweet[] {
@@ -1904,8 +1938,13 @@ async function generateIdeas() {
     if (search?.error === "no-twttr-config") { ideasError = "Add your RapidAPI key in the Goobi panel to gather niche posts."; return; }
     if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
-    const winners = pickOverperformers(parseTimelineTweets(search.data), 10);
-    if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
+    const nicheWinners = pickOverperformers(parseTimelineTweets(search.data), 10);
+    // Genuine "above their average": for accounts you actually engage, posts that beat
+    // THEIR OWN median. Prioritized over the niche over-indexers, then filled in.
+    const accounts = engagedAuthors(4);
+    const accountHits = accounts.length ? dedupById((await Promise.all(accounts.map(fetchAccountHits))).flat()) : [];
+    const winners = dedupById([...accountHits, ...nicheWinners]).slice(0, 10);
+    if (!winners.length) { ideasError = "Didn't find strong posts to remix yet. Reply to a few people in your space, or try a broader niche."; return; }
     const resp = await send<{ ideas?: PostIdea[]; error?: string }>({
       type: "POST_IDEAS",
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers })),
