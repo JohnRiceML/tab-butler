@@ -21,13 +21,12 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
   even off your exact topic.
 - **"+ Add" override** on posts the scorer passed on (pin + score them yourself;
   manual opps are never pruned).
-- **Post ideas** tab in the dock (`POST_IDEAS` → `generatePostIdeas`): finds what's
-  over-performing in your space and remixes the winning PATTERNS — never the content —
-  into original posts in your voice. Two sources, pooled: (1) niche `search-v3` Top
-  ranked by engagement-per-follower, and (2) genuine **"above their average"** — for
-  accounts you actually reply to (`engagedAuthors` → `from:` searches), posts that
-  beat THAT account's own recent median (`fetchAccountHits`), prioritized. Copy or
-  open in X's composer; draft-only.
+- **Post ideas** tab in the dock (`POST_IDEAS` → `generatePostIdeas`): pulls the
+  best-performing recent posts in your niche (Twttr `search-v3` Top → `pickBest`,
+  ranked by engagement, ≤2 per author) and remixes the winning PATTERNS — never the
+  content — into original posts in your voice (Sonnet, `POST_IDEAS_SYSTEM`). Copy or
+  open in X's composer; draft-only. (A richer per-account "above their average"
+  sourcing was prototyped then pulled back to keep v1 simple — see git history.)
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 
