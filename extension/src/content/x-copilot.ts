@@ -1,6 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { parseUser, pickDiscoveryTweets } from "../lib/twttr";
+import { parseTimelineTweets, parseUser, pickDiscoveryTweets, type TwttrTweet } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -1165,6 +1165,16 @@ const DOCK_CSS = `
 .tab { flex:1; border:.5px solid transparent; border-radius:9px; background:none; color:#8c7d68;
        font:500 11.5px -apple-system,system-ui,sans-serif; padding:7px 4px; cursor:pointer; white-space:nowrap; }
 .tab:hover { color:#cbb89c; } .tab.on { background:rgba(214,154,92,.13); border-color:rgba(214,154,92,.32); color:#e7b277; }
+.modes { display:flex; gap:6px; padding:2px 14px 10px; flex:0 0 auto; }
+.mode { flex:1; border:.5px solid rgba(214,154,92,.22); border-radius:10px; background:none; color:#8c7d68; font:600 12px -apple-system,system-ui,sans-serif; padding:8px 4px; cursor:pointer; }
+.mode:hover { color:#cbb89c; }
+.mode.on { background:${ACCENT}; border-color:transparent; color:${INK}; }
+.ideahead { padding:0 14px 9px; flex:0 0 auto; }
+.ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
+.idea { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
+.idea-txt { font-size:13px; line-height:1.45; color:#f3ead9; white-space:pre-wrap; }
+.idea-why { font-size:10.5px; color:#cbb89c; margin-top:8px; line-height:1.4; }
+.idea-row { display:flex; gap:7px; margin-top:10px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { overflow:auto; padding:0; }
@@ -1445,6 +1455,12 @@ function easyScore(o: Opp): number {
 
 type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
+type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
+let dockView: DockView = "replies";
+interface PostIdea { text: string; pattern: string; why: string; }
+let ideas: PostIdea[] = [];
+let ideasLoading = false;
+let ideasError: string | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
@@ -1849,6 +1865,100 @@ function closePlay(then?: () => void): void {
 }
 function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : openPlay(); }
 
+/* ---------- post ideas (remix what's overperforming in your niche) ---------- */
+
+/** Pick posts punching ABOVE their account's usual reach — high engagement-per-follower,
+ *  with an absolute-pull floor so we don't surface noise. Diversified to ≤2 per author. */
+function pickOverperformers(tweets: TwttrTweet[], max: number): TwttrTweet[] {
+  const now = Date.now();
+  const ranked = tweets
+    .filter((t) => t.author && t.text && !t.isReply && t.text.length >= 40) // real posts, not one-liners / replies
+    .filter((t) => !t.postedAt || now - t.postedAt < 120 * DAY_MS)          // not ancient
+    .map((t) => {
+      const eng = (t.likes ?? 0) + (t.reposts ?? 0);
+      const rate = eng / Math.max(t.followers ?? 3000, 800);                // engagement per follower = above their weight
+      return { t, eng, lift: rate * Math.log10(eng + 10) };                 // ...but require some absolute pull
+    })
+    .filter((x) => x.eng >= 25)
+    .sort((a, b) => b.lift - a.lift);
+  const out: TwttrTweet[] = []; const perAuthor = new Map<string, number>();
+  for (const { t } of ranked) {
+    const k = t.author.toLowerCase(); const c = perAuthor.get(k) ?? 0;
+    if (c >= 2) continue;
+    perAuthor.set(k, c + 1); out.push(t);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+async function generateIdeas() {
+  if (ideasLoading) return;
+  const niche = xNiche.trim();
+  if (!niche) { toast("Set your niche in the Goobi panel so it knows your space."); return; }
+  ideasLoading = true; ideasError = undefined; renderDock();
+  goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes ideas
+  try {
+    const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: niche.slice(0, 120) }, intent: true,
+    });
+    if (search?.error === "no-twttr-config") { ideasError = "Add your RapidAPI key in the Goobi panel to gather niche posts."; return; }
+    if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
+    if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
+    const winners = pickOverperformers(parseTimelineTweets(search.data), 10);
+    if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
+    const resp = await send<{ ideas?: PostIdea[]; error?: string }>({
+      type: "POST_IDEAS",
+      posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers })),
+    });
+    if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
+    if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
+    ideas = resp.ideas;
+  } finally {
+    ideasLoading = false; goobiDrafting = false; refreshGoobi(); renderDock();
+  }
+}
+
+function ideaCard(idea: PostIdea): HTMLElement {
+  const c = document.createElement("div"); c.className = "idea";
+  const txt = document.createElement("div"); txt.className = "idea-txt"; txt.textContent = idea.text; c.append(txt);
+  const meta = [idea.pattern, idea.why].filter(Boolean).join(" — ");
+  if (meta) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `✨ ${meta}`; c.append(w); }
+  const row = document.createElement("div"); row.className = "idea-row";
+  const copy = document.createElement("button"); copy.className = "lk"; copy.textContent = "Copy";
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
+  const open = document.createElement("button"); open.className = "lk"; open.textContent = "Open in composer ↗";
+  open.title = "Opens X's composer with this prefilled — you review and post (never auto-posts).";
+  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  row.append(copy, open);
+  c.append(row);
+  return c;
+}
+
+function buildIdeas(): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "ideas";
+  const head = document.createElement("div"); head.className = "ideahead";
+  const gen = document.createElement("button"); gen.className = "scanb";
+  gen.textContent = ideasLoading ? "Thinking…" : ideas.length ? "↻ Fresh ideas" : "✨ Generate ideas";
+  gen.disabled = ideasLoading;
+  gen.onclick = () => void generateIdeas();
+  const sub = document.createElement("div"); sub.className = "ideasub"; sub.textContent = "Remixes what's overperforming in your niche into posts in your voice. Draft-only — you review and post.";
+  head.append(gen, sub);
+  wrap.append(head);
+
+  const body = document.createElement("div"); body.className = "dl";
+  if (ideasLoading && !ideas.length) {
+    const l = document.createElement("div"); l.className = "empty"; l.textContent = "Studying what's working in your niche, then writing ideas in your voice…"; body.append(l);
+  } else if (ideasError) {
+    const e = document.createElement("div"); e.className = "empty"; e.textContent = ideasError; body.append(e);
+  } else if (!ideas.length) {
+    const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi reads the top posts in your niche and remixes them into fresh posts you can publish."; body.append(e);
+  } else {
+    for (const idea of ideas) body.append(ideaCard(idea));
+  }
+  wrap.append(body);
+  return wrap;
+}
+
 function renderDock() {
   if (!enabled || invalidated) return;
   if (dockPlayOpen && dockRoot?.querySelector(".dplay")) return; // playground is live — ambient re-renders must not tear it down under the user
@@ -1902,7 +2012,7 @@ function renderDock() {
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
-  if (!paused && !dockPlayOpen) {
+  if (!paused && !dockPlayOpen && dockView === "replies") {
     const re = document.createElement("button"); re.className = "scanb"; re.textContent = findingSpots ? "Searching…" : "↻ Scan again";
     re.title = "Rescan the page for new posts worth replying to";
     re.disabled = findingSpots;
@@ -1954,6 +2064,23 @@ function renderDock() {
     const stage = play.querySelector<HTMLElement>(".dpg-stage");
     if (stage) { goobiPlayHandle?.destroy(); goobiPlayHandle = mountGoobi(stage, { cell: 4, playful: true }); goobiPlayHandle.setMood(playReady() ? "cheer" : "idle"); }
     syncPlay();
+    return;
+  }
+
+  // Top-level mode: reply opportunities vs original post ideas.
+  const modes = document.createElement("div"); modes.className = "modes";
+  const mkMode = (id: DockView, label: string) => {
+    const b = document.createElement("button"); b.className = "mode" + (dockView === id ? " on" : ""); b.textContent = label;
+    b.onclick = () => { if (dockView !== id) { dockView = id; renderDock(); } };
+    return b;
+  };
+  modes.append(mkMode("replies", "💬 Replies"), mkMode("ideas", "✨ Post ideas"));
+  d.append(modes);
+
+  if (dockView === "ideas") {
+    d.append(buildIdeas());
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
     return;
   }
 

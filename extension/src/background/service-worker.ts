@@ -1,6 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast } from "../lib/archive";
-import { advise, classify, draftReply, isSmartEnabled, scorePosts } from "../lib/claude-client";
+import { advise, classify, draftReply, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter } from "../lib/twttr-governor";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, RecommendationKind } from "../lib/types";
@@ -269,6 +269,15 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "GET_TWTTR_METER":
         sendResponse(await readMeter());
+        break;
+      case "POST_IDEAS":
+        try {
+          const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
+          const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
+          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche) });
+        } catch (e) {
+          sendResponse({ error: (e as Error).message });
+        }
         break;
       default:
         sendResponse({ error: "unknown message" });

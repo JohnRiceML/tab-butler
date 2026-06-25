@@ -73,12 +73,12 @@ One injected script. Sections, by responsibility:
 - **discovery + routing** — `findSpots` (niche search via Twttr), `urlPoll` (SPA navigation).
 
 ### `src/background/service-worker.ts` — broker
-Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
+Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
 
 ### `src/lib/` — pure-ish modules
 | File | Role | Test |
 |---|---|---|
-| `claude-client.ts` | All Claude calls: `scorePosts`, `draftReply` (+ `steer`), `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft). BYO-key direct; parked proxy path. | — |
+| `claude-client.ts` | All Claude calls: `scorePosts`, `draftReply` (+ `steer`), `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas). BYO-key direct; parked proxy path. | — |
 | `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention). | — |
 | `types.ts` | The message union + shared types. `XScore.category` is a bare `string` — the enum lives only in the prompt + the `catId` runtime guard. | — |
 | `twttr.ts` | Parse RapidAPI (`twitter241`) responses: `parseUser`, `pickDiscoveryTweets`. | `test-twttr` |

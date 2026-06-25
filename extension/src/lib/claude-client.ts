@@ -1,6 +1,6 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEAS_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
@@ -200,4 +200,29 @@ export async function draftReply(post: { author: string; text: string; context?:
     400,
   );
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
+}
+
+export interface PostIdea { text: string; pattern: string; why: string; }
+
+/** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
+ *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet. */
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[], voice: string, niche: string): Promise<PostIdea[]> {
+  const key = await getKey();
+  if (!key) throw new Error("no-key");
+  const list = posts.map((p, i) => {
+    const eng = (p.likes ?? 0) + (p.reposts ?? 0);
+    const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
+    return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
+  }).join("\n");
+  const raw = await callDirect<{ ideas: { text: string; pattern: string; why: string }[] }>(
+    key,
+    "claude-sonnet-4-6",
+    POST_IDEAS_SYSTEM,
+    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice:\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
+    1400,
+  );
+  return (raw.ideas || [])
+    .slice(0, 6)
+    .map((d) => ({ text: stripDashes((d.text || "").trim()), pattern: (d.pattern || "").trim(), why: (d.why || "").trim() }))
+    .filter((d) => d.text);
 }

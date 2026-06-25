@@ -19,6 +19,13 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
   an overlapping **avatar stack** of the top authors.
 - **Community/peer-builder** signal (`community.ts`) — surface peers worth engaging
   even off your exact topic.
+- **"+ Add" override** on posts the scorer passed on (pin + score them yourself;
+  manual opps are never pruned).
+- **Post ideas** tab in the dock (`POST_IDEAS` → `generatePostIdeas`): pulls what's
+  over-performing in your niche (Twttr `search-v3` Top, ranked by engagement-per-
+  follower so it favors posts punching above their weight) and remixes the winning
+  PATTERNS — never the content — into original posts in your voice. Copy or open in
+  X's composer; draft-only.
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 
