@@ -9,11 +9,11 @@
 
 export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer" | "love" | "trick";
 
-export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; trick(): void; destroy(): void; }
+export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; trick(): void; play(move: string): void; destroy(): void; }
 
 /** The happy-move pool — picked at random by trick(). Every class must exist in the CSS of
  *  BOTH surfaces that mount Goobi (DOCK_CSS in x-copilot + popup.html). 'g-dance' is weighted. */
-const TRICKS = ["g-dance", "g-dance", "g-spin", "g-flip", "g-jump", "g-bounce", "g-wiggle", "g-tada", "g-trick"];
+const TRICKS = ["g-dance", "g-dance", "g-spin", "g-flip", "g-jump", "g-bounce", "g-wiggle", "g-tada", "g-trick", "g-slide", "g-wave"];
 
 // 20×14 pixel grid. '.' transparent · 'B' body · 'E' eye · 'H' eye highlight.
 const BASE = [
@@ -202,17 +202,18 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
     }
   }
 
-  /** Play a random happy move for ~1s, then settle back to the current mood. Used when
-   *  Goobi's pumped (playground) so feeding/petting him shows off a fresh trick each time. */
-  function trick(): void {
+  /** Play ONE move (a g-* css class) for ~1s with a happy face, then settle back to the
+   *  current mood (mood is left unchanged). The building block for trick() + play(). */
+  function playMove(m: string): void {
     if (!ctx) return;
-    const m = TRICKS[Math.floor(Math.random() * TRICKS.length)];
     stop();
     canvas.className = "gcv " + m;
     paint(ctx, faceWith(HAPPY), cell, CORAL);
-    timer = window.setTimeout(() => { if (alive()) run(mood); }, 1050); // revert to the resting mood (mood is unchanged)
+    timer = window.setTimeout(() => { if (alive()) run(mood); }, 1050);
   }
+  /** A random happy move — used when Goobi's pumped (playground feed/pet). */
+  function trick(): void { playMove(TRICKS[Math.floor(Math.random() * TRICKS.length)]); }
 
   run("idle");
-  return { el: canvas, setMood: (m) => { if (m !== mood) run(m); }, trick, destroy: stop };
+  return { el: canvas, setMood: (m) => { if (m !== mood) run(m); }, trick, play: playMove, destroy: stop };
 }

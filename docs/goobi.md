@@ -19,7 +19,11 @@ spec [goobi-design-v1.md](goobi-design-v1.md)). No fake needs, no dark patterns.
 - `mascot-lab.html` (repo root) — the canonical sprite + the full ~30-animation /
   care reference Goobi was extracted from.
 
-`mountGoobi(host, { cell, playful })` returns `{ el, setMood(mood), destroy() }`.
+`mountGoobi(host, { cell, playful })` returns `{ el, setMood(mood), trick(), play(move), destroy() }`.
+`play(move)` runs ONE move (a `g-*` class) transiently then settles back to the current
+mood; `trick()` is `play()` with a random move from the pool. The playground has a
+**"Preview his moves"** chip row (`buildPlay`) that fires every mood (`setMood`) + move
+(`play`) so you can eyeball the whole repertoire in-app.
 `cell` = pixel size (dock 3, playground 4, header 2). `playful: true` swaps the
 calm idle for the energetic playground idle. The frame loops self-guard on
 `canvas.isConnected` + the current mood, so a re-render or mood change never leaks
@@ -35,7 +39,7 @@ a timer or lets one animation bleed into the next.
 | `thinking` | eyes scan up-around | `g-think` | analyzing (Claude scoring) / drafting |
 | `happy` | `^‿^` | `g-bob` | follow; (legacy reply beat) |
 | `cheer` | `^‿^` + shimmy | `g-tada` | streak / welcome-back / pet |
-| `trick` | `^‿^` + a **random** show-off move (dance/spin/flip/jump/bounce/wiggle/tada, dance-weighted) via `GoobiHandle.trick()` | (varies) | playground: pet/feed once he's "ready" (happy) → fresh move each time |
+| `trick` | `^‿^` + a **random** show-off move from the pool (dance/spin/flip/jump/bounce/wiggle/tada/slide/wave, dance-weighted) via `GoobiHandle.trick()` | (varies) | playground: pet/feed once he's "ready" (happy) → fresh move each time |
 | `love` | red heart eyes + smitten bounce | `g-love` | the reply reaction (after cheer) |
 | `worn` | dizzy X-eyes, body turns red | `g-wobble` | ease-off (≥30 replies/hr) |
 

@@ -1228,12 +1228,16 @@ const DOCK_CSS = `
 .g-tada { animation:g-tada .9s ease-in-out infinite; }
 .g-trick { animation:g-trick 1.05s ease-in-out infinite; }
 .g-dance { animation:g-dance .9s ease-in-out infinite; }
+.g-slide { animation:g-slide 1.7s ease-in-out infinite; }
+.g-wave { animation:g-wave 1.1s ease-in-out infinite; }
 .g-jump { animation:g-jump .8s ease-in-out infinite; }
 .g-spin { animation:g-spin .9s ease-in-out infinite; }
 .g-flip { animation:g-flip .85s ease-in-out infinite; }
 .g-love { animation:g-love .85s ease-in-out infinite; }
 @keyframes g-trick { 0%{transform:rotate(0) translateY(0) scale(1)} 18%{transform:rotate(-12deg) translateY(-34%) scale(1.06)} 60%{transform:rotate(360deg) translateY(0) scale(1.06)} 80%{transform:rotate(360deg) translateY(-12%) scale(1)} 100%{transform:rotate(360deg) translateY(0) scale(1)} }
 @keyframes g-dance { 0%{transform:translateY(0) rotate(5deg) scale(1.05,.95)} 25%{transform:translateY(-14%) rotate(2deg) scale(.95,1.05)} 50%{transform:translateY(0) rotate(-5deg) scale(1.05,.95)} 75%{transform:translateY(-14%) rotate(-2deg) scale(.95,1.05)} 100%{transform:translateY(0) rotate(5deg) scale(1.05,.95)} }
+@keyframes g-slide { 0%{transform:translateX(-46%) translateY(0)} 25%{transform:translateX(-46%) translateY(-9%)} 50%{transform:translateX(46%) translateY(0)} 75%{transform:translateX(46%) translateY(-9%)} 100%{transform:translateX(-46%) translateY(0)} }
+@keyframes g-wave { 0%,100%{transform:rotate(0) translateY(0)} 15%{transform:rotate(-15deg) translateY(-6%)} 35%{transform:rotate(11deg)} 55%{transform:rotate(-11deg)} 75%{transform:rotate(8deg)} }
 @keyframes g-jump { 0%{transform:translateY(0) scale(1,1)} 15%{transform:translateY(0) scale(1.1,.9)} 35%{transform:translateY(-45%) scale(.94,1.08)} 50%{transform:translateY(-50%) scale(1,1)} 65%{transform:translateY(0) scale(1.1,.9)} 85%,100%{transform:translateY(0) scale(1,1)} }
 @keyframes g-spin { 0%{transform:rotate(0) scale(1)} 50%{transform:rotate(180deg) scale(1.08)} 100%{transform:rotate(360deg) scale(1)} }
 @keyframes g-flip { 0%{transform:translateY(0) rotate(0)} 40%{transform:translateY(-48%) rotate(-180deg)} 70%{transform:translateY(-12%) rotate(-360deg)} 100%{transform:translateY(0) rotate(-360deg)} }
@@ -1279,6 +1283,10 @@ const DOCK_CSS = `
 .dpg-hunt:disabled { cursor:default; }
 .dpg-back { border:0; background:none; color:#8c7d68; font:600 13px inherit; cursor:pointer; padding:10px 12px; }
 .dpg-back:hover { color:#cbb89c; }
+.dpg-movelbl { font-size:10.5px; color:#8c7d68; margin-top:16px; }
+.dpg-moves { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+.dpg-move { border:.5px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 10.5px -apple-system,system-ui,sans-serif; padding:5px 8px; cursor:pointer; }
+.dpg-move:hover { background:rgba(214,154,92,.13); color:#f3ead9; }
 @keyframes dpg-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.03)} }
 `;
 
@@ -1837,6 +1845,23 @@ function buildPlay(): HTMLElement {
   const hunt = document.createElement("button"); hunt.className = "dpg-hunt"; hunt.id = "dpg-hunt"; hunt.onclick = () => { if (playReady()) closePlay(() => rescan()); };
   row.append(back, hunt);
   pg.append(row);
+
+  // Preview every move — tap a chip and the big Goobi above does it.
+  const mlbl = document.createElement("div"); mlbl.className = "dpg-movelbl"; mlbl.textContent = "Preview his moves";
+  const moves = document.createElement("div"); moves.className = "dpg-moves";
+  const MOVES: { label: string; mood?: GoobiMood; move?: string }[] = [
+    { label: "Idle", mood: "idle" }, { label: "Search", mood: "searching" }, { label: "Think", mood: "thinking" },
+    { label: "Happy", mood: "cheer" }, { label: "Love", mood: "love" }, { label: "Worn", mood: "worn" }, { label: "Sleep", mood: "sleeping" },
+    { label: "Trick", move: "g-trick" }, { label: "Dance", move: "g-dance" }, { label: "Spin", move: "g-spin" }, { label: "Backflip", move: "g-flip" },
+    { label: "Jump", move: "g-jump" }, { label: "Bounce", move: "g-bounce" }, { label: "Wiggle", move: "g-wiggle" }, { label: "Beat", move: "g-heartbeat" },
+    { label: "Float", move: "g-float" }, { label: "Slide", move: "g-slide" }, { label: "Wave", move: "g-wave" },
+  ];
+  for (const m of MOVES) {
+    const b = document.createElement("button"); b.className = "dpg-move"; b.textContent = m.label;
+    b.onclick = () => { if (m.mood) goobiPlayHandle?.setMood(m.mood); else if (m.move) goobiPlayHandle?.play(m.move); };
+    moves.append(b);
+  }
+  pg.append(mlbl, moves);
 
   wrap.append(pg);
   return wrap;
