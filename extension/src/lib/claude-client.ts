@@ -202,7 +202,7 @@ export async function draftReply(post: { author: string; text: string; context?:
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
 }
 
-export interface PostIdea { text: string; source: string; pattern: string; why: string; }
+export interface PostIdea { text: string; source: string; pattern: string; why: string; virality: number; }
 
 /** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet. */
@@ -214,7 +214,7 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
     return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
   }).join("\n");
-  const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string }[] }>(
+  const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; virality?: number }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
@@ -223,6 +223,6 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
   );
   return (raw.ideas || [])
     .slice(0, 6)
-    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim() }))
+    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), virality: Math.max(0, Math.min(100, Math.round(Number(d.virality) || 0))) }))
     .filter((d) => d.text);
 }

@@ -92,8 +92,9 @@ For each idea return:
 - "source": the @handle of the ONE over-performing post whose pattern you borrowed most (just the handle, no @).
 - "pattern": 2-5 words naming the format you borrowed (e.g. "mistake then lesson").
 - "why": one specific sentence on why THIS post should work for the user (the insight, who it speaks to, or the engagement it should pull) — not generic.
+- "virality": an integer 0-100, your HONEST estimate of how likely this specific post is to over-perform and spread (strong hook, specific and novel, emotionally resonant or usefully contrarian, easy to repost or quote). Be calibrated and varied: most solid posts land 40-65; reserve 80+ for a genuinely strong, broadly shareable hook; below 35 for safe or narrow posts. Do not give everything the same number.
 
-Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"source":string,"pattern":string,"why":string}]}`;
+Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"source":string,"pattern":string,"why":string,"virality":number}]}`;
 
 export interface ReplyAngle { id: string; label: string; directive: string; }
 

@@ -1175,6 +1175,8 @@ const DOCK_CSS = `
 .idea { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
 .idea-ta { width:100%; box-sizing:border-box; background:#221c15; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:9px; padding:9px 10px; font:inherit; font-size:13px; line-height:1.45; resize:vertical; white-space:pre-wrap; }
 .idea-ta:focus { outline:none; border-color:${ACCENT}; }
+.idea-stats { display:flex; gap:14px; margin-top:9px; }
+.idea-stat { font-size:11px; font-weight:600; color:#cbb89c; }
 .idea-src { font-size:10.5px; color:#8c7d68; margin-top:8px; }
 .idea-why { font-size:12px; color:#e0b07e; margin-top:7px; line-height:1.4; }
 .idea-row { display:flex; gap:7px; margin-top:11px; }
@@ -1462,7 +1464,7 @@ type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
 let dockView: DockView = "replies";
-interface PostIdea { text: string; source: string; pattern: string; why: string; }
+interface PostIdea { text: string; source: string; pattern: string; why: string; virality: number; }
 let ideas: PostIdea[] = [];
 let ideasLoading = false;
 let ideasError: string | undefined;
@@ -1921,6 +1923,15 @@ async function generateIdeas() {
   }
 }
 
+/** Rough est. reach for one of YOUR posts: your followers scaled by the predicted
+ *  virality (a viral post breaks out of the follower graph). An estimate, not a promise. */
+function estReach(virality: number): number {
+  const f = myFollowers > 0 ? myFollowers : 1000; // assume a small base if you haven't set your follower count
+  const v = Math.max(0, Math.min(100, virality)) / 100;
+  return Math.round(f * (0.25 + v * v * 6)); // v=1 → ~6.25× followers; v=.5 → ~1.75×; v=0 → ~.25×
+}
+function viralityColor(v: number): string { return v >= 70 ? "#6fcf7f" : v >= 45 ? "#e0a45c" : "#8c7d68"; }
+
 function ideaCard(idea: PostIdea): HTMLElement {
   const c = document.createElement("div"); c.className = "idea";
   // Editable draft — tweak it before you copy/post. Keeps the line breaks.
@@ -1928,6 +1939,15 @@ function ideaCard(idea: PostIdea): HTMLElement {
   ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
   ta.oninput = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
   c.append(ta);
+  // Scores: predicted virality + your estimated reach.
+  const stats = document.createElement("div"); stats.className = "idea-stats";
+  const vc = document.createElement("span"); vc.className = "idea-stat"; vc.style.color = viralityColor(idea.virality);
+  vc.textContent = `🔥 ${idea.virality} virality`; vc.title = "Goobi's estimate of how likely this post is to over-perform and spread (0–100).";
+  const rc = document.createElement("span"); rc.className = "idea-stat";
+  rc.textContent = `📈 ~${fmtCount(estReach(idea.virality)) || "—"} reach`;
+  rc.title = myFollowers > 0 ? `Rough estimate from your ~${fmtCount(myFollowers)} followers and the virality score — an estimate, not a promise.` : "Set your follower count in the Goobi panel for a sharper reach estimate.";
+  stats.append(vc, rc);
+  c.append(stats);
   // Which account it was remixed from + the pattern.
   if (idea.source || idea.pattern) {
     const src = document.createElement("div"); src.className = "idea-src";
