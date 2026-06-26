@@ -148,6 +148,7 @@ function teardown(): void {
   if (urlPoll) clearInterval(urlPoll);
   if (flushTimer) clearTimeout(flushTimer);
   try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
+  try { stopIdeasGoobi(); } catch { /* ignore */ }
   try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
   try { dismissPanel(); } catch { /* ignore */ }
 }
@@ -1172,9 +1173,13 @@ const DOCK_CSS = `
 .ideahead { padding:0 14px 9px; flex:0 0 auto; }
 .ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
 .idea { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
-.idea-txt { font-size:13px; line-height:1.45; color:#f3ead9; white-space:pre-wrap; }
-.idea-why { font-size:10.5px; color:#cbb89c; margin-top:8px; line-height:1.4; }
-.idea-row { display:flex; gap:7px; margin-top:10px; }
+.idea-ta { width:100%; box-sizing:border-box; background:#221c15; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:9px; padding:9px 10px; font:inherit; font-size:13px; line-height:1.45; resize:vertical; white-space:pre-wrap; }
+.idea-ta:focus { outline:none; border-color:${ACCENT}; }
+.idea-src { font-size:10.5px; color:#8c7d68; margin-top:8px; }
+.idea-why { font-size:12px; color:#e0b07e; margin-top:7px; line-height:1.4; }
+.idea-row { display:flex; gap:7px; margin-top:11px; }
+.idea-load { display:flex; align-items:center; justify-content:center; height:96px; }
+.idea-loadcap { text-align:center; font-size:11.5px; color:#8c7d68; line-height:1.4; padding:2px 18px 10px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { overflow:auto; padding:0; }
@@ -1457,10 +1462,12 @@ type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
 let dockView: DockView = "replies";
-interface PostIdea { text: string; pattern: string; why: string; }
+interface PostIdea { text: string; source: string; pattern: string; why: string; }
 let ideas: PostIdea[] = [];
 let ideasLoading = false;
 let ideasError: string | undefined;
+let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
+let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
@@ -1916,18 +1923,49 @@ async function generateIdeas() {
 
 function ideaCard(idea: PostIdea): HTMLElement {
   const c = document.createElement("div"); c.className = "idea";
-  const txt = document.createElement("div"); txt.className = "idea-txt"; txt.textContent = idea.text; c.append(txt);
-  const meta = [idea.pattern, idea.why].filter(Boolean).join(" — ");
-  if (meta) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `✨ ${meta}`; c.append(w); }
+  // Editable draft — tweak it before you copy/post. Keeps the line breaks.
+  const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text;
+  ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
+  ta.oninput = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  c.append(ta);
+  // Which account it was remixed from + the pattern.
+  if (idea.source || idea.pattern) {
+    const src = document.createElement("div"); src.className = "idea-src";
+    src.textContent = `↺ Remixed from ${idea.source ? "@" + idea.source : "the niche"}${idea.pattern ? ` · ${idea.pattern}` : ""}`;
+    if (idea.source) { src.style.cursor = "pointer"; src.title = `Open @${idea.source} on X`; src.onclick = () => window.open(`https://x.com/${idea.source}`, "_blank", "noopener"); }
+    c.append(src);
+  }
+  // The why — prominent (this is the point: why it should work for you).
+  if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `💡 ${idea.why}`; c.append(w); }
   const row = document.createElement("div"); row.className = "idea-row";
   const copy = document.createElement("button"); copy.className = "lk"; copy.textContent = "Copy";
-  copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
   const open = document.createElement("button"); open.className = "lk"; open.textContent = "Open in composer ↗";
-  open.title = "Opens X's composer with this prefilled — you review and post (never auto-posts).";
-  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  open.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts).";
+  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(ta.value)}`, "_blank", "noopener");
   row.append(copy, open);
   c.append(row);
   return c;
+}
+
+function stopIdeasGoobi(): void {
+  if (goobiIdeasTimer) { clearTimeout(goobiIdeasTimer); goobiIdeasTimer = undefined; }
+  goobiIdeasHandle?.destroy(); goobiIdeasHandle = null;
+}
+/** A big Goobi who dances + cycles fun moves in the ideas loading area while Claude works.
+ *  Mounted AFTER the dock is in the DOM (the canvas loop self-guards on isConnected). */
+function mountIdeasGoobi(): void {
+  stopIdeasGoobi();
+  const stage = dockRoot?.querySelector<HTMLElement>(".idea-load");
+  if (!stage) return;
+  goobiIdeasHandle = mountGoobi(stage, { cell: 4, playful: true });
+  goobiIdeasHandle.setMood("cheer");
+  const dance = () => {
+    if (!goobiIdeasHandle || !goobiIdeasHandle.el.isConnected || !ideasLoading) { stopIdeasGoobi(); return; }
+    goobiIdeasHandle.trick(); // a fresh random move (dance/spin/flip/jump…) every beat
+    goobiIdeasTimer = window.setTimeout(dance, 1150);
+  };
+  goobiIdeasTimer = window.setTimeout(dance, 350);
 }
 
 function buildIdeas(): HTMLElement {
@@ -1943,7 +1981,9 @@ function buildIdeas(): HTMLElement {
 
   const body = document.createElement("div"); body.className = "dl";
   if (ideasLoading && !ideas.length) {
-    const l = document.createElement("div"); l.className = "empty"; l.textContent = "Studying what's working in your niche, then writing ideas in your voice…"; body.append(l);
+    const stage = document.createElement("div"); stage.className = "idea-load"; // Goobi dances here (mounted after the dock is in the DOM)
+    const cap = document.createElement("div"); cap.className = "idea-loadcap"; cap.textContent = "Studying what's working in your niche, then writing ideas in your voice…";
+    body.append(stage, cap);
   } else if (ideasError) {
     const e = document.createElement("div"); e.className = "empty"; e.textContent = ideasError; body.append(e);
   } else if (!ideas.length) {
@@ -1960,6 +2000,7 @@ function renderDock() {
   if (dockPlayOpen && dockRoot?.querySelector(".dplay")) return; // playground is live — ambient re-renders must not tear it down under the user
   const root = ensureDock();
   goobiDockHandle?.destroy(); goobiDockHandle = null; // stop the previous header Goobi before we rebuild (replaceChildren only detaches it)
+  stopIdeasGoobi(); // the ideas-loading dancer (re-mounted below if still loading)
   root.replaceChildren();
   const n = opps.size;
   if (!dockOpen) {
@@ -2077,6 +2118,7 @@ function renderDock() {
     d.append(buildIdeas());
     root.appendChild(d);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    mountIdeasGoobi(); // dance while ideas generate (after the dock is in the DOM)
     return;
   }
 

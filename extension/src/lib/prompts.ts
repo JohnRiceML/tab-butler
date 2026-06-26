@@ -85,10 +85,15 @@ Hard requirements:
 - Never use an em dash or en dash (use a period or a comma instead). Never use hyphenated compound words ("long term" not "long-term"). No hashtags, and no emojis unless the voice clearly uses them.
 - Avoid AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question.
 - Keep each post tight and postable: usually one to three short lines, under about 280 characters, unless the voice clearly runs longer.
+- FORMAT it the way it would actually appear on X: use real line breaks (a "\\n" newline character in the JSON string) between lines where the format calls for it (a short list, a setup then a punch line, a hook then the point). Do not cram a multi-line format onto one line.
 
-For each idea return: "text" (the ready-to-post draft), "pattern" (2-5 words naming the format you borrowed), "why" (one short line on why it should land for the user).
+For each idea return:
+- "text": the ready-to-post draft, formatted with line breaks.
+- "source": the @handle of the ONE over-performing post whose pattern you borrowed most (just the handle, no @).
+- "pattern": 2-5 words naming the format you borrowed (e.g. "mistake then lesson").
+- "why": one specific sentence on why THIS post should work for the user (the insight, who it speaks to, or the engagement it should pull) — not generic.
 
-Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"pattern":string,"why":string}]}`;
+Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"source":string,"pattern":string,"why":string}]}`;
 
 export interface ReplyAngle { id: string; label: string; directive: string; }
 

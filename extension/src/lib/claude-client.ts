@@ -202,7 +202,7 @@ export async function draftReply(post: { author: string; text: string; context?:
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
 }
 
-export interface PostIdea { text: string; pattern: string; why: string; }
+export interface PostIdea { text: string; source: string; pattern: string; why: string; }
 
 /** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet. */
@@ -214,15 +214,15 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
     return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
   }).join("\n");
-  const raw = await callDirect<{ ideas: { text: string; pattern: string; why: string }[] }>(
+  const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
     `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice:\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
-    1400,
+    1600,
   );
   return (raw.ideas || [])
     .slice(0, 6)
-    .map((d) => ({ text: stripDashes((d.text || "").trim()), pattern: (d.pattern || "").trim(), why: (d.why || "").trim() }))
+    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim() }))
     .filter((d) => d.text);
 }
