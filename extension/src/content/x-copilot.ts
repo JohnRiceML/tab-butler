@@ -1172,14 +1172,30 @@ const DOCK_CSS = `
 .mode.on { background:${ACCENT}; border-color:transparent; color:${INK}; }
 .ideahead { padding:0 14px 9px; flex:0 0 auto; }
 .ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
-.idea { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
-.idea-ta { width:100%; box-sizing:border-box; background:#221c15; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:9px; padding:9px 10px; font:inherit; font-size:13px; line-height:1.45; resize:vertical; white-space:pre-wrap; }
+.idea { position:relative; background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
+.idea.kept { border-left:2px solid ${ACCENT}; }
+.idea.dimmed { opacity:.5; pointer-events:none; }
+.idea-gauge { position:absolute; top:9px; right:10px; display:flex; align-items:center; gap:5px; font:600 10px -apple-system,system-ui,sans-serif; }
+.idea-bars { display:inline-flex; gap:2px; align-items:flex-end; }
+.idea-bars i { width:3px; height:9px; border-radius:1px; }
+.idea-ta { width:100%; box-sizing:border-box; margin-top:18px; background:#221c15; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:9px; padding:9px 10px; font:inherit; font-size:13.5px; line-height:1.5; resize:vertical; white-space:pre-wrap; }
 .idea-ta:focus { outline:none; border-color:${ACCENT}; }
-.idea-stats { display:flex; gap:14px; margin-top:9px; }
-.idea-stat { font-size:11px; font-weight:600; color:#cbb89c; }
-.idea-src { font-size:10.5px; color:#8c7d68; margin-top:8px; }
-.idea-why { font-size:12px; color:#e0b07e; margin-top:7px; line-height:1.4; }
-.idea-row { display:flex; gap:7px; margin-top:11px; }
+.idea-why { font-size:12px; color:#e0b07e; margin-top:9px; line-height:1.45; }
+.idea-src { font-size:10.5px; color:#8c7d68; margin-top:9px; }
+.idea-srctog { cursor:pointer; }
+.idea-srctog:hover { color:#cbb89c; }
+.idea-quote { margin-top:7px; border-left:2px solid rgba(214,154,92,.3); padding:2px 0 2px 9px; }
+.idea-qtext { font-size:11.5px; color:#b6a892; line-height:1.4; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; }
+.idea-qfoot { display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10.5px; color:#8c7d68; }
+.idea-qlink { color:${ACCENT}; text-decoration:none; }
+.idea-row { display:flex; gap:7px; align-items:center; margin-top:11px; }
+.idea-open { flex:2; border:0; border-radius:9px; padding:8px; font:600 12px inherit; cursor:pointer; background:${ACCENT}; color:${INK}; }
+.idea-copy { flex:1; }
+.idea-pin { margin-left:auto; border:.5px solid rgba(214,154,92,.22); background:none; border-radius:9px; padding:6px 9px; cursor:pointer; font-size:12px; filter:grayscale(1) opacity(.7); }
+.idea-pin.on { filter:none; background:rgba(214,154,92,.14); border-color:transparent; }
+.idea-reachline { margin-top:5px; }
+.idea-trend { font-size:10.5px; color:#a99cf0; margin-top:8px; }
+.ideagate-t { font-weight:600; font-size:13.5px; color:#cbb89c; }
 .idea-load { display:flex; align-items:center; justify-content:center; height:96px; }
 .idea-loadcap { text-align:center; font-size:11.5px; color:#8c7d68; line-height:1.4; padding:2px 18px 10px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
@@ -1472,8 +1488,12 @@ type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
 let dockView: DockView = "replies";
-interface PostIdea { text: string; source: string; pattern: string; why: string; virality: number; }
-let ideas: PostIdea[] = [];
+interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; } // the real over-performing post we remixed
+interface Idea { id: string; text: string; source: string; pattern: string; why: string; virality: number; src?: IdeaSource; }
+let ideas: Idea[] = [];                  // the current batch
+let keptIdeas: Idea[] = [];              // pinned ideas — survive a reroll
+const expandedSources = new Set<string>(); // idea ids whose source-post proof is expanded
+let ideaSeq = 0;
 let ideasLoading = false;
 let ideasError: string | undefined;
 let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
@@ -1936,59 +1956,99 @@ async function generateIdeas() {
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
     const winners = pickBest(parseTimelineTweets(search.data), 10);
     if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
-    const resp = await send<{ ideas?: PostIdea[]; error?: string }>({
+    const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; virality: number }[]; error?: string }>({
       type: "POST_IDEAS",
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers })),
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
-    ideas = resp.ideas;
+    // Attach the REAL source post (already fetched in `winners`) by matching the handle Claude cited.
+    ideas = resp.ideas.map((d) => {
+      const w = d.source ? winners.find((x) => x.author.toLowerCase() === d.source.toLowerCase()) : undefined;
+      return { id: `i${++ideaSeq}`, text: d.text, source: d.source, pattern: d.pattern, why: d.why, virality: d.virality,
+        src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined };
+    });
   } finally {
     ideasLoading = false; goobiDrafting = false; refreshGoobi(); renderDock();
   }
 }
 
-/** Rough est. reach for one of YOUR posts: your followers scaled by the predicted
- *  virality (a viral post breaks out of the follower graph). An estimate, not a promise. */
-function estReach(virality: number): number {
-  const f = myFollowers > 0 ? myFollowers : 1000; // assume a small base if you haven't set your follower count
-  const v = Math.max(0, Math.min(100, virality)) / 100;
-  return Math.round(f * (0.25 + v * v * 6)); // v=1 → ~6.25× followers; v=.5 → ~1.75×; v=0 → ~.25×
+function viralityVerdict(v: number): { label: string; color: string } {
+  if (v >= 70) return { label: "Strong", color: "#6fcf7f" };
+  if (v >= 45) return { label: "Solid", color: "#e0a45c" };
+  return { label: "Niche", color: "#8c7d68" };
 }
-function viralityColor(v: number): string { return v >= 70 ? "#6fcf7f" : v >= 45 ? "#e0a45c" : "#8c7d68"; }
+function isKept(idea: Idea): boolean { return keptIdeas.some((k) => k.id === idea.id); }
+function togglePin(idea: Idea): void {
+  const i = keptIdeas.findIndex((k) => k.id === idea.id);
+  if (i >= 0) keptIdeas.splice(i, 1);
+  else { if (keptIdeas.length >= 5) { toast("You can keep up to 5 ideas."); return; } keptIdeas.push(idea); } // same object → edits propagate
+  renderDock();
+}
+/** Sort kept-first, then the rest best-virality-first; drop a fresh idea that duplicates a kept one. */
+function shownIdeas(): Idea[] {
+  const byV = (a: Idea, b: Idea) => b.virality - a.virality;
+  const norm = (s: string) => s.trim().toLowerCase();
+  const kept = [...keptIdeas].sort(byV);
+  const fresh = ideas.filter((i) => !keptIdeas.some((k) => k.id === i.id || norm(k.text) === norm(i.text))).sort(byV);
+  return [...kept, ...fresh];
+}
 
-function ideaCard(idea: PostIdea): HTMLElement {
-  const c = document.createElement("div"); c.className = "idea";
-  // Editable draft — tweak it before you copy/post. Keeps the line breaks.
+/** The collapsible proof: the ACTUAL over-performing post this idea remixed. */
+function sourceBlock(idea: Idea): HTMLElement {
+  const wrap = document.createElement("div");
+  if (!idea.src) {
+    const s = document.createElement("div"); s.className = "idea-src";
+    s.textContent = `↺ Pattern borrowed from your niche${idea.pattern ? ` · ${idea.pattern}` : ""}`;
+    wrap.append(s); return wrap;
+  }
+  const open = expandedSources.has(idea.id);
+  const tog = document.createElement("div"); tog.className = "idea-src idea-srctog";
+  tog.textContent = `↺ Remixing @${idea.src.handle}'s post${idea.pattern ? ` · ${idea.pattern}` : ""}  ${open ? "▾" : "▸"}`;
+  tog.onclick = () => { open ? expandedSources.delete(idea.id) : expandedSources.add(idea.id); renderDock(); };
+  wrap.append(tog);
+  if (open) {
+    const q = document.createElement("div"); q.className = "idea-quote";
+    const qt = document.createElement("div"); qt.className = "idea-qtext"; qt.textContent = idea.src.text; q.append(qt);
+    const f = document.createElement("div"); f.className = "idea-qfoot";
+    const eng = document.createElement("span"); eng.textContent = `❤ ${fmtCount(idea.src.likes) || 0} · 🔁 ${fmtCount(idea.src.reposts) || 0} on this one`;
+    const link = document.createElement("a"); link.className = "idea-qlink"; link.textContent = "Open post ↗";
+    link.href = `https://x.com/${idea.src.handle}/status/${idea.src.id}`; link.target = "_blank"; link.rel = "noopener";
+    f.append(eng, link); q.append(f); wrap.append(q);
+  }
+  return wrap;
+}
+
+function ideaCard(idea: Idea): HTMLElement {
+  const c = document.createElement("div"); c.className = "idea"; if (isKept(idea)) c.classList.add("kept");
+  // Virality gauge (top-right) — a band + word, not a fake-precise number.
+  const vv = viralityVerdict(idea.virality);
+  const g = document.createElement("div"); g.className = "idea-gauge"; g.title = `Goobi's calibrated guess at how far this could spread (${idea.virality}/100). A hunch, not a promise.`;
+  const bars = document.createElement("span"); bars.className = "idea-bars";
+  const filled = Math.max(1, Math.min(3, Math.round((idea.virality / 100) * 3)));
+  for (let i = 0; i < 3; i++) { const b = document.createElement("i"); b.style.background = i < filled ? vv.color : "rgba(214,154,92,.18)"; bars.append(b); }
+  const gl = document.createElement("span"); gl.textContent = vv.label; gl.style.color = vv.color;
+  g.append(bars, gl); c.append(g);
+  // The draft — primary, editable. oninput writes back so edits survive a re-render.
   const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text;
   ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
-  ta.oninput = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  ta.oninput = () => { idea.text = ta.value; ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
   c.append(ta);
-  // Scores: predicted virality + your estimated reach.
-  const stats = document.createElement("div"); stats.className = "idea-stats";
-  const vc = document.createElement("span"); vc.className = "idea-stat"; vc.style.color = viralityColor(idea.virality);
-  vc.textContent = `🔥 ${idea.virality} virality`; vc.title = "Goobi's estimate of how likely this post is to over-perform and spread (0–100).";
-  const rc = document.createElement("span"); rc.className = "idea-stat";
-  rc.textContent = `📈 ~${fmtCount(estReach(idea.virality)) || "—"} reach`;
-  rc.title = myFollowers > 0 ? `Rough estimate from your ~${fmtCount(myFollowers)} followers and the virality score — an estimate, not a promise.` : "Set your follower count in the Goobi panel for a sharper reach estimate.";
-  stats.append(vc, rc);
-  c.append(stats);
-  // Which account it was remixed from + the pattern.
-  if (idea.source || idea.pattern) {
-    const src = document.createElement("div"); src.className = "idea-src";
-    src.textContent = `↺ Remixed from ${idea.source ? "@" + idea.source : "the niche"}${idea.pattern ? ` · ${idea.pattern}` : ""}`;
-    if (idea.source) { src.style.cursor = "pointer"; src.title = `Open @${idea.source} on X`; src.onclick = () => window.open(`https://x.com/${idea.source}`, "_blank", "noopener"); }
-    c.append(src);
-  }
-  // The why — prominent (this is the point: why it should work for you).
+  // The why — the pitch (secondary voice).
   if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `💡 ${idea.why}`; c.append(w); }
+  // Source-post proof.
+  c.append(sourceBlock(idea));
+  // Actions: primary Open, secondary Copy, pin.
   const row = document.createElement("div"); row.className = "idea-row";
-  const copy = document.createElement("button"); copy.className = "lk"; copy.textContent = "Copy";
-  copy.onclick = async () => { try { await navigator.clipboard.writeText(ta.value); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
-  const open = document.createElement("button"); open.className = "lk"; open.textContent = "Open in composer ↗";
+  const open = document.createElement("button"); open.className = "idea-open"; open.textContent = "Open in composer ↗";
   open.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts).";
-  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(ta.value)}`, "_blank", "noopener");
-  row.append(copy, open);
+  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  const copy = document.createElement("button"); copy.className = "lk idea-copy"; copy.textContent = "Copy";
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
+  const pin = document.createElement("button"); pin.className = "idea-pin" + (isKept(idea) ? " on" : ""); pin.textContent = "📌";
+  pin.title = isKept(idea) ? "Kept — won't be replaced on a reroll." : "Keep this one — it survives a reroll.";
+  pin.onclick = () => togglePin(idea);
+  row.append(open, copy, pin);
   c.append(row);
   return c;
 }
@@ -2015,26 +2075,40 @@ function mountIdeasGoobi(): void {
 
 function buildIdeas(): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "ideas";
+  // No-niche gate — without it, Generate is a no-op. Make that explicit, not a silent toast.
+  if (!xNiche.trim()) {
+    const head = document.createElement("div"); head.className = "ideahead";
+    const t = document.createElement("div"); t.className = "ideagate-t"; t.textContent = "Tell Goobi your niche first";
+    const p = document.createElement("div"); p.className = "ideasub"; p.textContent = "That's how it knows whose posts to learn from. Open the Goobi side panel and set “What's worth replying to / your niche.”";
+    head.append(t, p); wrap.append(head);
+    return wrap;
+  }
   const head = document.createElement("div"); head.className = "ideahead";
   const gen = document.createElement("button"); gen.className = "scanb";
-  gen.textContent = ideasLoading ? "Thinking…" : ideas.length ? "↻ Fresh ideas" : "✨ Generate ideas";
-  gen.disabled = ideasLoading;
-  gen.onclick = () => void generateIdeas();
-  const sub = document.createElement("div"); sub.className = "ideasub"; sub.textContent = "Remixes what's overperforming in your niche into posts in your voice. Draft-only — you review and post.";
+  gen.textContent = ideasLoading ? "Thinking…" : ideas.length || keptIdeas.length ? (keptIdeas.length ? "↻ Reroll the rest" : "↻ Fresh ideas") : "✨ Generate ideas";
+  gen.disabled = ideasLoading; gen.onclick = () => void generateIdeas();
+  const sub = document.createElement("div"); sub.className = "ideasub"; sub.textContent = "Remixes the patterns overperforming in your niche into posts in your voice. You review and post — Goobi never posts for you.";
   head.append(gen, sub);
+  const reach = document.createElement("div"); reach.className = "ideasub idea-reachline";
+  reach.textContent = myFollowers > 0 ? `Tuned to your ~${fmtCount(myFollowers)} followers.` : "Add your follower count in the panel to size up reach.";
+  head.append(reach);
+  const pats = Array.from(new Set([...keptIdeas, ...ideas].map((i) => i.pattern).filter(Boolean))).slice(0, 3);
+  if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.textContent = `Winning shapes right now: ${pats.join(" · ")}`; head.append(tr); }
   wrap.append(head);
 
   const body = document.createElement("div"); body.className = "dl";
-  if (ideasLoading && !ideas.length) {
+  if (ideasLoading) {
     const stage = document.createElement("div"); stage.className = "idea-load"; // Goobi dances here (mounted after the dock is in the DOM)
-    const cap = document.createElement("div"); cap.className = "idea-loadcap"; cap.textContent = "Studying what's working in your niche, then writing ideas in your voice…";
+    const cap = document.createElement("div"); cap.className = "idea-loadcap"; cap.textContent = "Reading the top posts in your niche, then writing in your voice…";
     body.append(stage, cap);
+    for (const idea of keptIdeas) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // pinned ideas stay visible through a reroll
   } else if (ideasError) {
     const e = document.createElement("div"); e.className = "empty"; e.textContent = ideasError; body.append(e);
-  } else if (!ideas.length) {
-    const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi reads the top posts in your niche and remixes them into fresh posts you can publish."; body.append(e);
+    const retry = document.createElement("button"); retry.className = "scanb"; retry.textContent = "Try again"; retry.style.cssText = "display:block;margin:6px auto 0"; retry.onclick = () => void generateIdeas(); body.append(retry);
   } else {
-    for (const idea of ideas) body.append(ideaCard(idea));
+    const shown = shownIdeas();
+    if (!shown.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
+    else for (const idea of shown) body.append(ideaCard(idea));
   }
   wrap.append(body);
   return wrap;
