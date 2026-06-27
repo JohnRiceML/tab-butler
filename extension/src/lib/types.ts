@@ -60,7 +60,8 @@ export type Message =
   | { type: "GET_FAVICONS"; hosts: string[] }
   | { type: "TWTTR_GET"; path: string; query?: Record<string, string>; intent?: boolean }
   | { type: "GET_TWTTR_METER" }
-  | { type: "POST_IDEAS"; posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[] };
+  | { type: "POST_IDEAS"; posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[] }
+  | { type: "POST_IDEA_REWRITE"; text: string; steer: string; source?: string; pattern?: string };
 
 /** One of the user's products, for relevance-tagged promotion on X. */
 export interface ProductItem { name: string; url?: string; blurb?: string; }

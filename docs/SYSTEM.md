@@ -73,7 +73,7 @@ One injected script. Sections, by responsibility:
 - **discovery + routing** — `findSpots` (niche search via Twttr), `urlPoll` (SPA navigation).
 
 ### `src/background/service-worker.ts` — broker
-Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
+Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
 
 ### `src/lib/` — pure-ish modules
 | File | Role | Test |

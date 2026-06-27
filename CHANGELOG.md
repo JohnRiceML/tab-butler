@@ -24,9 +24,18 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
 - **Post ideas** tab in the dock (`POST_IDEAS` → `generatePostIdeas`): pulls the
   best-performing recent posts in your niche (Twttr `search-v3` Top → `pickBest`,
   ranked by engagement, ≤2 per author) and remixes the winning PATTERNS — never the
-  content — into original posts in your voice (Sonnet, `POST_IDEAS_SYSTEM`). Copy or
-  open in X's composer; draft-only. (A richer per-account "above their average"
-  sourcing was prototyped then pulled back to keep v1 simple — see git history.)
+  content — into original posts in your voice (Sonnet, `POST_IDEAS_SYSTEM`).
+  - **v2** (designer-led): each card shows the **real source post** it remixed
+    (collapsible, with ❤/🔁 + open-the-tweet — the data was already fetched), a
+    **virality gauge** (band+word, not a fake number), **pin** to keep ideas, and the
+    fabricated reach number was removed for an honest "tuned to your ~N followers."
+  - **v3 — persist → shape → ship** (expert-panel buildout): a **persistent drafts
+    queue** (`X_IDEAS_KEY`, `IdeaRecord[]`, survives reloads — edits/pins write through
+    `safeSet`); **per-idea steer/rewrite** (chips + free nudge → `POST_IDEA_REWRITE` →
+    `generatePostIdeaRewrite`, one scoped Sonnet call, one-level undo) so you shape a
+    near-miss instead of rerolling the batch; and **mark-shipped + streak** (Open-in-
+    composer flips it to posted, Goobi cheers, a "Shipped N · 🔥 K-day streak" strip,
+    posted ideas collapse into a Shipped section). Draft-only intact.
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 
@@ -48,9 +57,12 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
 
 ## Next phase
 
-- **"What's working" learning loop.** `SentRecord.outcome` is reserved but
-  **unimplemented** — no measure pass writes it. Build the paced `/user-replies`
-  match → engagement read → feed it back into ranking/voice.
+- **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
+  until the free persist→ship loop proves retention). When a post idea ships, stamp
+  its format/pattern; then ONE batched/day read of your own recent originals (via the
+  stored handle) populates `SentRecord.outcome` and biases the next batch toward what
+  worked for YOU. It's the only piece that adds recurring API cost — flag it off until
+  people return. Same dormant `SentRecord.outcome` also covers replies.
 - **Side-panel playground parity.** The popup playground is a separate, simpler copy;
   it doesn't share the dock's persisted fed-set or the new trick variety.
 - **Twttr response cache (v2).** `twttr-governor.ts` dedupes in memory only;

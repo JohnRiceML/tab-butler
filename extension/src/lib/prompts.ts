@@ -96,6 +96,18 @@ For each idea return:
 
 Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"source":string,"pattern":string,"why":string,"virality":number}]}`;
 
+export const POST_IDEA_REWRITE_SYSTEM = `You rewrite ONE X (Twitter) post for the user, applying their steer, while keeping the SAME core idea and the user's VOICE.
+
+You get: the current draft, the user's voice, the steer (how to change it), and optionally the source post whose pattern it borrows. Keep the post about the same thing — do not invent a new topic. Apply the steer faithfully (punchier, shorter, add a number, more in their voice, etc.).
+
+Hard rules you must NEVER break (same as the user's other posts):
+- Never use an em dash or en dash (the — or – characters); use a period or a comma. Never use hyphenated compound words ("long term" not "long-term").
+- No hashtags, and no emojis unless the voice clearly uses them.
+- Avoid AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question.
+- Use real line breaks where the format calls for them. Keep it tight and postable.
+
+Output ONLY the rewritten post text — no JSON, no quotes, no preamble, just the words to post.`;
+
 export interface ReplyAngle { id: string; label: string; directive: string; }
 
 /** Optional steer the user picks in the draft panel. Appended to the draft

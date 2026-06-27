@@ -1195,7 +1195,19 @@ const DOCK_CSS = `
 .idea-pin.on { filter:none; background:rgba(214,154,92,.14); border-color:transparent; }
 .idea-reachline { margin-top:5px; }
 .idea-trend { font-size:10.5px; color:#a99cf0; margin-top:8px; }
+.idea-streak { font:600 11.5px -apple-system,system-ui,sans-serif; color:#e0b07e; margin-bottom:9px; }
 .ideagate-t { font-weight:600; font-size:13.5px; color:#cbb89c; }
+.idea.busy .idea-ta { opacity:.5; }
+.idea.shipped { opacity:.82; border-style:dashed; }
+.idea-steer { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:10px; }
+.idea-chip { border:.5px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 10.5px -apple-system,system-ui,sans-serif; padding:4px 8px; cursor:pointer; }
+.idea-chip:hover { background:rgba(214,154,92,.13); color:#f3ead9; }
+.idea-undo { color:#8c7d68; }
+.idea-steerin { flex:1; min-width:70px; background:#1a1510; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:8px; padding:4px 8px; font:inherit; font-size:11px; }
+.idea-steerin:focus { outline:none; border-color:${ACCENT}; }
+.idea-steerbusy { font-size:11px; color:#cbb89c; padding:4px 0; }
+.idea-shiptog { font-size:11px; color:#8c7d68; cursor:pointer; padding:6px 2px 10px; }
+.idea-shiptog:hover { color:#cbb89c; }
 .idea-load { display:flex; align-items:center; justify-content:center; height:96px; }
 .idea-loadcap { text-align:center; font-size:11.5px; color:#8c7d68; line-height:1.4; padding:2px 18px 10px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
@@ -1489,13 +1501,28 @@ let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
 let dockView: DockView = "replies";
 interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; } // the real over-performing post we remixed
-interface Idea { id: string; text: string; source: string; pattern: string; why: string; virality: number; src?: IdeaSource; }
-let ideas: Idea[] = [];                  // the current batch
-let keptIdeas: Idea[] = [];              // pinned ideas — survive a reroll
+interface IdeaRecord {
+  id: string; text: string; source: string; pattern: string; why: string; virality: number;
+  src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
+  createdAt: number; lastEditedAt: number; postedAt?: number;
+}
+let ideaQueue: IdeaRecord[] = [];          // persisted drafts queue (X_IDEAS_KEY): working drafts + shipped
 const expandedSources = new Set<string>(); // idea ids whose source-post proof is expanded
+const ideaBusy = new Set<string>();        // ids currently being rewritten (per-idea steer)
+const ideaUndo = new Map<string, string>(); // id → prior text, for one-level undo after a steer
+let shippedOpen = false;                   // the collapsed "Shipped" section
 let ideaSeq = 0;
 let ideasLoading = false;
 let ideasError: string | undefined;
+const IDEAS_MAX = 30;
+function newIdeaId(): string { return "i" + Date.now().toString(36) + (ideaSeq++).toString(36); }
+function persistIdeas(): void {
+  if (ideaQueue.length > IDEAS_MAX) { // prune oldest, keeping working over posted
+    ideaQueue.sort((a, b) => (a.status === "working" ? 1 : 0) - (b.status === "working" ? 1 : 0) || a.createdAt - b.createdAt);
+    ideaQueue = ideaQueue.slice(ideaQueue.length - IDEAS_MAX);
+  }
+  safeSet({ [CONFIG.X_IDEAS_KEY]: ideaQueue });
+}
 let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
 let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
@@ -1963,11 +1990,15 @@ async function generateIdeas() {
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
     // Attach the REAL source post (already fetched in `winners`) by matching the handle Claude cited.
-    ideas = resp.ideas.map((d) => {
+    const now = Date.now();
+    const fresh: IdeaRecord[] = resp.ideas.map((d) => {
       const w = d.source ? winners.find((x) => x.author.toLowerCase() === d.source.toLowerCase()) : undefined;
-      return { id: `i${++ideaSeq}`, text: d.text, source: d.source, pattern: d.pattern, why: d.why, virality: d.virality,
-        src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined };
+      return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why, virality: d.virality,
+        src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,
+        status: "working", createdAt: now, lastEditedAt: now };
     });
+    ideaQueue = [...fresh, ...ideaQueue]; // newest batch on top of the saved queue
+    persistIdeas();
   } finally {
     ideasLoading = false; goobiDrafting = false; refreshGoobi(); renderDock();
   }
@@ -1978,24 +2009,55 @@ function viralityVerdict(v: number): { label: string; color: string } {
   if (v >= 45) return { label: "Solid", color: "#e0a45c" };
   return { label: "Niche", color: "#8c7d68" };
 }
-function isKept(idea: Idea): boolean { return keptIdeas.some((k) => k.id === idea.id); }
-function togglePin(idea: Idea): void {
-  const i = keptIdeas.findIndex((k) => k.id === idea.id);
-  if (i >= 0) keptIdeas.splice(i, 1);
-  else { if (keptIdeas.length >= 5) { toast("You can keep up to 5 ideas."); return; } keptIdeas.push(idea); } // same object → edits propagate
+function togglePin(rec: IdeaRecord): void { rec.pinned = !rec.pinned; rec.lastEditedAt = Date.now(); persistIdeas(); renderDock(); }
+function markPosted(rec: IdeaRecord, posted: boolean): void {
+  rec.status = posted ? "posted" : "working";
+  rec.postedAt = posted ? Date.now() : undefined;
+  if (posted) goobiReact("cheer", "Shipped! 🎉", "keep the streak alive", 3200);
+  persistIdeas(); renderDock();
+}
+/** Consecutive days you've shipped a post (today or yesterday anchored), like the reply streak. */
+function postedStreak(): number {
+  const days = new Set(ideaQueue.filter((i) => i.status === "posted" && i.postedAt).map((i) => dayKey(i.postedAt!)));
+  if (!days.size) return 0;
+  let s = 0;
+  for (let i = days.has(dayKey(Date.now())) ? 0 : 1; ; i++) { if (days.has(dayKey(Date.now() - i * DAY_MS))) s++; else break; }
+  return s;
+}
+/** Working drafts, pinned-first then newest then strongest. */
+function workingIdeas(): IdeaRecord[] {
+  return ideaQueue.filter((i) => i.status === "working")
+    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.createdAt - a.createdAt || b.virality - a.virality);
+}
+function postedIdeas(): IdeaRecord[] { return ideaQueue.filter((i) => i.status === "posted").sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0)); }
+
+/** Rewrite ONE idea per a steer, in place — a single scoped Claude call, with one-level undo. */
+async function rewriteIdea(rec: IdeaRecord, steer: string): Promise<void> {
+  if (ideaBusy.has(rec.id) || !steer.trim()) return;
+  ideaBusy.add(rec.id); goobiDrafting = true; refreshGoobi(); renderDock();
+  const prior = rec.text;
+  const resp = await send<{ text?: string; error?: string }>({ type: "POST_IDEA_REWRITE", text: rec.text, steer: steer.trim(), source: rec.src?.text, pattern: rec.pattern });
+  ideaBusy.delete(rec.id); goobiDrafting = false; refreshGoobi();
+  if (resp?.text) { ideaUndo.set(rec.id, prior); rec.text = resp.text; rec.lastEditedAt = Date.now(); persistIdeas(); }
+  else toast(resp?.error === "no-key" ? "Add your Anthropic key to rewrite ideas." : "Rewrite failed — try again.");
   renderDock();
 }
-/** Sort kept-first, then the rest best-virality-first; drop a fresh idea that duplicates a kept one. */
-function shownIdeas(): Idea[] {
-  const byV = (a: Idea, b: Idea) => b.virality - a.virality;
-  const norm = (s: string) => s.trim().toLowerCase();
-  const kept = [...keptIdeas].sort(byV);
-  const fresh = ideas.filter((i) => !keptIdeas.some((k) => k.id === i.id || norm(k.text) === norm(i.text))).sort(byV);
-  return [...kept, ...fresh];
+
+/** The quick-shape row: steer chips + a free nudge + undo. */
+function steerRow(rec: IdeaRecord): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "idea-steer";
+  if (ideaBusy.has(rec.id)) { const b = document.createElement("div"); b.className = "idea-steerbusy"; b.textContent = "✨ Goobi's rewriting this one…"; wrap.append(b); return wrap; }
+  const CHIPS: [string, string][] = [["Punchier", "punchier, sharper hook"], ["Shorter", "shorter and tighter"], ["+ number", "add a specific number or concrete detail"], ["More me", "more in my own voice, less generic"]];
+  for (const [label, steer] of CHIPS) { const b = document.createElement("button"); b.className = "idea-chip"; b.textContent = label; b.onclick = () => void rewriteIdea(rec, steer); wrap.append(b); }
+  if (ideaUndo.has(rec.id)) { const u = document.createElement("button"); u.className = "idea-chip idea-undo"; u.textContent = "↶ Undo"; u.title = "Revert the last rewrite"; u.onclick = () => { const p = ideaUndo.get(rec.id); if (p != null) { rec.text = p; ideaUndo.delete(rec.id); rec.lastEditedAt = Date.now(); persistIdeas(); renderDock(); } }; wrap.append(u); }
+  const inp = document.createElement("input"); inp.className = "idea-steerin"; inp.type = "text"; inp.placeholder = "or nudge it…";
+  inp.onkeydown = (e) => { if (e.key === "Enter" && inp.value.trim()) { e.preventDefault(); void rewriteIdea(rec, inp.value); } };
+  wrap.append(inp);
+  return wrap;
 }
 
 /** The collapsible proof: the ACTUAL over-performing post this idea remixed. */
-function sourceBlock(idea: Idea): HTMLElement {
+function sourceBlock(idea: IdeaRecord): HTMLElement {
   const wrap = document.createElement("div");
   if (!idea.src) {
     const s = document.createElement("div"); s.className = "idea-src";
@@ -2019,8 +2081,12 @@ function sourceBlock(idea: Idea): HTMLElement {
   return wrap;
 }
 
-function ideaCard(idea: Idea): HTMLElement {
-  const c = document.createElement("div"); c.className = "idea"; if (isKept(idea)) c.classList.add("kept");
+function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
+  const shipped = !!opts?.shipped;
+  const c = document.createElement("div"); c.className = "idea";
+  if (idea.pinned && !shipped) c.classList.add("kept");
+  if (shipped) c.classList.add("shipped");
+  if (ideaBusy.has(idea.id)) c.classList.add("busy");
   // Virality gauge (top-right) — a band + word, not a fake-precise number.
   const vv = viralityVerdict(idea.virality);
   const g = document.createElement("div"); g.className = "idea-gauge"; g.title = `Goobi's calibrated guess at how far this could spread (${idea.virality}/100). A hunch, not a promise.`;
@@ -2029,26 +2095,37 @@ function ideaCard(idea: Idea): HTMLElement {
   for (let i = 0; i < 3; i++) { const b = document.createElement("i"); b.style.background = i < filled ? vv.color : "rgba(214,154,92,.18)"; bars.append(b); }
   const gl = document.createElement("span"); gl.textContent = vv.label; gl.style.color = vv.color;
   g.append(bars, gl); c.append(g);
-  // The draft — primary, editable. oninput writes back so edits survive a re-render.
+  // The draft — primary, editable. Input updates memory; change (blur) persists.
   const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text;
   ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
   ta.oninput = () => { idea.text = ta.value; ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  ta.onchange = () => { idea.lastEditedAt = Date.now(); persistIdeas(); };
   c.append(ta);
   // The why — the pitch (secondary voice).
   if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `💡 ${idea.why}`; c.append(w); }
   // Source-post proof.
   c.append(sourceBlock(idea));
-  // Actions: primary Open, secondary Copy, pin.
+  // Quick-shape (working drafts only).
+  if (!shipped) c.append(steerRow(idea));
+  // Actions.
   const row = document.createElement("div"); row.className = "idea-row";
   const open = document.createElement("button"); open.className = "idea-open"; open.textContent = "Open in composer ↗";
-  open.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts).";
-  open.onclick = () => window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  open.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts). Marks it shipped.";
+  open.onclick = () => { window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener"); if (!shipped) markPosted(idea, true); };
   const copy = document.createElement("button"); copy.className = "lk idea-copy"; copy.textContent = "Copy";
   copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
-  const pin = document.createElement("button"); pin.className = "idea-pin" + (isKept(idea) ? " on" : ""); pin.textContent = "📌";
-  pin.title = isKept(idea) ? "Kept — won't be replaced on a reroll." : "Keep this one — it survives a reroll.";
-  pin.onclick = () => togglePin(idea);
-  row.append(open, copy, pin);
+  row.append(open, copy);
+  if (shipped) {
+    const back = document.createElement("button"); back.className = "idea-pin"; back.textContent = "↩"; back.title = "Move back to working drafts (didn't post it)";
+    back.onclick = () => markPosted(idea, false); row.append(back);
+  } else {
+    const pin = document.createElement("button"); pin.className = "idea-pin" + (idea.pinned ? " on" : ""); pin.textContent = "📌";
+    pin.title = idea.pinned ? "Kept — won't be replaced on a reroll." : "Keep this one — survives a reroll.";
+    pin.onclick = () => togglePin(idea);
+    const done = document.createElement("button"); done.className = "idea-pin"; done.textContent = "✓"; done.title = "I posted this (e.g. via Copy) — mark it shipped.";
+    done.onclick = () => markPosted(idea, true);
+    row.append(pin, done);
+  }
   c.append(row);
   return c;
 }
@@ -2083,16 +2160,24 @@ function buildIdeas(): HTMLElement {
     head.append(t, p); wrap.append(head);
     return wrap;
   }
+  const working = workingIdeas(); const posted = postedIdeas();
   const head = document.createElement("div"); head.className = "ideahead";
+  // Streak + shipped strip — the reason to come back tomorrow.
+  if (posted.length) {
+    const streak = postedStreak();
+    const strip = document.createElement("div"); strip.className = "idea-streak";
+    strip.textContent = `Shipped ${posted.length}${streak ? ` · 🔥 ${streak}-day streak` : ""}`;
+    head.append(strip);
+  }
   const gen = document.createElement("button"); gen.className = "scanb";
-  gen.textContent = ideasLoading ? "Thinking…" : ideas.length || keptIdeas.length ? (keptIdeas.length ? "↻ Reroll the rest" : "↻ Fresh ideas") : "✨ Generate ideas";
+  gen.textContent = ideasLoading ? "Thinking…" : working.length ? "+ New batch" : "✨ Generate ideas";
   gen.disabled = ideasLoading; gen.onclick = () => void generateIdeas();
   const sub = document.createElement("div"); sub.className = "ideasub"; sub.textContent = "Remixes the patterns overperforming in your niche into posts in your voice. You review and post — Goobi never posts for you.";
   head.append(gen, sub);
   const reach = document.createElement("div"); reach.className = "ideasub idea-reachline";
   reach.textContent = myFollowers > 0 ? `Tuned to your ~${fmtCount(myFollowers)} followers.` : "Add your follower count in the panel to size up reach.";
   head.append(reach);
-  const pats = Array.from(new Set([...keptIdeas, ...ideas].map((i) => i.pattern).filter(Boolean))).slice(0, 3);
+  const pats = Array.from(new Set(working.map((i) => i.pattern).filter(Boolean))).slice(0, 3);
   if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.textContent = `Winning shapes right now: ${pats.join(" · ")}`; head.append(tr); }
   wrap.append(head);
 
@@ -2101,14 +2186,21 @@ function buildIdeas(): HTMLElement {
     const stage = document.createElement("div"); stage.className = "idea-load"; // Goobi dances here (mounted after the dock is in the DOM)
     const cap = document.createElement("div"); cap.className = "idea-loadcap"; cap.textContent = "Reading the top posts in your niche, then writing in your voice…";
     body.append(stage, cap);
-    for (const idea of keptIdeas) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // pinned ideas stay visible through a reroll
+    for (const idea of working) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // your queue stays visible through a generate
   } else if (ideasError) {
     const e = document.createElement("div"); e.className = "empty"; e.textContent = ideasError; body.append(e);
     const retry = document.createElement("button"); retry.className = "scanb"; retry.textContent = "Try again"; retry.style.cssText = "display:block;margin:6px auto 0"; retry.onclick = () => void generateIdeas(); body.append(retry);
   } else {
-    const shown = shownIdeas();
-    if (!shown.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
-    else for (const idea of shown) body.append(ideaCard(idea));
+    if (!working.length && !posted.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
+    else if (!working.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Queue's clear — nice. Tap “+ New batch” for fresh ideas."; body.append(e); }
+    for (const idea of working) body.append(ideaCard(idea));
+    // Shipped — collapsed.
+    if (posted.length) {
+      const tog = document.createElement("div"); tog.className = "idea-shiptog"; tog.textContent = `${shippedOpen ? "▾" : "▸"} Shipped (${posted.length})`;
+      tog.onclick = () => { shippedOpen = !shippedOpen; renderDock(); };
+      body.append(tog);
+      if (shippedOpen) for (const idea of posted) body.append(ideaCard(idea, { shipped: true }));
+    }
   }
   wrap.append(body);
   return wrap;
@@ -2309,6 +2401,8 @@ async function boot() {
     (f.ids || []).forEach((id) => fedEver.add(id));
     fedTotal = Number(f.total) || fedEver.size;
   }
+  const storedIdeas = await getLocal(CONFIG.X_IDEAS_KEY); // the post-ideas drafts queue
+  if (Array.isArray(storedIdeas)) ideaQueue = (storedIdeas as IdeaRecord[]).filter((r) => r && r.id && typeof r.text === "string");
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;

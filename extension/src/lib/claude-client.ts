@@ -1,6 +1,6 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEAS_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
@@ -225,4 +225,20 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     .slice(0, 6)
     .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), virality: Math.max(0, Math.min(100, Math.round(Number(d.virality) || 0))) }))
     .filter((d) => d.text);
+}
+
+/** Rewrite one post idea per a steer, keeping the same topic + the user's voice. Sonnet, cheap. */
+export async function generatePostIdeaRewrite(text: string, steer: string, voice: string, source?: string, pattern?: string): Promise<string> {
+  const key = await getKey();
+  if (!key) throw new Error("no-key");
+  const src = source?.trim() ? `\n\nThe source post whose pattern it borrows (for grounding, do NOT copy it):\n${source.trim().slice(0, 280)}` : "";
+  const pat = pattern?.trim() ? `\n\nPattern it uses: ${pattern.trim()}` : "";
+  const out = await rawCall(
+    key,
+    "claude-sonnet-4-6",
+    POST_IDEA_REWRITE_SYSTEM,
+    `User voice:\n${voice || "(not set — terse and specific; no marketing language, no emojis, no hashtags)"}\n\nCurrent draft:\n${text}\n\nSteer (how to change it): ${steer}${pat}${src}`,
+    400,
+  );
+  return stripDashes(out.trim().replace(/^["']|["']$/g, ""));
 }

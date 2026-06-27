@@ -31,6 +31,7 @@ export const CONFIG = {
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
   X_MY_FOLLOWERS_KEY: "xMyFollowers", // the user's own follower count, for the reach sweet-spot ratio
   X_REPLY_LOG_KEY: "xReplyLog", // cross-session reply-reputation log (rate + repeat-author + duplicate-reply guards)
+  X_IDEAS_KEY: "xIdeas", // persisted post-ideas drafts queue (working + shipped), survives reloads
   X_GOOBI_SEEN_KEY: "goobiLastSeen", // last time you actively used Goobi (powers the neglect / welcome-back beat)
   X_GOOBI_FED_KEY: "goobiFed", // playground: which replies Goobi has eaten (ids) + lifetime total, so fed treats don't reappear
 } as const;
