@@ -1128,7 +1128,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
 
 function toast(msg: string) {
   const host = document.createElement("div");
-  Object.assign(host.style, { position: "fixed", bottom: "18px", left: "18px", zIndex: "2147483647" } as Partial<CSSStyleDeclaration>);
+  Object.assign(host.style, { position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: "2147483647", pointerEvents: "none" } as Partial<CSSStyleDeclaration>);
   const root = host.attachShadow({ mode: "closed" });
   const d = document.createElement("div");
   Object.assign(d.style, { background: "#1d1812", color: "#f3ead9", border: "0.5px solid rgba(214,154,92,.18)", borderRadius: "10px", padding: "10px 14px", font: "12.5px -apple-system, system-ui, sans-serif", maxWidth: "320px", boxShadow: "0 12px 40px rgba(0,0,0,.5)" } as Partial<CSSStyleDeclaration>);
