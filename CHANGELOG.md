@@ -84,6 +84,24 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     the budget governor (`intent:true`, self-pauses on budget pressure); ~1–2 calls/day,
     behind `LEARN_SCAN_ENABLED`. Pure model unit-tested (`scripts/test-learn-stats.mjs`,
     21 assertions). This retires the long-deferred "what's working for YOU" bet (below).
+- **Reciprocity engine — "Who shows up for you"** (`supporters.ts`, workflow-designed +
+  adversarially verified): the inverse of the learning loop — the accounts that engage
+  with **you**, so you can build real mutuals. **Detection is zero-API**: the content
+  script reads your own **notifications page** DOM — reply + mention notifications render
+  as full tweet articles, captured reliably (idempotent, dedup by status id).
+  - **Honest scoring:** likes/reposts are lossy ("X and N others") + locale-fragile, so
+    they're **not counted** (deferred); the supporter score is **reply + mention only**,
+    recency-weighted + count-anchored shrinkage + min-N gated (same conventions as
+    `learn-stats.ts`).
+  - **Mutual score:** fuses "who you show up with" (you→them) with "who shows up for you"
+    (them→you) via a **cohort-invariant** squash into **mutual / fan / one-way** labels —
+    a pair's label can't shift just because an unrelated account joins.
+  - **Anti-pod by design** (this is *not* an engagement pod): a **reciprocal-ring
+    detector** warns when a closed like-for-like loop forms (what X actually penalizes);
+    no "like them back" verb — the only action is **open their profile** (draft-only,
+    zero API); honest footer (a sample not a ledger, likes uncounted, notifications stay
+    on-device). New `X_SUPPORTERS_KEY` (device-local, 1000-cap, 60-day prune). Pure model
+    unit-tested (`scripts/test-supporters.mjs`, 11 assertions).
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

@@ -3,6 +3,7 @@ import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -310,6 +311,8 @@ function requestScan() {
 
 function scan() {
   if (!enabled || paused) return;
+  // On the notifications route, harvest who engaged with ME instead of scoring posts to reply to.
+  if (location.pathname.startsWith("/notifications")) { scanNotifications(); return; }
   if (scoreCalls >= MAX_SCORE_CALLS) {
     if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
     return;
@@ -1192,6 +1195,9 @@ const DOCK_CSS = `
 .ins-nudge { font-size:10.5px; color:#e89a3c; line-height:1.4; margin-top:8px; padding-top:8px; border-top:.5px solid rgba(214,154,92,.12); }
 .ins-more { font-size:10px; color:#8c7d68; margin-top:8px; }
 .ins-foot { font-size:9.5px; color:#a89a85; line-height:1.45; margin-top:8px; padding-top:8px; border-top:.5px solid rgba(214,154,92,.12); }
+.ins-rel { font-size:9.5px; font-weight:600; white-space:nowrap; }
+.ins-rel-mut { color:#6fcf7f; }
+.ins-rel-fan { color:#c9a25a; }
 .da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
@@ -1570,6 +1576,7 @@ let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown 
 let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 let insightOpen = false; // the "who you show up with" learning panel (collapsed by default)
+let supportersOpen = false; // the "who shows up for you" reciprocity panel (collapsed by default)
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -2172,6 +2179,57 @@ async function maybeRunDailyLearn(): Promise<void> {
   } finally { learnBusy = false; renderDock(); }
 }
 
+/* ---- Reciprocity engine: who engages with ME (harvested from the notifications page) ----
+ * Zero API: the content script already runs on x.com. On /notifications the reply tweets
+ * render as full articles; on /notifications/mentions the mentions do. Both carry a clean
+ * status id, so we capture reply/mention engagement reliably. (Likes/reposts are lossy +
+ * locale-fragile — deferred; we don't guess them.) Device-local; never leaves the browser. */
+let inbound: EngagedRecord[] = [];
+let inboundKeys = new Set<string>();
+const SUPPORTERS_MAX = 1000;
+/** Adopt an inbound array from storage (boot OR cross-tab sync) — validate shape, drop >60d,
+ *  cap, and rebuild the key index. Never trust foreign/partial writes raw. */
+function hydrateInbound(arr: unknown): void {
+  if (!Array.isArray(arr)) return;
+  const cut = Date.now() - 60 * 24 * HOUR_MS;
+  let recs = (arr as EngagedRecord[]).filter((e) => e && e.handle && e.key && e.kind && e.at >= cut);
+  if (recs.length > SUPPORTERS_MAX) recs = recs.slice(-SUPPORTERS_MAX);
+  inbound = recs; inboundKeys = new Set(recs.map((e) => e.key));
+}
+function pushInbound(rec: EngagedRecord): void {
+  inbound.push(rec); inboundKeys.add(rec.key);
+  if (inbound.length > SUPPORTERS_MAX) { const drop = inbound.splice(0, inbound.length - SUPPORTERS_MAX); for (const d of drop) inboundKeys.delete(d.key); }
+}
+function persistInbound(): void {
+  const cut = Date.now() - 60 * 24 * HOUR_MS; // keep ~60 days
+  if (inbound.some((e) => e.at < cut)) { inbound = inbound.filter((e) => e.at >= cut); inboundKeys = new Set(inbound.map((e) => e.key)); }
+  safeSet({ [CONFIG.X_SUPPORTERS_KEY]: inbound });
+}
+let persistInboundTimer: number | undefined;
+function schedulePersistInbound(): void {
+  if (persistInboundTimer) clearTimeout(persistInboundTimer);
+  persistInboundTimer = setTimeout(() => { persistInboundTimer = undefined; persistInbound(); }, 1500) as unknown as number; // coalesce writes while scrolling notifications
+}
+/** Harvest reply/mention engagement from the notifications-route articles. Idempotent
+ *  (dedup by `${kind}:${statusId}`); skips self; never queues these for reply-scoring. */
+function scanNotifications(): void {
+  if (invalidated) return;
+  if (!selfHandle) selfHandle = getSelf();
+  const self = selfHandle;
+  const kind: EngagedKind = location.pathname.startsWith("/notifications/mentions") ? "mention" : "reply";
+  let added = 0;
+  document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]').forEach((el) => {
+    const info = statusInfo(el);
+    if (!info) return;
+    if (self && info.author.toLowerCase() === self) return; // not my own posts
+    const key = info.id; // dedup on the globally-unique status id — a reply that also @-mentions you renders on BOTH tabs; count it once
+    if (inboundKeys.has(key)) return;
+    pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), key });
+    added++;
+  });
+  if (added) { schedulePersistInbound(); if (dockOpen) renderDock(); } // debounced write; only repaint when the dock is open
+}
+
 /** The most recent avatar/display we've seen for a handle (for the insight rows). */
 function lastSeenFor(handle: string): string | undefined {
   for (let i = replyLog.sent.length - 1; i >= 0; i--) { const s = replyLog.sent[i]; if (s.author === handle && s.avatar) return s.avatar; }
@@ -2242,6 +2300,83 @@ function renderInsightPanel(d: HTMLElement): void {
       if (learning.length) { const more = document.createElement("div"); more.className = "ins-more"; more.textContent = `+${learning.length} still learning`; body.append(more); }
       const foot = document.createElement("div"); foot.className = "ins-foot";
       foot.textContent = "Ranked by where you invest your replies; ✓ means it's backed by the real likes/replies those replies earned. Replying to someone doesn't make them engage back — this mirrors your effort and its measured payoff.";
+      body.append(foot);
+    }
+    wrap.append(body);
+  }
+  d.append(wrap);
+}
+
+function relBadge(rel: Rel): { text: string; cls: string } | null {
+  if (rel === "mutual") return { text: "↔ mutual", cls: "ins-rel-mut" };
+  if (rel === "fan") return { text: "shows up for you", cls: "ins-rel-fan" };
+  return null; // one-way-you / acquaintance — no badge on the supporters list
+}
+/** "Who shows up for you" — accounts that reply to / mention you (from your notifications),
+ *  with a mutual/fan label (fused with "who you show up with") + an anti-pod ring guard.
+ *  Honest by construction: a sample not a ledger, draft-only (tap to their profile), no
+ *  like-for-like nudging. */
+function renderSupportersPanel(d: HTMLElement): void {
+  const now = Date.now();
+  // Cheap header signal only (no grouping/fuse) — the full aggregation runs only when open.
+  let scored = 0; const seenHandles = new Set<string>();
+  for (const e of inbound) if (e.kind === "reply" || e.kind === "mention") { scored++; seenHandles.add(e.handle); }
+
+  const wrap = document.createElement("div"); wrap.className = "insight";
+  const head = document.createElement("div"); head.className = "ins-head";
+  head.onclick = () => { supportersOpen = !supportersOpen; renderDock(); };
+  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Who shows up for you";
+  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = supportersOpen ? "▾" : "▸";
+  const cnt = document.createElement("div"); cnt.className = "ins-cnt"; cnt.textContent = scored < SUP_GLOBAL_THIN ? "learning" : `${seenHandles.size} ${seenHandles.size === 1 ? "acct" : "accts"}`;
+  head.append(ttl, cnt, car); wrap.append(head);
+
+  if (supportersOpen) {
+    const sup = aggregateSupporters(inbound, now);
+    const { ranked, learning, totalScored } = rankSupporters(sup);
+    const rel = fuseMutual(aggregateAccounts(replyLog.sent, now), sup); // fuse with who YOU show up with
+    const body = document.createElement("div"); body.className = "ins-body";
+    if (totalScored < SUP_GLOBAL_THIN) {
+      const s = document.createElement("div"); s.className = "ins-learn";
+      s.textContent = `Still learning who shows up for you — ${totalScored}/${SUP_GLOBAL_THIN} replies & mentions seen. Open your notifications a few times and I'll map them.`;
+      body.append(s);
+    } else {
+      const truncated = inbound.length >= SUPPORTERS_MAX;
+      const arrow = (t: ReturnType<typeof supCadence>) => (t === "up" ? "↑" : t === "down" ? "↓" : t === "flat" ? "→" : "");
+      for (const r of ranked) {
+        const row = document.createElement("div"); row.className = "ins-row";
+        const av = avatarChip(r.handle, r.avatar); av.style.cursor = "pointer"; av.title = `Open @${r.handle}`;
+        av.onclick = () => window.open(`https://x.com/${r.handle}`, "_blank", "noopener");
+        row.append(av);
+        const mid = document.createElement("div"); mid.className = "ins-mid";
+        const top = document.createElement("div"); top.className = "ins-top";
+        const h = document.createElement("a") as HTMLAnchorElement; h.className = "ins-h"; h.textContent = "@" + r.handle; h.href = `https://x.com/${r.handle}`; h.target = "_blank"; h.rel = "noopener"; h.style.textDecoration = "none";
+        top.append(h);
+        const tr = arrow(supCadence(inbound, r.handle, now, truncated));
+        if (tr) { const a = document.createElement("span"); a.className = "ins-ar"; a.textContent = tr; a.title = "how often they've engaged you lately"; top.append(a); }
+        const rb = relBadge(rel[r.handle]?.rel ?? "acquaintance");
+        if (rb) { const b = document.createElement("span"); b.className = `ins-rel ${rb.cls}`; b.textContent = rb.text; top.append(b); }
+        if (r.thin) { const b = document.createElement("span"); b.className = "ins-thin"; b.textContent = "thin"; top.append(b); }
+        mid.append(top);
+        const meta = document.createElement("div"); meta.className = "ins-meta";
+        const days = Math.max(0, Math.round((now - r.lastAt) / (24 * HOUR_MS)));
+        const bits: string[] = [];
+        if (r.replies) bits.push(`replied ${r.replies}×`);
+        if (r.mentions) bits.push(`mentioned ${r.mentions}×`);
+        bits.push(`last ${days}d`);
+        if (r.followers) bits.push(`${fmtCount(r.followers)} followers`);
+        meta.textContent = bits.join(" · ");
+        meta.title = "Replies & mentions I saw in your notifications" + (r.followers ? "; their follower count when seen — not a reach estimate." : ".");
+        mid.append(meta);
+        row.append(mid);
+        const pips = document.createElement("div"); pips.className = "ins-pips"; pips.textContent = "●".repeat(r.confidence) + "○".repeat(3 - r.confidence); pips.title = "how much they've shown up — not a prediction"; row.append(pips);
+        body.append(row);
+      }
+      // anti-pod ring guard — a closed reciprocal loop is what X actually penalizes.
+      const ring = reciprocalConcentration(inbound, replyLog.sent.filter((s) => s.author).map((s) => s.author as string), now);
+      if (ring) { const n = document.createElement("div"); n.className = "ins-nudge"; n.textContent = `${Math.round(ring.pct * 100)}% of your recent replies go to accounts who engage you back. If it's a closed loop, X reads it as a pod and throttles everyone — bring in fresh accounts.`; body.append(n); }
+      if (learning.length) { const more = document.createElement("div"); more.className = "ins-more"; more.textContent = `+${learning.length} still warming up`; body.append(more); }
+      const foot = document.createElement("div"); foot.className = "ins-foot";
+      foot.textContent = "A sample from your notifications, not a complete list — likes aren't counted (X hides most likers). Tap to open a profile and engage when their posts are relevant. Not a favor to repay: liking back to earn a like is exactly what X penalizes. Your notifications stay on your device.";
       body.append(foot);
     }
     wrap.append(body);
@@ -2601,8 +2736,9 @@ function renderDock() {
     d.append(mom);
   }
 
-  // "Who you show up with" — the daily-scan engagement learning panel (collapsed by default).
+  // Relationships: "Who you show up with" (you→them) + "Who shows up for you" (them→you).
   renderInsightPanel(d);
+  renderSupportersPanel(d);
 
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {
@@ -2735,6 +2871,7 @@ async function boot() {
   if (storedOwn?.stats) ownStats = storedOwn.stats;
   const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
   if (storedLearn?.handle) learn = storedLearn;
+  hydrateInbound(await getLocal(CONFIG.X_SUPPORTERS_KEY)); // who engages with me (reciprocity)
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
@@ -2746,6 +2883,7 @@ async function boot() {
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan
+    if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
       twttrUnconfigured = false;

@@ -36,6 +36,7 @@ export const CONFIG = {
   X_GOOBI_SEEN_KEY: "goobiLastSeen", // last time you actively used Goobi (powers the neglect / welcome-back beat)
   X_GOOBI_FED_KEY: "goobiFed", // playground: which replies Goobi has eaten (ids) + lifetime total, so fed treats don't reappear
   X_LEARN_STATS_KEY: "xLearnStats", // engagement learning loop: own-post trend snaps + cached rest_id + daily-scan gates (per-account aggregates are derived live from the reply log)
+  X_SUPPORTERS_KEY: "xSupporters", // reciprocity engine: who engages with ME (reply/mention events harvested from the notifications page DOM), device-local
 } as const;
 
 /**
