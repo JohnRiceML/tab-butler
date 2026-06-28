@@ -46,6 +46,21 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     near-miss instead of rerolling the batch; and **mark-shipped + streak** (Open-in-
     composer flips it to posted, Goobi cheers, a "Shipped N · 🔥 K-day streak" strip,
     posted ideas collapse into a Shipped section). Draft-only intact.
+- **Warm-up / momentum meter** (`momentum.ts`, expert-led): a thin strip under the dock
+  header shows your **account momentum for the day** — a 0–100 score derived from real
+  activity (replies today *saturating* at a healthy target, posts shipped, day-over-day
+  streak, how live you are right now). States run Cold → Warming → In flow → **Peak (at
+  the *healthy* sweet spot)** → Cooling → **Overheating**. It reads the **same
+  `reputationStatus` the pace chip + Goobi's "worn" mood read**, so it can never
+  celebrate over a safety warning: past ~30 replies/hr the score *drops* to red
+  "ease off", and at caution pace it turns amber to match the chip — Peak is reachable
+  only at a healthy pace. Beside the meter, a neutral **real-views readout** — your
+  X-reported views on today's posts — pulled by *extending* the existing
+  `from:<handle>` search to keep `views`/engagement (`pickOwnPostsWithStats`, 60-min
+  stat cache on top of the 24h de-dupe cache, ~1 extra call/active-hour, budget-gated).
+  Views are **shown, never scored** (a measured fact, not a lever to push volume).
+  Derived from data we already track — no new storage key, no new endpoint, no new
+  Goobi moods. Pure model unit-tested (`scripts/test-momentum.mjs`, 15 assertions).
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

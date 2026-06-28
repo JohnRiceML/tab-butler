@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, buildVoiceProfile } = mod;
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile } = mod;
 
 let pass = 0,
   fail = 0;
@@ -286,6 +286,12 @@ ok(own.includes("No takesies backsies"), "own: keeps my original post");
 ok(!own.some((s) => s.includes("ship daily")), "own: drops my replies");
 ok(!own.some((s) => s.includes("Original post from someone else")), "own: drops other people's posts");
 eq(pickOwnPosts({}, "me"), [], "own empty -> []");
+
+/* ---- own posts WITH stats (momentum views) ---- */
+const ownS = pickOwnPostsWithStats(repliesJson, "me", 15);
+ok(ownS.some((p) => p.text === "No takesies backsies" && p.likes === 1), "own-stats: original kept with real engagement");
+ok(ownS.every((p) => p.text !== "good point, the trick is to ship daily and measure what sticks"), "own-stats: drops replies");
+eq(pickOwnPostsWithStats({}, "me"), [], "own-stats empty -> []");
 
 /* ---- robustness ---- */
 eq(parseTimelineTweets(null), [], "null -> []");

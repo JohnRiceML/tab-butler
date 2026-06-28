@@ -262,6 +262,22 @@ export function pickVoiceSamples(json: unknown, userId: string, max = 12): strin
   return out;
 }
 
+/** One of the user's own recent original posts, with the real engagement X reports. */
+export interface OwnPost { id: string; text: string; postedAt?: number; views?: number; likes?: number; reposts?: number; replies?: number; }
+
+/** The user's own recent ORIGINAL posts WITH X's reported engagement (views/likes/...),
+ *  newest first — powers the momentum "real views today" stat. `views` is whatever X
+ *  reported (may be undefined on some tweets / API shapes). Text cleaned like pickOwnPosts. */
+export function pickOwnPostsWithStats(json: unknown, handle: string, max = 15): OwnPost[] {
+  const h = handle.toLowerCase();
+  return parseTimelineTweets(json)
+    .filter((t) => t.author?.toLowerCase() === h && !t.isReply && t.text)
+    .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))
+    .map((t) => ({ id: t.id, text: t.text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim(), postedAt: t.postedAt, views: t.views, likes: t.likes, reposts: t.reposts, replies: t.replies }))
+    .filter((p) => p.text.length >= 20)
+    .slice(0, max);
+}
+
 /** The user's own recent ORIGINAL posts (not replies), newest first, links/whitespace
  *  stripped — fed to the post-ideas generator to de-dupe against + match their real voice. */
 export function pickOwnPosts(json: unknown, handle: string, max = 15): string[] {

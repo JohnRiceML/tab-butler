@@ -81,10 +81,11 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | `claude-client.ts` | All Claude calls: `scorePosts`, `draftReply` (+ `steer`), `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas). BYO-key direct; parked proxy path. | — |
 | `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention). | — |
 | `types.ts` | The message union + shared types. `XScore.category` is a bare `string` — the enum lives only in the prompt + the `catId` runtime guard. | — |
-| `twttr.ts` | Parse RapidAPI (`twitter241`) responses: `parseUser`, `pickDiscoveryTweets`. | `test-twttr` |
+| `twttr.ts` | Parse RapidAPI (`twitter241`) responses: `parseUser`, `pickDiscoveryTweets`, `pickOwnPosts` (text, idea de-dupe), `pickOwnPostsWithStats` (keeps real `views`/engagement → the momentum views readout). | `test-twttr` |
 | `twttr-governor.ts` | The only thing that calls the provider: budget meter + fetch wrapper. (v2: a storage-backed response cache — `FAIL_TTL` is reserved but unused.) | — |
 | `twttr-policy.ts` | Pure budget/cap decisions (`TWTTR_BUDGET`). | `test-policy` |
 | `reply-hygiene.ts` | Volume / repeat-author / duplicate-reply guards; `reputationStatus`. | `test-hygiene` |
+| `momentum.ts` | Pure warm-up/**momentum** model: `computeMomentum` → 0–100 score + state (cold→peak, overheating) from today's replies/posts/streak/recency. Reads `reputationStatus`'s level so it can never celebrate past the ease-off line (Peak = healthy-only). Views are shown beside it, never scored. | `test-momentum` |
 | `human-pacing.ts` | Human-like delays/jitter for likes/follows. | `test-pacing` |
 | `community.ts` | `builderTier` — surface peer/community builders even off-topic. | `test-community` |
 | `heuristics.ts` | **Tab manager**: group-by-domain, idle-archivable, `normalizeUrl` dedupe. | — |

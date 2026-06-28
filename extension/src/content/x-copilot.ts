@@ -1,6 +1,7 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPosts, type TwttrTweet } from "../lib/twttr";
+import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, type OwnPost, type TwttrTweet } from "../lib/twttr";
+import { computeMomentum } from "../lib/momentum";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -1159,6 +1160,13 @@ const DOCK_CSS = `
 .dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
 .dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
 .pace { font-weight:500; white-space:nowrap; cursor:default; }
+.mom { padding:9px 14px 11px; border-bottom:.5px solid rgba(214,154,92,.1); flex:0 0 auto; }
+.mom-top { display:flex; align-items:center; gap:9px; }
+.mom-bar { flex:1; height:7px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; }
+.mom-fill { height:100%; border-radius:5px; transition:width .6s ease, background .3s; }
+.mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
+.mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
+.mom-stat { font-size:10.5px; color:#8c7d68; margin-top:5px; }
 .da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
@@ -1996,22 +2004,57 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 }
 const TOO_SIMILAR = 0.5; // ≥50% shared content words = the same post, reworded
 
-/** The user's own recent original posts, cached ~24h. Powers idea de-dupe + voice.
- *  Best-effort: returns [] (and never throws) if there's no handle / the fetch fails. */
-const OWN_POSTS_TTL = 24 * HOUR_MS;
-interface OwnPostsCache { posts: string[]; at: number; handle: string }
-async function getOwnPosts(): Promise<string[]> {
-  const handle = (((await getLocal(CONFIG.X_MY_HANDLE_KEY)) as string) || "").replace(/^@/, "").trim();
-  if (!handle) return []; // no handle set → skip silently
-  const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
-  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_POSTS_TTL) return cached.posts;
+/** The user's own recent posts, pulled from the X-data API (from:<handle>) and cached.
+ *  `posts` (text) powers idea de-dupe (24h TTL is fine); `stats` (real views/engagement)
+ *  powers the momentum "views today" readout and wants fresher (60-min refresh on open).
+ *  Best-effort everywhere: never throws, degrades to stale/empty if no handle / budget. */
+const OWN_POSTS_TTL = 24 * HOUR_MS;     // idea de-dupe text
+const OWN_STATS_TTL = 60 * 60_000;      // 60 min — real "views today" stat
+interface OwnPostsCache { posts: string[]; stats?: OwnPost[]; at: number; handle: string }
+let ownStats: OwnPost[] | undefined;    // in memory so the strip renders synchronously
+async function myHandle(): Promise<string> { return (((await getLocal(CONFIG.X_MY_HANDLE_KEY)) as string) || "").replace(/^@/, "").trim(); }
+/** One from:<handle> search-v3 call → cache both text (de-dupe) and stats (views). */
+async function fetchOwnData(handle: string): Promise<OwnPostsCache | null> {
   const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({
     type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: `from:${handle}` }, intent: true,
   });
-  if (!res?.ok) return cached?.handle === handle ? cached.posts : []; // budget/HTTP error → stale or empty, never block
-  const posts = pickOwnPosts(res.data, handle, 15);
-  safeSet({ [CONFIG.X_MY_POSTS_KEY]: { posts, at: Date.now(), handle } satisfies OwnPostsCache });
-  return posts;
+  if (!res?.ok) return null; // budget/HTTP error — caller keeps stale
+  const stats = pickOwnPostsWithStats(res.data, handle, 15);
+  const cache: OwnPostsCache = { posts: stats.map((s) => s.text), stats, at: Date.now(), handle };
+  safeSet({ [CONFIG.X_MY_POSTS_KEY]: cache });
+  ownStats = stats;
+  return cache;
+}
+async function getOwnPosts(): Promise<string[]> {
+  const handle = await myHandle();
+  if (!handle) return [];
+  const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
+  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_POSTS_TTL) { ownStats = cached.stats ?? ownStats; return cached.posts; }
+  const fresh = await fetchOwnData(handle);
+  return fresh ? fresh.posts : cached?.handle === handle ? cached.posts : [];
+}
+/** Refresh the real "views today" stat (60-min TTL). Fired on dock open; re-renders on change. */
+async function refreshOwnStats(): Promise<void> {
+  if (invalidated) return;
+  const handle = await myHandle();
+  if (!handle) { if (ownStats) { ownStats = undefined; renderDock(); } return; }
+  const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
+  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_STATS_TTL) { ownStats = cached.stats; return; }
+  const before = ownStats;
+  await fetchOwnData(handle);
+  if (ownStats !== before) renderDock();
+}
+/** Real X-reported views + post count for TODAY (from the API stats), for the momentum strip. */
+function ownViewsToday(): { posts: number; views: number; hasViews: boolean } {
+  const today = dayKey(Date.now());
+  const todays = (ownStats ?? []).filter((s) => s.postedAt && dayKey(s.postedAt) === today);
+  const withViews = todays.filter((s) => typeof s.views === "number");
+  return { posts: todays.length, views: withViews.reduce((a, s) => a + (s.views ?? 0), 0), hasViews: withViews.length > 0 };
+}
+/** Posts you shipped TODAY via the ideas tab — the momentum "posts" consistency signal. */
+function postedToday(): number {
+  const today = dayKey(Date.now());
+  return ideaQueue.filter((i) => i.status === "posted" && i.postedAt && dayKey(i.postedAt) === today).length;
 }
 
 async function generateIdeas() {
@@ -2279,6 +2322,7 @@ function renderDock() {
       if (dockPlayOpen) resetPlay(); // always open onto the posts list, never a stale playground
       if (goobiWelcomeBack) { goobiWelcomeBack = false; goobiReact("cheer", "Missed you!", "glad you're back", 4000); }
       touchGoobi();
+      void refreshOwnStats(); // pull today's real views when you open the dock (60-min cached)
       renderDock();
     };
     const gh = document.createElement("span"); gh.className = "lgoobi"; l.append(gh); // Goobi IS the launcher icon
@@ -2331,6 +2375,37 @@ function renderDock() {
   acts.append(x);
   h.append(dhl, acts);
   d.append(h);
+
+  // Warm-up / momentum strip — your pacing TODAY (peaks at healthy, overheats past the line),
+  // reusing the SAME stt the pace chip read so they can never disagree. Real views ride beside it.
+  {
+    const lastReply = replyLog.times.length ? Math.max(...replyLog.times) : 0;
+    const lastPost = ideaQueue.reduce((mx, i) => (i.postedAt && i.postedAt > mx ? i.postedAt : mx), 0);
+    const lastAt = Math.max(lastReply, lastPost);
+    const m = computeMomentum({
+      repliesToday: repliesToday(), postedToday: postedToday(), replyStreak: replyStreak(),
+      minsSinceLast: lastAt ? (Date.now() - lastAt) / 60000 : 9999, repLevel: stt.level,
+    });
+    const mom = document.createElement("div"); mom.className = "mom";
+    const top = document.createElement("div"); top.className = "mom-top";
+    const bar = document.createElement("div"); bar.className = "mom-bar";
+    const fill = document.createElement("div"); fill.className = "mom-fill"; fill.style.width = m.score + "%"; fill.style.background = m.color;
+    if (m.state === "peak") fill.style.boxShadow = `0 0 8px ${m.color}`;
+    bar.append(fill);
+    const lbl = document.createElement("div"); lbl.className = "mom-label"; lbl.textContent = m.label; lbl.style.color = m.color;
+    top.append(bar, lbl);
+    const cue = document.createElement("div"); cue.className = "mom-cue"; cue.textContent = m.cue;
+    mom.append(top, cue);
+    // Real X-reported views today — a neutral FACT (never colored/celebrated), only when we have the data.
+    if (ownStats !== undefined) {
+      const v = ownViewsToday();
+      const stat = document.createElement("div"); stat.className = "mom-stat";
+      stat.textContent = v.posts ? `◷ ${v.posts} post${v.posts === 1 ? "" : "s"} today${v.hasViews ? ` · ${fmtCount(v.views)} views` : ""}` : "No posts yet today";
+      stat.title = "X-reported views on the posts you've shipped today, pulled from the X-data API. Refreshed on dock open (~hourly), not live.";
+      mom.append(stat);
+    }
+    d.append(mom);
+  }
 
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {
@@ -2459,6 +2534,8 @@ async function boot() {
   }
   const storedIdeas = await getLocal(CONFIG.X_IDEAS_KEY); // the post-ideas drafts queue
   if (Array.isArray(storedIdeas)) ideaQueue = (storedIdeas as IdeaRecord[]).filter((r) => r && r.id && typeof r.text === "string");
+  const storedOwn = await getLocal(CONFIG.X_MY_POSTS_KEY) as { stats?: OwnPost[] } | undefined; // seed the views stat from cache (no fetch on boot — that happens on dock-open, to save budget)
+  if (storedOwn?.stats) ownStats = storedOwn.stats;
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
