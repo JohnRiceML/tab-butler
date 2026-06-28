@@ -1145,6 +1145,9 @@ const DOCK_CSS = `
 .d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
      background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
+.d.wide { width:min(680px, calc(100vw - 32px)); max-height:90vh; } /* the Post-ideas writing surface gets more room */
+.d.wide .idea-ta { font-size:14px; }
+.d.wide .dl { padding-bottom:18px; }
 .dh { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:15px 16px 10px; flex:0 0 auto; }
 .dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
 .dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
@@ -2237,7 +2240,7 @@ function renderDock() {
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
   }
-  const d = document.createElement("div"); d.className = "d";
+  const d = document.createElement("div"); d.className = "d" + (dockView === "ideas" ? " wide" : "");
   const gstat = goobiStatus();
   const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to play`; gh.onclick = () => togglePlay();
   const h = document.createElement("div"); h.className = "dh";
