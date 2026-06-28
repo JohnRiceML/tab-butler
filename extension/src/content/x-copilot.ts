@@ -1158,7 +1158,7 @@ const DOCK_CSS = `
      background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
 .d.wide { width:min(680px, calc(100vw - 32px)); max-height:90vh; } /* the Post-ideas writing surface gets more room */
-.d.wide .idea-ta { font-size:14px; }
+.d.wide .idea-ta { font-size:15px; }
 .d.wide .dl { padding-bottom:18px; }
 .dh { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:15px 16px 10px; flex:0 0 auto; }
 .dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
@@ -1221,15 +1221,29 @@ const DOCK_CSS = `
 .mode.on { background:${ACCENT}; border-color:transparent; color:${INK}; }
 .ideahead { padding:0 14px 9px; flex:0 0 auto; }
 .ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
-.idea { position:relative; background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
-.idea.kept { border-left:2px solid ${ACCENT}; }
+.idea { position:relative; display:flex; align-items:stretch; background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:0; margin-bottom:7px; cursor:pointer; overflow:hidden; transition:background .12s, border-color .12s; }
+.idea:hover { background:#201a12; border-color:rgba(214,154,92,.28); }
+.idea.open { cursor:default; background:#1d1710; border-color:rgba(214,154,92,.34); flex-wrap:wrap; }
 .idea.dimmed { opacity:.5; pointer-events:none; }
-.idea-gauge { position:absolute; top:9px; right:10px; display:flex; align-items:center; gap:5px; font:600 10px -apple-system,system-ui,sans-serif; }
-.idea-bars { display:inline-flex; gap:2px; align-items:flex-end; }
-.idea-bars i { width:3px; height:9px; border-radius:1px; }
-.idea-ta { width:100%; box-sizing:border-box; margin-top:18px; background:#221c15; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:9px; padding:9px 10px; font:inherit; font-size:13.5px; line-height:1.5; resize:vertical; white-space:pre-wrap; }
-.idea-ta:focus { outline:none; border-color:${ACCENT}; }
-.idea-why { font-size:12px; color:#e0b07e; margin-top:9px; line-height:1.45; }
+.idea-pip { flex:0 0 4px; align-self:stretch; background:rgba(214,154,92,.18); }
+.idea.kept .idea-pip { box-shadow:inset 2px 0 0 ${ACCENT}; }
+.idea-main { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:3px; padding:11px 6px 11px 9px; }
+.idea-hook { font:600 13px -apple-system,system-ui,sans-serif; color:#f3ead9; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.idea.open .idea-hook { white-space:normal; }
+.idea-meta { font-size:10.5px; color:#8c7d68; line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.idea-meta b { font-weight:700; }
+.idea.open .idea-meta { display:none; }
+.idea-rowact { flex:0 0 auto; display:flex; align-items:center; gap:2px; padding:0 8px 0 2px; }
+.idea-quickopen { border:0; background:none; color:${ACCENT}; font-size:15px; line-height:1; width:30px; height:30px; border-radius:8px; cursor:pointer; }
+.idea-quickopen:hover { background:rgba(214,154,92,.14); }
+.idea.open .idea-quickopen { display:none; }
+.idea-chev { color:#8c7d68; font-size:11px; width:14px; text-align:center; transition:transform .15s; }
+.idea.open .idea-chev { transform:rotate(90deg); }
+.idea-body { flex-basis:100%; order:99; display:none; padding:2px 12px 12px 14px; }
+.idea.open .idea-body { display:block; }
+.idea-ta { width:100%; box-sizing:border-box; margin:0 0 2px; background:transparent; color:#f3ead9; border:0; border-bottom:1px solid transparent; border-radius:0; padding:0 0 4px; font:inherit; font-size:15px; line-height:1.6; resize:none; white-space:pre-wrap; min-height:44px; }
+.idea-ta:focus { outline:none; border-bottom-color:rgba(214,154,92,.45); }
+.idea-why { font-size:12px; color:#b6a892; margin-top:10px; line-height:1.5; }
 .idea-src { font-size:10.5px; color:#8c7d68; margin-top:9px; }
 .idea-srctog { cursor:pointer; }
 .idea-srctog:hover { color:#cbb89c; }
@@ -1237,17 +1251,22 @@ const DOCK_CSS = `
 .idea-qtext { font-size:11.5px; color:#b6a892; line-height:1.4; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; }
 .idea-qfoot { display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10.5px; color:#8c7d68; }
 .idea-qlink { color:${ACCENT}; text-decoration:none; }
-.idea-row { display:flex; gap:7px; align-items:center; margin-top:11px; }
-.idea-open { flex:2; border:0; border-radius:9px; padding:8px; font:600 12px inherit; cursor:pointer; background:${ACCENT}; color:${INK}; }
-.idea-copy { flex:1; }
-.idea-pin { margin-left:auto; border:.5px solid rgba(214,154,92,.22); background:none; border-radius:9px; padding:6px 9px; cursor:pointer; font-size:12px; filter:grayscale(1) opacity(.7); }
-.idea-pin.on { filter:none; background:rgba(214,154,92,.14); border-color:transparent; }
-.idea-reachline { margin-top:5px; }
-.idea-trend { font-size:10.5px; color:#a99cf0; margin-top:8px; }
-.idea-streak { font:600 11.5px -apple-system,system-ui,sans-serif; color:#e0b07e; margin-bottom:9px; }
+.idea-actions { display:flex; gap:7px; align-items:center; margin-top:12px; }
+.idea-open { border:0; border-radius:9px; padding:8px 14px; font:600 12px inherit; cursor:pointer; background:${ACCENT}; color:${INK}; }
+.idea-open:hover { filter:brightness(1.06); }
+.idea-copy { border:.5px solid rgba(214,154,92,.28); background:none; color:#cbb89c; border-radius:9px; padding:8px 12px; font:600 12px inherit; cursor:pointer; }
+.idea-copy:hover { background:rgba(214,154,92,.1); color:#f3ead9; }
+.idea-pin { margin-left:auto; border:.5px solid rgba(214,154,92,.22); background:none; color:#cbb89c; border-radius:9px; padding:6px 10px; cursor:pointer; font-size:12px; }
+.idea-pin + .idea-pin { margin-left:0; }
+.idea-pin.on { background:rgba(214,154,92,.14); border-color:transparent; color:${ACCENT}; }
+.idea-trend { font-size:10.5px; color:#8c7d68; margin-top:6px; }
+.idea-trend b { color:#cbb89c; }
+.idea-streak { font:600 11.5px -apple-system,system-ui,sans-serif; color:#cbb89c; margin:0; }
+.idea-streak b { color:${ACCENT}; }
 .ideagate-t { font-weight:600; font-size:13.5px; color:#cbb89c; }
 .idea.busy .idea-ta { opacity:.5; }
-.idea.shipped { opacity:.82; border-style:dashed; }
+.idea.shipped { opacity:.85; }
+.idea.shipped .idea-hook { color:#b6a892; }
 .idea-steer { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:10px; }
 .idea-chip { border:.5px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 10.5px -apple-system,system-ui,sans-serif; padding:4px 8px; cursor:pointer; }
 .idea-chip:hover { background:rgba(214,154,92,.13); color:#f3ead9; }
@@ -1258,7 +1277,13 @@ const DOCK_CSS = `
 .idea-shiptog { font-size:11px; color:#8c7d68; cursor:pointer; padding:6px 2px 10px; }
 .idea-shiptog:hover { color:#cbb89c; }
 .idea-load { display:flex; align-items:center; justify-content:center; height:96px; }
-.idea-loadcap { text-align:center; font-size:11.5px; color:#8c7d68; line-height:1.4; padding:2px 18px 10px; }
+.idea-loadcap { text-align:center; font-size:11.5px; color:#a89a85; line-height:1.4; padding:2px 18px 10px; }
+.ideahead-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.idea-gate { text-align:center; padding:24px 16px; margin:2px 0; border:.5px dashed rgba(214,154,92,.24); border-radius:12px; background:#1b150f; }
+.idea-err { text-align:center; padding:20px 18px; margin:4px 0; border-radius:12px; background:rgba(214,96,74,.08); border:.5px solid rgba(214,96,74,.28); }
+.idea-err-t { color:#e8a08c; font:600 12.5px -apple-system,system-ui,sans-serif; margin-bottom:10px; }
+.idea-err .scanb { display:inline-flex; margin:0 auto; }
+.idea-empty { text-align:center; padding:26px 18px; color:#8c7d68; font-size:12.5px; line-height:1.5; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { overflow:auto; padding:0; }
@@ -1556,6 +1581,7 @@ interface IdeaRecord {
   createdAt: number; lastEditedAt: number; postedAt?: number;
 }
 let ideaQueue: IdeaRecord[] = [];          // persisted drafts queue (X_IDEAS_KEY): working drafts + shipped
+const expandedIdeas = new Set<string>();   // idea ids expanded into the in-place editor (single-open)
 const expandedSources = new Set<string>(); // idea ids whose source-post proof is expanded
 const ideaBusy = new Set<string>();        // ids currently being rewritten (per-idea steer)
 const ideaUndo = new Map<string, string>(); // id → prior text, for one-level undo after a steer
@@ -2507,52 +2533,80 @@ function sourceBlock(idea: IdeaRecord): HTMLElement {
   return wrap;
 }
 
+/** Open X's composer prefilled with the (edited) draft — you review + post. Marks shipped. */
+function openInComposer(idea: IdeaRecord, shipped: boolean): void {
+  window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  if (!shipped) markPosted(idea, true);
+}
+const firstLine = (s: string): string => s.split("\n").map((l) => l.trim()).find(Boolean) || s;
+
+/** A scannable idea ROW: virality rail + one-line hook + source meta + one-tap ↗. Click the
+ *  row to expand IN PLACE into the editor (draft hero + why + steer + source + actions). */
 function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   const shipped = !!opts?.shipped;
+  const open = expandedIdeas.has(idea.id);
+  const vv = viralityVerdict(idea.virality);
   const c = document.createElement("div"); c.className = "idea";
+  if (open) c.classList.add("open");
   if (idea.pinned && !shipped) c.classList.add("kept");
   if (shipped) c.classList.add("shipped");
   if (ideaBusy.has(idea.id)) c.classList.add("busy");
-  // Virality gauge (top-right) — a band + word, not a fake-precise number.
-  const vv = viralityVerdict(idea.virality);
-  const g = document.createElement("div"); g.className = "idea-gauge"; g.title = `Goobi's calibrated guess at how far this could spread (${idea.virality}/100). A hunch, not a promise.`;
-  const bars = document.createElement("span"); bars.className = "idea-bars";
-  const filled = Math.max(1, Math.min(3, Math.round((idea.virality / 100) * 3)));
-  for (let i = 0; i < 3; i++) { const b = document.createElement("i"); b.style.background = i < filled ? vv.color : "rgba(214,154,92,.18)"; bars.append(b); }
-  const gl = document.createElement("span"); gl.textContent = vv.label; gl.style.color = vv.color;
-  g.append(bars, gl); c.append(g);
-  // The draft — primary, editable. Input updates memory; change (blur) persists.
+  // Click the collapsed row (or the hook when open) to toggle — single-open.
+  c.onclick = () => { const was = expandedIdeas.has(idea.id); expandedIdeas.clear(); if (!was) expandedIdeas.add(idea.id); renderDock(); };
+
+  // Left rail = virality (color is the calibrated band).
+  const pip = document.createElement("div"); pip.className = "idea-pip"; pip.style.background = vv.color;
+  pip.title = `Goobi's calibrated guess at how far this could spread (${idea.virality}/100). A hunch, not a promise.`;
+  c.append(pip);
+
+  // Main column — hook + meta (the scannable part).
+  const main = document.createElement("div"); main.className = "idea-main";
+  const hook = document.createElement("div"); hook.className = "idea-hook"; hook.textContent = firstLine(idea.text); main.append(hook);
+  const meta = document.createElement("div"); meta.className = "idea-meta";
+  const vl = document.createElement("b"); vl.textContent = vv.label; vl.style.color = vv.color; meta.append(vl);
+  const tail = [idea.pattern, idea.src ? `↺ @${idea.src.handle}` : (!idea.pattern ? "↺ your niche" : "")].filter(Boolean).join(" · ");
+  if (tail) meta.append(document.createTextNode(" · " + tail));
+  main.append(meta); c.append(main);
+
+  // Collapsed-row right actions — quick open + chevron.
+  const rowact = document.createElement("div"); rowact.className = "idea-rowact";
+  const quick = document.createElement("button"); quick.className = "idea-quickopen"; quick.textContent = "↗"; quick.title = "Open in X's composer — you review and post.";
+  quick.onclick = (e) => { e.stopPropagation(); openInComposer(idea, shipped); };
+  const chev = document.createElement("span"); chev.className = "idea-chev"; chev.textContent = "▸";
+  rowact.append(quick, chev); c.append(rowact);
+
+  // Expandable body — the editor.
+  const body = document.createElement("div"); body.className = "idea-body";
+  body.onclick = (e) => e.stopPropagation(); // editing must never collapse the card
   const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text;
   ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
-  ta.oninput = () => { idea.text = ta.value; ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  const autosize = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  ta.oninput = () => { idea.text = ta.value; hook.textContent = firstLine(ta.value); autosize(); };
   ta.onchange = () => { idea.lastEditedAt = Date.now(); persistIdeas(); };
-  c.append(ta);
-  // The why — the pitch (secondary voice).
-  if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = `💡 ${idea.why}`; c.append(w); }
-  // Source-post proof.
-  c.append(sourceBlock(idea));
-  // Quick-shape (working drafts only).
-  if (!shipped) c.append(steerRow(idea));
-  // Actions.
-  const row = document.createElement("div"); row.className = "idea-row";
-  const open = document.createElement("button"); open.className = "idea-open"; open.textContent = "Open in composer ↗";
-  open.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts). Marks it shipped.";
-  open.onclick = () => { window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener"); if (!shipped) markPosted(idea, true); };
-  const copy = document.createElement("button"); copy.className = "lk idea-copy"; copy.textContent = "Copy";
+  body.append(ta);
+  if (open) requestAnimationFrame(autosize); // size to content once it's visible
+  if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = idea.why; body.append(w); }
+  if (!shipped) body.append(steerRow(idea)); // quick-shape (working drafts only)
+  body.append(sourceBlock(idea));            // the over-performing source post it remixed
+  const actions = document.createElement("div"); actions.className = "idea-actions";
+  const openBtn = document.createElement("button"); openBtn.className = "idea-open"; openBtn.textContent = "Open in composer ↗";
+  openBtn.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts). Marks it shipped.";
+  openBtn.onclick = () => openInComposer(idea, shipped);
+  const copy = document.createElement("button"); copy.className = "idea-copy"; copy.textContent = "Copy";
   copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
-  row.append(open, copy);
+  actions.append(openBtn, copy);
   if (shipped) {
     const back = document.createElement("button"); back.className = "idea-pin"; back.textContent = "↩"; back.title = "Move back to working drafts (didn't post it)";
-    back.onclick = () => markPosted(idea, false); row.append(back);
+    back.onclick = () => markPosted(idea, false); actions.append(back);
   } else {
     const pin = document.createElement("button"); pin.className = "idea-pin" + (idea.pinned ? " on" : ""); pin.textContent = "📌";
     pin.title = idea.pinned ? "Kept — won't be replaced on a reroll." : "Keep this one — survives a reroll.";
     pin.onclick = () => togglePin(idea);
     const done = document.createElement("button"); done.className = "idea-pin"; done.textContent = "✓"; done.title = "I posted this (e.g. via Copy) — mark it shipped.";
     done.onclick = () => markPosted(idea, true);
-    row.append(pin, done);
+    actions.append(pin, done);
   }
-  c.append(row);
+  body.append(actions); c.append(body);
   return c;
 }
 
@@ -2581,30 +2635,34 @@ function buildIdeas(): HTMLElement {
   // No-niche gate — without it, Generate is a no-op. Make that explicit, not a silent toast.
   if (!xNiche.trim()) {
     const head = document.createElement("div"); head.className = "ideahead";
+    const gate = document.createElement("div"); gate.className = "idea-gate";
     const t = document.createElement("div"); t.className = "ideagate-t"; t.textContent = "Tell Goobi your niche first";
-    const p = document.createElement("div"); p.className = "ideasub"; p.textContent = "That's how it knows whose posts to learn from. Open the Goobi side panel and set “What's worth replying to / your niche.”";
-    head.append(t, p); wrap.append(head);
+    const p = document.createElement("div"); p.className = "ideasub"; p.textContent = "That's how it knows whose posts to learn from. Open the Goobi side panel and set “What's worth replying to / your niche.”"; p.style.marginTop = "8px";
+    gate.append(t, p); head.append(gate); wrap.append(head);
     return wrap;
   }
   const working = workingIdeas(); const posted = postedIdeas();
   const head = document.createElement("div"); head.className = "ideahead";
-  // Streak + shipped strip — the reason to come back tomorrow.
+  // Row 1 — streak (left) + the Generate action anchored top-right (no longer buried mid-stack).
+  const top = document.createElement("div"); top.className = "ideahead-top";
+  const left = document.createElement("div");
   if (posted.length) {
+    left.className = "idea-streak";
     const streak = postedStreak();
-    const strip = document.createElement("div"); strip.className = "idea-streak";
-    strip.textContent = `Shipped ${posted.length}${streak ? ` · 🔥 ${streak}-day streak` : ""}`;
-    head.append(strip);
+    left.append(document.createTextNode(`Shipped ${posted.length}`));
+    if (streak) { left.append(document.createTextNode(" · ")); const b = document.createElement("b"); b.textContent = `🔥 ${streak}-day`; left.append(b); }
   }
   const gen = document.createElement("button"); gen.className = "scanb";
   gen.textContent = ideasLoading ? "Thinking…" : working.length ? "+ New batch" : "✨ Generate ideas";
   gen.disabled = ideasLoading; gen.onclick = () => void generateIdeas();
-  const sub = document.createElement("div"); sub.className = "ideasub"; sub.textContent = "Remixes the patterns overperforming in your niche into posts in your voice. You review and post — Goobi never posts for you.";
-  head.append(gen, sub);
-  const reach = document.createElement("div"); reach.className = "ideasub idea-reachline";
-  reach.textContent = myFollowers > 0 ? `Tuned to your ~${fmtCount(myFollowers)} followers.` : "Add your follower count in the panel to size up reach.";
-  head.append(reach);
+  top.append(left, gen); head.append(top);
+  // Row 2 — sub + reach folded into one muted line.
+  const sub = document.createElement("div"); sub.className = "ideasub";
+  sub.textContent = "Remixes your niche's winning patterns into your voice — you review and post." + (myFollowers > 0 ? ` · tuned to ~${fmtCount(myFollowers)} followers` : "");
+  head.append(sub);
+  // Row 3 — winning shapes (optional).
   const pats = Array.from(new Set(working.map((i) => i.pattern).filter(Boolean))).slice(0, 3);
-  if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.textContent = `Winning shapes right now: ${pats.join(" · ")}`; head.append(tr); }
+  if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.append(document.createTextNode("Winning shapes: ")); const b = document.createElement("b"); b.textContent = pats.join(" · "); tr.append(b); head.append(tr); }
   wrap.append(head);
 
   const body = document.createElement("div"); body.className = "dl";
@@ -2614,11 +2672,13 @@ function buildIdeas(): HTMLElement {
     body.append(stage, cap);
     for (const idea of working) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // your queue stays visible through a generate
   } else if (ideasError) {
-    const e = document.createElement("div"); e.className = "empty"; e.textContent = ideasError; body.append(e);
-    const retry = document.createElement("button"); retry.className = "scanb"; retry.textContent = "Try again"; retry.style.cssText = "display:block;margin:6px auto 0"; retry.onclick = () => void generateIdeas(); body.append(retry);
+    const err = document.createElement("div"); err.className = "idea-err";
+    const et = document.createElement("div"); et.className = "idea-err-t"; et.textContent = ideasError; err.append(et);
+    const retry = document.createElement("button"); retry.className = "scanb"; retry.textContent = "Try again"; retry.onclick = () => void generateIdeas(); err.append(retry);
+    body.append(err);
   } else {
-    if (!working.length && !posted.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
-    else if (!working.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "Queue's clear — nice. Tap “+ New batch” for fresh ideas."; body.append(e); }
+    if (!working.length && !posted.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
+    else if (!working.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Queue's clear — nice. Tap “+ New batch” for fresh ideas."; body.append(e); }
     for (const idea of working) body.append(ideaCard(idea));
     // Shipped — collapsed.
     if (posted.length) {

@@ -46,6 +46,15 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     near-miss instead of rerolling the batch; and **mark-shipped + streak** (Open-in-
     composer flips it to posted, Goobi cheers, a "Shipped N · 🔥 K-day streak" strip,
     posted ideas collapse into a Shipped section). Draft-only intact.
+  - **v4 — scannable-queue UX pass** (design-panel: 3 directions scored → synthesized):
+    each idea is now a **one-line row** (virality color rail + hook + `Strong · listicle ·
+    ↺ @handle` meta + one-tap ↗) that **expands in place** into the editor (borderless
+    draft hero + why + steer + source + action bar) — single-open, so ~4 ideas fit where
+    1 did and you triage the batch in seconds. The absolute corner gauge + the
+    `margin-top:18px` hack are gone (virality → the rail + the bold meta word); the header
+    condenses 5 rows → 3 (streak + Generate top-anchored, merged sub/reach line); off-
+    palette purple/gold recolored so **color means one thing** (virality + the copper CTA);
+    first-class gate / empty / error states. Every capability intact, one disclosure deeper.
 - **Warm-up / momentum meter** (`momentum.ts`, expert-led): a thin strip under the dock
   header shows your **account momentum for the day** — a 0–100 score derived from real
   activity (replies today *saturating* at a healthy target, posts shipped, day-over-day
