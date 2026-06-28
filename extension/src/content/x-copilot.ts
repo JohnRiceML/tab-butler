@@ -320,7 +320,8 @@ function scan() {
     const cached = seen.get(info.id);
     if (cached) {
       const o = opps.get(info.id);
-      if (o) badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
+      if (commentedIds.has(info.id)) badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); // replied → green badge, not in the dock
+      else if (o) badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
       else addButton(el); // scored but didn't make the cut → offer a manual "+ Add"
       return;
     }
@@ -376,7 +377,11 @@ async function flush() {
       : undefined;
     const stat = snap[s.i] ?? {};
     seen.set(b.id, { score: s.score, reason, category, products });
-    if (s.score >= THRESHOLD) {
+    if (commentedIds.has(b.id)) {
+      // Already replied to it — never surface it in the dock; keep only the green "✓ Commented" badge.
+      if (opps.delete(b.id)) changed = true;
+      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
+    } else if (s.score >= THRESHOLD) {
       opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name, verified: stat.verified });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
@@ -943,6 +948,8 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
   const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
   logSentReply(now, text, opp, angle);
+  const pid = opp?.id ?? draftOppId; // you replied → drop it from the dock (the feed badge handles the green "✓")
+  if (pid) opps.delete(pid);
   touchGoobi();
   // Goobi beams when you reply — but NEVER when you're past the line (honest mirror:
   // he refuses to celebrate going too fast; at ease-off he stays woozy instead).
