@@ -1219,6 +1219,7 @@ const DOCK_CSS = `
 .mode { flex:1; border:.5px solid rgba(214,154,92,.22); border-radius:10px; background:none; color:#8c7d68; font:600 12px -apple-system,system-ui,sans-serif; padding:8px 4px; cursor:pointer; }
 .mode:hover { color:#cbb89c; }
 .mode.on { background:${ACCENT}; border-color:transparent; color:${INK}; }
+.ideas { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .ideahead { padding:0 14px 9px; flex:0 0 auto; }
 .ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
 .idea { position:relative; display:flex; align-items:stretch; background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:0; margin-bottom:7px; cursor:pointer; overflow:hidden; transition:background .12s, border-color .12s; }
@@ -1286,7 +1287,7 @@ const DOCK_CSS = `
 .idea-empty { text-align:center; padding:26px 18px; color:#8c7d68; font-size:12.5px; line-height:1.5; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
-.dl { overflow:auto; padding:0; }
+.dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; }
 .it { display:flex; flex-direction:column; padding:13px 16px; border-top:.5px solid rgba(214,154,92,.10); }
 .top { display:flex; gap:12px; }
 .botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:11px; padding-top:10px; border-top:.5px solid rgba(214,154,92,.08); }
