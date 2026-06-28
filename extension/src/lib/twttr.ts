@@ -262,6 +262,18 @@ export function pickVoiceSamples(json: unknown, userId: string, max = 12): strin
   return out;
 }
 
+/** The user's own recent ORIGINAL posts (not replies), newest first, links/whitespace
+ *  stripped — fed to the post-ideas generator to de-dupe against + match their real voice. */
+export function pickOwnPosts(json: unknown, handle: string, max = 15): string[] {
+  const h = handle.toLowerCase();
+  return parseTimelineTweets(json)
+    .filter((t) => t.author?.toLowerCase() === h && !t.isReply && t.text)
+    .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))
+    .map((t) => t.text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim())
+    .filter((s) => s.length >= 20)
+    .slice(0, max);
+}
+
 /** Build the voice-profile text stored in settings + fed to the drafter. */
 export function buildVoiceProfile(handle: string, samples: string[]): string {
   return (

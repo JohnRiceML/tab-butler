@@ -206,7 +206,7 @@ export interface PostIdea { text: string; source: string; pattern: string; why: 
 
 /** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet. */
-export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[], voice: string, niche: string): Promise<PostIdea[]> {
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[], voice: string, niche: string, ownPosts: string[] = []): Promise<PostIdea[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p, i) => {
@@ -214,11 +214,15 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
     return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
   }).join("\n");
+  // The user's own recent posts: de-dupe guard + voice/cadence ground truth.
+  const ownBlock = ownPosts.length
+    ? `\n\nThe user's OWN recent posts (do NOT duplicate these topics, angles, takes, or examples — extend their themes from a new angle instead; also match this exact voice and cadence):\n${ownPosts.slice(0, 15).map((t, i) => `${i + 1}. ${t.replace(/\s+/g, " ").slice(0, 280)}`).join("\n")}`
+    : "\n\n(The user's own recent posts were not available — lean on the VOICE blurb and be extra careful not to write generic niche advice.)";
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; virality?: number }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
-    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice:\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
+    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice:\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
     1600,
   );
   return (raw.ideas || [])

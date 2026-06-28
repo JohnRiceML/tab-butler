@@ -29,6 +29,16 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     (collapsible, with ❤/🔁 + open-the-tweet — the data was already fetched), a
     **virality gauge** (band+word, not a fake number), **pin** to keep ideas, and the
     fabricated reach number was removed for an honest "tuned to your ~N followers."
+  - **content quality** (expert-led): the generator now pulls **your own recent
+    posts** (`from:<handle>` search, cached ~24h under `X_MY_POSTS_KEY`,
+    `pickOwnPosts`) and feeds them to the prompt so ideas **don't duplicate what you've
+    already posted** + match your real voice — plus a dependency-free word-set Jaccard
+    **de-dupe guard** drops near-repeats (vs your posts or each other). Rewrote
+    `POST_IDEAS_SYSTEM` with an anti-generic bar + enforced variety (5 distinct shapes,
+    ≥3 content types). `pickBest` is now follower-normalized (eng/√followers) so a small
+    account's genuine breakout beats a mega-account's floor post. Own-posts pull is
+    best-effort (degrades to prompt-only if no handle / budget). The surface also goes
+    **wide** (≤680px, 90vh) on this tab.
   - **v3 — persist → shape → ship** (expert-panel buildout): a **persistent drafts
     queue** (`X_IDEAS_KEY`, `IdeaRecord[]`, survives reloads — edits/pins write through
     `safeSet`); **per-idea steer/rewrite** (chips + free nudge → `POST_IDEA_REWRITE` →

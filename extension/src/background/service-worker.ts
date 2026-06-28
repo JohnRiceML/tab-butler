@@ -274,7 +274,7 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         try {
           const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
           const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche) });
+          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche, msg.ownPosts) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }

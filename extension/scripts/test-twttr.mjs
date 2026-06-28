@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, buildVoiceProfile } = mod;
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, buildVoiceProfile } = mod;
 
 let pass = 0,
   fail = 0;
@@ -279,6 +279,13 @@ ok(!samples.includes("No takesies backsies"), "voice: drops pinned original (pre
 ok(samples.every((s) => !s.startsWith("@")), "voice: no leading @mentions remain");
 const vp = buildVoiceProfile("me", samples);
 ok(vp.includes("@me") && vp.includes("- good point"), "voice profile shape");
+
+/* ---- own posts (idea de-dupe source): originals only, by handle ---- */
+const own = pickOwnPosts(repliesJson, "me", 15);
+ok(own.includes("No takesies backsies"), "own: keeps my original post");
+ok(!own.some((s) => s.includes("ship daily")), "own: drops my replies");
+ok(!own.some((s) => s.includes("Original post from someone else")), "own: drops other people's posts");
+eq(pickOwnPosts({}, "me"), [], "own empty -> []");
 
 /* ---- robustness ---- */
 eq(parseTimelineTweets(null), [], "null -> []");

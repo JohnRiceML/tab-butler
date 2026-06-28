@@ -1,6 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { parseTimelineTweets, parseUser, pickDiscoveryTweets, type TwttrTweet } from "../lib/twttr";
+import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPosts, type TwttrTweet } from "../lib/twttr";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -1951,16 +1951,22 @@ function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : o
 
 /* ---------- post ideas (remix what's overperforming in your niche) ---------- */
 
-/** The best-performing recent original posts in the niche — what's actually working
- *  in the space, to remix. Sorted by engagement, ≤2 per author so it's not one voice. */
+/** The best PATTERNS to remix: recent original niche posts that punch above their
+ *  weight (engagement per √followers, with a noise floor) — a small account's genuine
+ *  breakout beats a mega-account's floor post. ≤2 per author so it's not one voice. */
 function pickBest(tweets: TwttrTweet[], max: number): TwttrTweet[] {
   const now = Date.now();
   const ranked = tweets
     .filter((t) => t.author && t.text && !t.isReply && t.text.length >= 40) // real posts, not one-liners / replies
     .filter((t) => !t.postedAt || now - t.postedAt < 120 * DAY_MS)          // not ancient
-    .map((t) => ({ t, eng: (t.likes ?? 0) + (t.reposts ?? 0) }))
+    .map((t) => {
+      const eng = (t.likes ?? 0) + (t.reposts ?? 0);
+      const f = t.followers ?? 0;
+      const rate = f > 0 ? eng / Math.sqrt(f) : eng / 50; // "above their weight"; raw-ish when followers unknown
+      return { t, eng, score: rate * Math.log10(eng + 10) }; // log keeps absolute pull mattering, not just rate
+    })
     .filter((x) => x.eng >= 25)
-    .sort((a, b) => b.eng - a.eng);
+    .sort((a, b) => b.score - a.score);
   const out: TwttrTweet[] = []; const perAuthor = new Map<string, number>();
   for (const { t } of ranked) {
     const k = t.author.toLowerCase(); const c = perAuthor.get(k) ?? 0;
@@ -1969,6 +1975,36 @@ function pickBest(tweets: TwttrTweet[], max: number): TwttrTweet[] {
     if (out.length >= max) break;
   }
   return out;
+}
+
+/* ---------- de-dupe (don't repeat the user's own posts, or each other) ---------- */
+const IDEA_STOP = new Set("a an and the to of in on for is it its i you we my our your they that this with as at be or but so".split(" "));
+function ideaTokens(s: string): Set<string> {
+  return new Set(s.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !IDEA_STOP.has(w)));
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0; for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+const TOO_SIMILAR = 0.5; // ≥50% shared content words = the same post, reworded
+
+/** The user's own recent original posts, cached ~24h. Powers idea de-dupe + voice.
+ *  Best-effort: returns [] (and never throws) if there's no handle / the fetch fails. */
+const OWN_POSTS_TTL = 24 * HOUR_MS;
+interface OwnPostsCache { posts: string[]; at: number; handle: string }
+async function getOwnPosts(): Promise<string[]> {
+  const handle = (((await getLocal(CONFIG.X_MY_HANDLE_KEY)) as string) || "").replace(/^@/, "").trim();
+  if (!handle) return []; // no handle set → skip silently
+  const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
+  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_POSTS_TTL) return cached.posts;
+  const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({
+    type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: `from:${handle}` }, intent: true,
+  });
+  if (!res?.ok) return cached?.handle === handle ? cached.posts : []; // budget/HTTP error → stale or empty, never block
+  const posts = pickOwnPosts(res.data, handle, 15);
+  safeSet({ [CONFIG.X_MY_POSTS_KEY]: { posts, at: Date.now(), handle } satisfies OwnPostsCache });
+  return posts;
 }
 
 async function generateIdeas() {
@@ -1986,9 +2022,11 @@ async function generateIdeas() {
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
     const winners = pickBest(parseTimelineTweets(search.data), 10);
     if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
+    const ownPosts = await getOwnPosts(); // cheap (cached ~24h, [] if no handle) — de-dupe + voice ground truth
     const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; virality: number }[]; error?: string }>({
       type: "POST_IDEAS",
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers })),
+      ownPosts,
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
@@ -2000,7 +2038,15 @@ async function generateIdeas() {
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,
         status: "working", createdAt: now, lastEditedAt: now };
     });
-    ideaQueue = [...fresh, ...ideaQueue]; // newest batch on top of the saved queue
+    // Safety net: drop a fresh idea that duplicates one of YOUR recent posts, or an earlier sibling.
+    const ownTok = ownPosts.map(ideaTokens); const keptTok: Set<string>[] = [];
+    const deduped = fresh.filter((rec) => {
+      const tk = ideaTokens(rec.text);
+      if (ownTok.some((o) => jaccard(tk, o) >= TOO_SIMILAR)) return false;
+      if (keptTok.some((k) => jaccard(tk, k) >= TOO_SIMILAR)) return false;
+      keptTok.push(tk); return true;
+    });
+    ideaQueue = [...(deduped.length ? deduped : fresh), ...ideaQueue]; // newest batch on top (keep all if de-dupe nuked everything)
     persistIdeas();
   } finally {
     ideasLoading = false; goobiDrafting = false; refreshGoobi(); renderDock();
