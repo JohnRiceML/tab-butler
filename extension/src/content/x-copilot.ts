@@ -4,6 +4,7 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
+import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -1577,7 +1578,9 @@ type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities
 let dockView: DockView = "replies";
 interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; } // the real over-performing post we remixed
 interface IdeaRecord {
-  id: string; text: string; source: string; pattern: string; why: string; virality: number;
+  id: string; text: string; source: string; pattern: string; why: string;
+  band?: Band; basis?: string; sortScore?: number; // honest virality (band cites the source's real rank)
+  virality?: number;                               // legacy: old persisted records render via a fallback
   src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
   createdAt: number; lastEditedAt: number; postedAt?: number;
 }
@@ -2029,40 +2032,39 @@ function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : o
 /** The best PATTERNS to remix: recent original niche posts that punch above their
  *  weight (engagement per √followers, with a noise floor) — a small account's genuine
  *  breakout beats a mega-account's floor post. ≤2 per author so it's not one voice. */
-function pickBest(tweets: TwttrTweet[], max: number): TwttrTweet[] {
+type IdeaWinner = TwttrTweet & { shape: Shape };
+/** Pick the over-performing posts the model is allowed to remix — the quality ceiling. Drops
+ *  replies/RT-text/non-English/engagement-bait, keeps a recent window (21d → 60d fallback),
+ *  scores genuine breakout (follower-normalized), floors low engagement, de-dupes near-identical
+ *  sources, then enforces author + shape diversity. Returns rank-ordered (index 0 = strongest). */
+function pickBest(tweets: TwttrTweet[], max: number): IdeaWinner[] {
   const now = Date.now();
-  const ranked = tweets
-    .filter((t) => t.author && t.text && !t.isReply && t.text.length >= 40) // real posts, not one-liners / replies
-    .filter((t) => !t.postedAt || now - t.postedAt < 120 * DAY_MS)          // not ancient
-    .map((t) => {
-      const eng = (t.likes ?? 0) + (t.reposts ?? 0);
-      const f = t.followers ?? 0;
-      const rate = f > 0 ? eng / Math.sqrt(f) : eng / 50; // "above their weight"; raw-ish when followers unknown
-      return { t, eng, score: rate * Math.log10(eng + 10) }; // log keeps absolute pull mattering, not just rate
-    })
-    .filter((x) => x.eng >= 25)
-    .sort((a, b) => b.score - a.score);
-  const out: TwttrTweet[] = []; const perAuthor = new Map<string, number>();
-  for (const { t } of ranked) {
-    const k = t.author.toLowerCase(); const c = perAuthor.get(k) ?? 0;
-    if (c >= 2) continue;
-    perAuthor.set(k, c + 1); out.push(t);
-    if (out.length >= max) break;
+  const base = tweets.filter((t) =>
+    t.author && t.text && !t.isReply && t.text.length >= 40 &&
+    !looksLikeRT(t.text) && isEnglish(t.text, t.lang) && !isBait(t.text));
+  const win = (days: number) => base.filter((t) => t.postedAt && now - t.postedAt < days * DAY_MS); // undated dropped — can't claim "now"
+  let pool = win(21);
+  if (pool.length < 6) pool = win(60);
+  const medUnknown = percentile(pool.filter((t) => !t.followers).map((t) => (t.likes ?? 0) + (t.reposts ?? 0)).sort((a, b) => a - b), 0.5);
+  let scored = pool.map((t) => { const s = scoreWinner(t, medUnknown); return { t, eng: s.eng, score: s.score, shape: classifyShape(t.text) }; });
+  const floor = Math.max(10, percentile(scored.map((s) => s.eng).sort((a, b) => a - b), 0.40)); // 40th-pct floor, absolute min 10
+  scored = scored.filter((s) => s.eng >= floor);
+  const keptTok: Set<string>[] = [];
+  scored = scored.filter((s) => { const tk = ideaTokens(s.t.text); if (keptTok.some((k) => jaccard(tk, k) >= INPUT_DEDUP)) return false; keptTok.push(tk); return true; }); // drop reposted/screenshotted dupes
+  scored.sort((a, b) => b.score - a.score);
+  const out: IdeaWinner[] = [];
+  const perAuthor = new Map<string, number>(); const perShape = new Map<Shape, number>();
+  const shapeCap = Math.ceil(max * 0.4); const enforceShape = scored.length >= 5;
+  for (let rank = 0; rank < scored.length && out.length < max; rank++) {
+    const s = scored[rank]; const ak = s.t.author.toLowerCase();
+    if ((perAuthor.get(ak) ?? 0) >= 2) continue;                                   // ≤2 per author
+    if (enforceShape && (perShape.get(s.shape) ?? 0) >= shapeCap) continue;        // ≤40% per shape (relaxed when thin)
+    perAuthor.set(ak, (perAuthor.get(ak) ?? 0) + 1);
+    perShape.set(s.shape, (perShape.get(s.shape) ?? 0) + 1);
+    out.push({ ...s.t, shape: s.shape });
   }
   return out;
 }
-
-/* ---------- de-dupe (don't repeat the user's own posts, or each other) ---------- */
-const IDEA_STOP = new Set("a an and the to of in on for is it its i you we my our your they that this with as at be or but so".split(" "));
-function ideaTokens(s: string): Set<string> {
-  return new Set(s.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !IDEA_STOP.has(w)));
-}
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (!a.size || !b.size) return 0;
-  let inter = 0; for (const w of a) if (b.has(w)) inter++;
-  return inter / (a.size + b.size - inter);
-}
-const TOO_SIMILAR = 0.5; // ≥50% shared content words = the same post, reworded
 
 /** The user's own recent posts, pulled from the X-data API (from:<handle>) and cached.
  *  `posts` (text) powers idea de-dupe (24h TTL is fine); `stats` (real views/engagement)
@@ -2085,13 +2087,15 @@ async function fetchOwnData(handle: string): Promise<OwnPostsCache | null> {
   ownStats = stats;
   return cache;
 }
-async function getOwnPosts(): Promise<string[]> {
+async function getOwnPosts(): Promise<{ text: string; likes?: number; reposts?: number }[]> {
   const handle = await myHandle();
   if (!handle) return [];
+  const toLite = (c?: OwnPostsCache | null) =>
+    c?.stats?.length ? c.stats.map((s) => ({ text: s.text, likes: s.likes, reposts: s.reposts })) : (c?.posts ?? []).map((t) => ({ text: t }));
   const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
-  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_POSTS_TTL) { ownStats = cached.stats ?? ownStats; return cached.posts; }
+  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_POSTS_TTL) { ownStats = cached.stats ?? ownStats; return toLite(cached); }
   const fresh = await fetchOwnData(handle);
-  return fresh ? fresh.posts : cached?.handle === handle ? cached.posts : [];
+  return toLite(fresh ?? (cached?.handle === handle ? cached : undefined));
 }
 /** Refresh the real "views today" stat (60-min TTL). Fired on dock open; re-renders on change. */
 async function refreshOwnStats(): Promise<void> {
@@ -2418,32 +2422,57 @@ async function generateIdeas() {
   ideasLoading = true; ideasError = undefined; renderDock();
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes ideas
   try {
-    const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: niche.slice(0, 120) }, intent: true,
+    // Latest (not Top): Top returns all-time bangers that are often months old and undated, which
+    // the recency window drops — Latest gives RECENT posts and pickBest's breakout score + floor
+    // surfaces the ones over-performing right now. Operators drop replies/retweets/giveaways server-side.
+    const runSearch = (q: string) => send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "40", query: q }, intent: true,
     });
+    const search = await runSearch(`${niche.slice(0, 90)} lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway`);
     if (search?.error === "no-twttr-config") { ideasError = "Add your RapidAPI key in the Goobi panel to gather niche posts."; return; }
     if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
-    const winners = pickBest(parseTimelineTweets(search.data), 10);
+    const parsed = parseTimelineTweets(search.data);
+    let winners = pickBest(parsed, 10);
+    if (parsed.length < 15) { // few RAW results → the provider likely rejected the operators; one raw retry (not when filtering just trimmed a full set)
+      const raw2 = await runSearch(niche.slice(0, 120));
+      if (raw2?.ok) { const w2 = pickBest(parseTimelineTweets(raw2.data), 10); if (w2.length > winners.length) winners = w2; }
+    }
     if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
-    const ownPosts = await getOwnPosts(); // cheap (cached ~24h, [] if no handle) — de-dupe + voice ground truth
-    const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; virality: number }[]; error?: string }>({
+    const ownPosts = await getOwnPosts(); // cheap (cached ~24h, [] if no handle) — voice anchor + de-dupe
+    const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number }[]; error?: string }>({
       type: "POST_IDEAS",
-      posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers })),
+      posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers, shape: t.shape })),
       ownPosts,
+      followers: myFollowers || undefined,
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
-    // Attach the REAL source post (already fetched in `winners`) by matching the handle Claude cited.
+    // Attach the REAL source post (already in `winners`) by matching the handle the model cited, and
+    // anchor the honest virality band to that source's measured RANK in the pool.
     const now = Date.now();
+    const norm = (s: string) => s.toLowerCase().replace(/[@\s]/g, "").replace(/[.,!?]+$/, "");
     const fresh: IdeaRecord[] = resp.ideas.map((d) => {
-      const w = d.source ? winners.find((x) => x.author.toLowerCase() === d.source.toLowerCase()) : undefined;
-      return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why, virality: d.virality,
+      const handle = (d.source || "").trim();
+      let w: IdeaWinner | undefined; let rank = -1;
+      if (handle) {
+        // Exact + normalized-exact only — a loose prefix match could attach the WRONG proof post
+        // ("sam" → @sammylens) and inflate the band. A non-match correctly falls to no-source → Niche.
+        w = winners.find((x) => x.author.toLowerCase() === handle.toLowerCase())
+          ?? winners.find((x) => norm(x.author) === norm(handle));
+        if (w) rank = winners.indexOf(w);
+      }
+      const anchor = rank >= 0 ? 1 - rank / Math.max(1, winners.length - 1) : 0; // #1 winner → 1.0
+      const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w);
+      return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why,
+        band, basis, sortScore: sort,
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,
         status: "working", createdAt: now, lastEditedAt: now };
     });
-    // Safety net: drop a fresh idea that duplicates one of YOUR recent posts, or an earlier sibling.
-    const ownTok = ownPosts.map(ideaTokens); const keptTok: Set<string>[] = [];
+    // Drop a fresh idea that duplicates one of YOUR recent posts, an earlier sibling, OR a working idea
+    // already in the queue (cross-batch dedup).
+    const ownTok = ownPosts.map((p) => ideaTokens(p.text));
+    const keptTok: Set<string>[] = ideaQueue.filter((r) => r.status === "working").map((r) => ideaTokens(r.text));
     const deduped = fresh.filter((rec) => {
       const tk = ideaTokens(rec.text);
       if (ownTok.some((o) => jaccard(tk, o) >= TOO_SIMILAR)) return false;
@@ -2457,10 +2486,13 @@ async function generateIdeas() {
   }
 }
 
-function viralityVerdict(v: number): { label: string; color: string } {
-  if (v >= 70) return { label: "Strong", color: "#6fcf7f" };
-  if (v >= 45) return { label: "Solid", color: "#e0a45c" };
-  return { label: "Niche", color: "#8c7d68" };
+const BAND_COLOR: Record<Band, string> = { "Strong": "#6fcf7f", "Solid": "#e0a45c", "Niche": "#c9b79a", "Long shot": "#8c7d68" };
+/** Render view for an idea's honest virality band. New records carry band/basis; old persisted
+ *  records (pre-band) fall back from the legacy 0-100 virality. */
+function ideaBandView(idea: IdeaRecord): { band: Band; color: string; basis: string } {
+  let band = idea.band;
+  if (!band) { const v = idea.virality ?? 50; band = v >= 70 ? "Strong" : v >= 45 ? "Solid" : "Niche"; }
+  return { band, color: BAND_COLOR[band], basis: idea.basis || "Goobi's read on how far this could go." };
 }
 function togglePin(rec: IdeaRecord): void { rec.pinned = !rec.pinned; rec.lastEditedAt = Date.now(); persistIdeas(); renderDock(); }
 function markPosted(rec: IdeaRecord, posted: boolean): void {
@@ -2480,7 +2512,7 @@ function postedStreak(): number {
 /** Working drafts, pinned-first then newest then strongest. */
 function workingIdeas(): IdeaRecord[] {
   return ideaQueue.filter((i) => i.status === "working")
-    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.createdAt - a.createdAt || b.virality - a.virality);
+    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.createdAt - a.createdAt || (b.sortScore ?? 0) - (a.sortScore ?? 0));
 }
 function postedIdeas(): IdeaRecord[] { return ideaQueue.filter((i) => i.status === "posted").sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0)); }
 
@@ -2546,7 +2578,7 @@ const firstLine = (s: string): string => s.split("\n").map((l) => l.trim()).find
 function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   const shipped = !!opts?.shipped;
   const open = expandedIdeas.has(idea.id);
-  const vv = viralityVerdict(idea.virality);
+  const vv = ideaBandView(idea);
   const c = document.createElement("div"); c.className = "idea";
   if (open) c.classList.add("open");
   if (idea.pinned && !shipped) c.classList.add("kept");
@@ -2555,16 +2587,16 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   // Click the collapsed row (or the hook when open) to toggle — single-open.
   c.onclick = () => { const was = expandedIdeas.has(idea.id); expandedIdeas.clear(); if (!was) expandedIdeas.add(idea.id); renderDock(); };
 
-  // Left rail = virality (color is the calibrated band).
+  // Left rail = the honest virality band (color), tooltip cites the real source rank.
   const pip = document.createElement("div"); pip.className = "idea-pip"; pip.style.background = vv.color;
-  pip.title = `Goobi's calibrated guess at how far this could spread (${idea.virality}/100). A hunch, not a promise.`;
+  pip.title = vv.basis;
   c.append(pip);
 
   // Main column — hook + meta (the scannable part).
   const main = document.createElement("div"); main.className = "idea-main";
   const hook = document.createElement("div"); hook.className = "idea-hook"; hook.textContent = firstLine(idea.text); main.append(hook);
   const meta = document.createElement("div"); meta.className = "idea-meta";
-  const vl = document.createElement("b"); vl.textContent = vv.label; vl.style.color = vv.color; meta.append(vl);
+  const vl = document.createElement("b"); vl.textContent = vv.band; vl.style.color = vv.color; meta.append(vl);
   const tail = [idea.pattern, idea.src ? `↺ @${idea.src.handle}` : (!idea.pattern ? "↺ your niche" : "")].filter(Boolean).join(" · ");
   if (tail) meta.append(document.createTextNode(" · " + tail));
   main.append(meta); c.append(main);

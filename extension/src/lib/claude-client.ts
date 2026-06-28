@@ -64,7 +64,15 @@ async function callDirect<T>(key: string, model: string, system: string, userCon
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("bad-output");
-  return JSON.parse(text.slice(start, end + 1)) as T;
+  const slice = text.slice(start, end + 1);
+  try { return JSON.parse(slice) as T; } catch { /* salvage below */ }
+  try { return JSON.parse(slice.replace(/,\s*([}\]])/g, "$1")) as T; } catch { /* trailing-comma repair failed */ }
+  // Last resort: pull the individual idea objects so one bad char doesn't torch the batch.
+  const objs = [...slice.matchAll(/\{[^{}]*"text"[\s\S]*?\}/g)]
+    .map((mm) => { try { return JSON.parse(mm[0]); } catch { return null; } })
+    .filter(Boolean);
+  if (objs.length) return { ideas: objs } as unknown as T;
+  throw new Error("bad-output");
 }
 
 export async function classify(tabs: chrome.tabs.Tab[]): Promise<ClassifyResult> {
@@ -202,11 +210,14 @@ export async function draftReply(post: { author: string; text: string; context?:
   return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
 }
 
-export interface PostIdea { text: string; source: string; pattern: string; why: string; virality: number; }
+export interface PostIdea { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number; }
+export interface OwnPostLite { text: string; likes?: number; reposts?: number; }
 
 /** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
- *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet. */
-export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number }[], voice: string, niche: string, ownPosts: string[] = []): Promise<PostIdea[]> {
+ *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet.
+ *  The model scores ONLY hookStrength (0-3); the honest virality band is computed in the
+ *  content script from hookStrength + the real measured rank of the source it remixed. */
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number): Promise<PostIdea[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p, i) => {
@@ -214,20 +225,23 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
     return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
   }).join("\n");
-  // The user's own recent posts: de-dupe guard + voice/cadence ground truth.
-  const ownBlock = ownPosts.length
-    ? `\n\nThe user's OWN recent posts (do NOT duplicate these topics, angles, takes, or examples — extend their themes from a new angle instead; also match this exact voice and cadence):\n${ownPosts.slice(0, 15).map((t, i) => `${i + 1}. ${t.replace(/\s+/g, " ").slice(0, 280)}`).join("\n")}`
-    : "\n\n(The user's own recent posts were not available — lean on the VOICE blurb and be extra careful not to write generic niche advice.)";
-  const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; virality?: number }[] }>(
+  // The user's own recent posts: primary voice/structure anchor + de-dupe guard. Top engagers
+  // first + flagged "(this landed for you)" so "EXTEND your themes" operates on winners.
+  const sortedOwn = [...ownPosts].sort((a, b) => ((b.likes ?? 0) + (b.reposts ?? 0)) - ((a.likes ?? 0) + (a.reposts ?? 0)));
+  const ownBlock = sortedOwn.length
+    ? `\n\nThe user's OWN recent posts (your PRIMARY voice + structure anchor; do NOT duplicate these topics, angles, takes, or examples — extend their themes from a new angle):\n${sortedOwn.slice(0, 15).map((p, i) => `${i + 1}. ${i < 3 ? "(this landed for you) " : ""}${p.text.replace(/\s+/g, " ").slice(0, 280)}`).join("\n")}`
+    : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only and be extra careful not to write generic niche advice.)";
+  const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
+  const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
-    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice:\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
-    1600,
+    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
+    2200,
   );
   return (raw.ideas || [])
     .slice(0, 6)
-    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), virality: Math.max(0, Math.min(100, Math.round(Number(d.virality) || 0))) }))
+    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), critique: (d.critique || "").trim(), hookStrength: Math.max(0, Math.min(3, Math.round(Number(d.hookStrength) || 0))) }))
     .filter((d) => d.text);
 }
 

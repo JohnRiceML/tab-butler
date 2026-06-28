@@ -37,6 +37,7 @@ export interface TwttrTweet {
   followers?: number;    // author follower count, when the shape carries it
   authorId?: string;     // author rest_id
   isReply: boolean;      // a reply to someone (vs an original post)
+  lang?: string;         // tweet language code (e.g. "en"), when the shape carries it
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -134,6 +135,7 @@ function flattenTweet(result: any): TwttrTweet | null {
       result.reply_to_user_results ||
       /^@\w/.test(text.trim()),
   );
+  const lang = result.details?.lang ?? lg.lang ?? undefined; // details-first, legacy fallback (mirrors text)
 
   return {
     id: String(id),
@@ -149,6 +151,7 @@ function flattenTweet(result: any): TwttrTweet | null {
     followers,
     authorId,
     isReply,
+    lang,
   };
 }
 

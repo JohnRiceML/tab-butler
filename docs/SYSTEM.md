@@ -17,6 +17,7 @@ npm install
 npm run build        # node build.mjs (esbuild) → dist/   (load dist/ as an unpacked extension)
 npm run typecheck    # tsc --noEmit   ← the type gate
 for t in twttr policy hygiene pacing community momentum learn-stats supporters; do node scripts/test-$t.mjs; done   # pure-lib unit tests
+node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
 ```
 
 - **Sources** are `.ts`/`.html` under `extension/src/{background,content,popup,lib}`.
@@ -88,6 +89,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | `momentum.ts` | Pure warm-up/**momentum** model: `computeMomentum` → 0–100 score + state (cold→peak, overheating) from today's replies/posts/streak/recency. Reads `reputationStatus`'s level so it can never celebrate past the ease-off line (Peak = healthy-only). Views are shown beside it, never scored. | `test-momentum` |
 | `learn-stats.ts` | Pure **engagement learning loop** ("who you show up with"): `aggregateAccounts` (recency-weighted, Bayesian-shrunk, min-N gated per-account scores — Tier-1 investment + Tier-2 measured outcome), `rankAccounts`, `foldOwnDelta` (per-post view-growth trend), `matchOutcomes` (Tier-2 reply→engagement match-back), `concentration`/`cadenceTrend`. Honest by construction (no crowning, no causation/reach claims). x-copilot owns the daily-scan I/O + the dock panel. | `test-learn-stats` |
 | `supporters.ts` | Pure **reciprocity engine** ("who shows up for you"): `aggregateSupporters` (scores reply+mention only — likes/reposts are lossy chips), `rankSupporters`, `fuseMutual` (cohort-invariant mutual/fan/one-way labels, fused with learn-stats' invest), `reciprocalConcentration` (anti-pod ring detector), `cadence`. x-copilot harvests the events from the **notifications-page DOM** (`scanNotifications`, zero API) + owns the dock panel. | `test-supporters` |
+| `idea-quality.ts` | Pure **Post-ideas exemplar quality + honest virality**: `isEnglish`/`looksLikeRT`/`isBait` (drop poison exemplars), `classifyShape` (diversity), `scoreWinner`/`percentile` (genuine-breakout ranking), `ideaTokens`/`jaccard` (de-dupe), `bandFor` (virality band anchored to the source's real measured rank — never a fabricated number). x-copilot's `pickBest` orchestrates these. | `eval-post-ideas` |
 | `human-pacing.ts` | Human-like delays/jitter for likes/follows. | `test-pacing` |
 | `community.ts` | `builderTier` — surface peer/community builders even off-topic. | `test-community` |
 | `heuristics.ts` | **Tab manager**: group-by-domain, idle-archivable, `normalizeUrl` dedupe. | — |

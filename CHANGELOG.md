@@ -55,6 +55,23 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     condenses 5 rows → 3 (streak + Generate top-anchored, merged sub/reach line); off-
     palette purple/gold recolored so **color means one thing** (virality + the copper CTA);
     first-class gate / empty / error states. Every capability intact, one disclosure deeper.
+  - **v5 — creator quality overhaul** (`idea-quality.ts`, 12-agent workflow + adversarial
+    verify; net cost unchanged at 1 search + 1 Sonnet): the model can only be as good as
+    what it remixes, so the candidate pool is hardened *before* generation. New pure
+    `idea-quality.ts` (unit-tested, `scripts/eval-post-ideas.mjs`) + a rebuilt `pickBest`:
+    server-side search operators (`lang:en -filter:replies/retweets -giveaway`) with a
+    no-operator retry for thin niches, an English/RT/engagement-bait filter, a 21→60-day
+    recency window, a **genuine-breakout** score (follower-normalized, not raw), a
+    percentile engagement floor, near-identical-source de-dupe, and **author + shape
+    diversity quotas** so it never feeds 5 of the same shape. **Prompt rewrite**
+    (`POST_IDEAS_SYSTEM`): an internal draft-7-seeds → critique → ship-5 pass, a banned-
+    opener hook bar, the user's **own posts as the primary voice anchor** (the VOICE blurb
+    is correctly demoted to reply-tone-only), follower-tier framing, anti-generic swap-test,
+    enforced variety. **Honest virality**: the fake model-graded 0-100 is gone — the model
+    scores only `hookStrength` (0-3); the user-facing **band** is anchored to the *real
+    measured rank* of the source post it remixed (`bandFor`), with a basis sentence and no
+    fabricated multiple; no provable source caps at "Niche". Plus `callDirect` JSON-salvage
+    so one bad char can't torch the batch, and cross-batch de-dupe against the live queue.
 - **Warm-up / momentum meter** (`momentum.ts`, expert-led): a thin strip under the dock
   header shows your **account momentum for the day** — a 0–100 score derived from real
   activity (replies today *saturating* at a healthy target, posts shipped, day-over-day
