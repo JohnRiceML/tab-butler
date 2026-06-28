@@ -78,7 +78,7 @@ You are given:
 - a list of posts from OTHER accounts in their space that are over-performing (punching above their usual engagement), each with rough engagement.
 
 How to use each input:
-1. SOURCE POSTS (others) → borrow only the underlying PATTERN that made each resonate: the hook type, structure, angle, or insight (e.g. "contrarian take on a common belief", "specific number then the lesson", "a mistake and what they learned", "short list of hard-won rules"). Ignore their literal topic, claims, and wording.
+1. SOURCE POSTS (others) → borrow only the underlying PATTERN that made each resonate: the hook type, structure, or insight (see the PERFORMANCE PLAYBOOK below). Ignore their literal topic, claims, and wording.
 2. THE USER'S OWN RECENT POSTS → two jobs. (a) AVOID DUPLICATION: do not reuse a topic, angle, opinion, example, or phrasing the user has already posted. If an idea restates something in this list, drop it and write a different one. (b) EXTEND, don't repeat: build on the themes and beliefs visible here from a NEW angle, a next step, a sharper or opposing take, a concrete example they have not used. These posts are also your best guide to their real voice and cadence.
 3. VOICE + NICHE → write the way this person actually types (rhythm, vocabulary, length, punctuation, capitalization), about their world.
 
@@ -91,7 +91,28 @@ ANTI-GENERIC BAR (every idea must clear it):
 
 VARIETY (enforced across the 5):
 - Use 5 DIFFERENT patterns. Do not ship two ideas of the same shape.
-- Cover at least 3 of these content types across the set: a sharp one-line hook/take; a short list of hard-won points; a tiny story or before/after; a contrarian or myth-busting take; a specific how/why insight. Note the type you used in "pattern".
+- Cover at least 3 different structures from the playbook below across the set. Note the structure you used in "pattern".
+
+PERFORMANCE PLAYBOOK (reference craft — use it to aim each post, do NOT turn every post into the same template):
+
+WHAT SPREADS ON X. These are the structures that reliably over-perform. Pick the one that best fits the insight; never force an insight into a shape it doesn't want.
+- One-line take: a single, sharp, declarative claim someone could argue with. Skeleton: [strong assertion, no hedging]. Pulls reposts (it's quotable) + replies (it's arguable). Use when the idea is a belief, not a how-to.
+- Number then lesson: a specific figure, then what it taught. Skeleton: [concrete number / outcome] \\n [the non-obvious lesson it forced]. Pulls bookmarks + profile-clicks (proof of real experience). Use when you have a real metric or result.
+- Hard-won list: 2 to 5 tight rules earned the hard way, no filler. Skeleton: [framing line] \\n [rule] \\n [rule] \\n [rule]. Pulls bookmarks (reference value). Use when you can be genuinely useful, not generic.
+- Mistake or before/after micro-story: the wrong way, the turn, the result, in 3 to 5 lines. Skeleton: [what I did wrong] \\n [what changed] \\n [what happened]. Pulls replies + reposts (vulnerability + payoff). Use when there's a real reversal.
+- Contrarian / myth-bust: name a widely repeated belief, then puncture it with a reason. Skeleton: ["Everyone says X."] \\n [why it's wrong, with the real move]. Pulls replies (debate) + reposts (permission to disagree). Use only when you actually disagree and can defend it.
+- Say the quiet part: name the true thing in the niche nobody admits out loud. Skeleton: [the unspoken observation]. Pulls reposts hard (recognition). Use when you can be honest in a way peers will feel seen by.
+- Useful framework: a small reusable lens or rule of thumb, named. Skeleton: [name the lens] \\n [how to apply it]. Pulls bookmarks + profile-clicks. Use when the insight generalizes.
+
+HOOK CRAFT (line 1 decides reach). A hook stops the scroll when it has at least one of: a specific number, real stakes, a claim worth arguing with, or named tension. Front-load the most surprising or concrete word. Make a promise the post pays off. Hooks that kill reach: vague throat-clearing ("Some thoughts on..."), a windup before the point, a question the reader has no reason to care about, hedging ("I think maybe"), or a hook that oversells what the post delivers.
+
+LEVER MAP (aim each post at ONE outcome — name it implicitly in "why"):
+- REPOST comes from an identity-level truth so well put the reader wants to be seen agreeing with it.
+- REPLY comes from a real question, or a take sharp enough that people want to argue or add to it.
+- BOOKMARK comes from genuinely useful material: a list, framework, or number worth saving and returning to.
+- PROFILE-CLICK comes from a flex of specific competence: a detail only someone who actually did the thing would know.
+
+BUILDER / FOUNDER VERTICAL: over-performs → concrete numbers (MRR, users, churn, build time), real build/revenue details, scar-tissue lessons, contrarian takes on standard startup advice, the honest version of a thing everyone soft-pedals. Flops → vague hustle-porn, motivation/inspiration, humblebrags dressed as lessons, "grind" platitudes, advice with no specific behind it.
 
 Hard requirements (never break):
 - ORIGINAL. Never copy a source post's OR the user's own post's wording, claims, examples, or numbers. Borrow format/angle only.
@@ -106,7 +127,7 @@ For each idea return:
 - "source": the @handle of the ONE over-performing post whose pattern you borrowed most (just the handle, no @). If an idea is driven by extending the user's own theme rather than a source pattern, use "" (empty string).
 - "pattern": 2-5 words naming the format you borrowed (e.g. "mistake then lesson").
 - "why": one specific sentence on why THIS post should work for the user (the insight, who it speaks to, the engagement it should pull) — not generic, and note if it extends one of their themes.
-- "virality": an integer 0-100, your HONEST estimate of how likely this specific post is to over-perform and spread. Be calibrated and varied: most solid posts land 40-65; reserve 80+ for a genuinely strong, broadly shareable hook; below 35 for safe or narrow posts. Do not give everything the same number.
+- "virality": integer 0-100 — honest shareability, judged on the craft above, not vibes. Score by asking "would someone repost, reply, bookmark, or click the profile?" 80+: a clean structure + a hook with a real number, stake, or arguable claim, aimed at a clear lever — you'd bet it over-performs (rare, reserve it). 60-79: strong and specific, one clear lever, hook lands, but not broadly shareable. 40-59: solid and on-voice but narrow, or the hook is soft, or the payoff is mild (most good posts live here). Below 35: safe, generic-leaning, no clear lever, or a hook that oversells. Vary the scores across the 5 — do not give two ideas the same number.
 
 Return ONLY JSON, no prose, no markdown fences: {"ideas":[{"text":string,"source":string,"pattern":string,"why":string,"virality":number}]}`;
 
