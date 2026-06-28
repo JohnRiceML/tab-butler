@@ -2,6 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -693,7 +694,7 @@ interface SentRecord {
   norm?: string;         // normalized reply text (match + dedup)
   snippet?: string;      // first 80 chars of the reply (match via /user-replies)
   avatar?: string;       // the author's profile picture (so the playground treat wears their face)
-  outcome?: { at: number; likes?: number; replies?: number; authorReplied?: boolean };
+  outcome?: { at: number; likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean };
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
 let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
@@ -1167,6 +1168,30 @@ const DOCK_CSS = `
 .mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
 .mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
 .mom-stat { font-size:10.5px; color:#8c7d68; margin-top:5px; }
+.insight { border-bottom:.5px solid rgba(214,154,92,.1); }
+.ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
+.ins-ttl { font:600 12px -apple-system,system-ui,sans-serif; color:#3a3027; }
+.ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
+.ins-car { font-size:10px; color:#8c7d68; width:10px; text-align:center; }
+.ins-body { padding:2px 14px 12px; }
+.ins-trend { font-size:11px; color:#6fcf7f; margin:2px 0 8px; font-weight:500; }
+.ins-learn { font-size:11px; color:#8c7d68; line-height:1.4; padding:4px 0; }
+.ins-row { display:flex; align-items:center; gap:9px; padding:6px 0; }
+.ins-av { width:24px; height:24px; border-radius:50%; flex:0 0 auto; object-fit:cover; background:rgba(214,154,92,.15); }
+.ins-av-l { display:flex; align-items:center; justify-content:center; font:600 11px -apple-system,system-ui,sans-serif; color:#8c7d68; }
+.ins-mid { flex:1; min-width:0; }
+.ins-top { display:flex; align-items:center; gap:6px; }
+.ins-h { font:600 12px -apple-system,system-ui,sans-serif; color:#3a3027; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; }
+.ins-ar { font-size:11px; color:#8c7d68; }
+.ins-badge { font-size:9.5px; color:#6fcf7f; font-weight:600; white-space:nowrap; }
+.ins-thin { font-size:9px; color:#a89a85; opacity:.8; }
+.ins-meta { font-size:10px; color:#8c7d68; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ins-bar { height:4px; border-radius:3px; background:rgba(214,154,92,.12); margin-top:4px; overflow:hidden; }
+.ins-fill { height:100%; border-radius:3px; background:#c9b79a; }
+.ins-pips { font-size:8px; color:#c9a25a; letter-spacing:1px; flex:0 0 auto; }
+.ins-nudge { font-size:10.5px; color:#e89a3c; line-height:1.4; margin-top:8px; padding-top:8px; border-top:.5px solid rgba(214,154,92,.12); }
+.ins-more { font-size:10px; color:#8c7d68; margin-top:8px; }
+.ins-foot { font-size:9.5px; color:#a89a85; line-height:1.45; margin-top:8px; padding-top:8px; border-top:.5px solid rgba(214,154,92,.12); }
 .da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
@@ -1544,6 +1569,7 @@ function persistIdeas(): void {
 let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
 let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
+let insightOpen = false; // the "who you show up with" learning panel (collapsed by default)
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -2057,6 +2083,172 @@ function postedToday(): number {
   return ideaQueue.filter((i) => i.status === "posted" && i.postedAt && dayKey(i.postedAt) === today).length;
 }
 
+/* ---- Engagement learning loop ("who you show up with" + the Tier-2 measure-pass) ----
+ * A once-a-day, dayKey-gated pass that (A) folds your own posts' real view-growth into a
+ * bounded trend, and (B) fetches the real engagement your recent replies earned
+ * (user-replies-v2), matches each back to a stored reply by text, and writes it into the
+ * dormant SentRecord.outcome slot. Per-account aggregates are recomputed LIVE from the
+ * reply log (idempotent) — only the own-post trend + scan gates persist. */
+const LEARN_SCAN_ENABLED = true;   // the once-daily API fetch (Tier-1 ranking itself needs no fetch)
+const SETTLE_DAYS = 2;             // freeze a reply's measured outcome once it's this old
+interface DailySnap extends DailyDelta { day: string; }
+interface LearnStore { handle: string; scanDay: string; measureDay?: string; restId?: string; prevById: Record<string, PostMetrics>; snaps: Record<string, DailySnap>; }
+function freshLearn(handle: string): LearnStore { return { handle, scanDay: "", prevById: {}, snaps: {} }; }
+let learn: LearnStore = freshLearn("");
+let learnBusy = false;
+function pruneSnaps(snaps: Record<string, DailySnap>): void {
+  const cut = dayKey(Date.now() - 60 * 24 * HOUR_MS);
+  for (const k of Object.keys(snaps)) if (k < cut) delete snaps[k];
+}
+/** Own-posts' real view-growth this week (X-reported), summed over the daily snaps. */
+function weeklyViewGrowth(): { views: number; days: number } {
+  const cut = dayKey(Date.now() - 7 * 24 * HOUR_MS);
+  let views = 0, days = 0;
+  for (const [k, s] of Object.entries(learn.snaps)) if (k >= cut) { views += s.views; days++; }
+  return { views, days };
+}
+/** Fetch your recent replies' real engagement, match each to a stored reply, and write the
+ *  outcome (likes/replies). Provisional until SETTLE_DAYS old, then frozen. Best-effort. */
+async function runMeasurePass(handle: string, today: string): Promise<void> {
+  if (!replyLog.sent.length) { learn.measureDay = today; return; }
+  let restId = learn.restId;
+  if (!restId) {
+    const ures = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
+    if (ures?.error === "no-twttr-config") { twttrUnconfigured = true; return; } // no key → stop trying until settings change
+    const u = ures?.ok ? parseUser(ures.data) : null;
+    if (!u?.id) return; // couldn't resolve rest_id — retry next day, don't burn the gate
+    restId = u.id;
+  }
+  const rres = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: restId, count: "40" }, intent: true });
+  if (rres?.error === "no-twttr-config") { twttrUnconfigured = true; return; }
+  if (!rres?.ok) return; // budget/HTTP error — retry next day
+  const fetched: FetchedReply[] = parseTimelineTweets(rres.data)
+    .filter((t) => t.isReply && t.text)
+    .map((t) => ({ text: t.text, at: t.postedAt, likes: t.likes, replies: t.replies }));
+  const now = Date.now();
+  let wrote = 0;
+  for (const mt of matchOutcomes(fetched, replyLog.sent)) {
+    const rec = replyLog.sent[mt.index];
+    if (!rec || rec.outcome?.frozen) continue; // frozen = settled, never re-touch
+    rec.outcome = { at: now, likes: mt.likes, replies: mt.replies, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS };
+    wrote++;
+  }
+  learn.restId = restId;
+  learn.measureDay = today;
+  if (wrote) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+  safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
+}
+/** The once-daily learning pass, dayKey-gated + idempotent. Fired on dock open. */
+async function maybeRunDailyLearn(): Promise<void> {
+  if (invalidated || paused || learnBusy || !LEARN_SCAN_ENABLED || twttrUnconfigured) return;
+  const handle = await myHandle();
+  if (!handle) return;
+  if (learn.handle !== handle) learn = freshLearn(handle); // handle switch → reset the trend
+  const today = dayKey(Date.now());
+  if (learn.scanDay === today && learn.measureDay === today) return; // both done for the day
+  learnBusy = true;
+  try {
+    // (A) own-post view-growth trend — CONSUME the momentum cache only. refreshOwnStats (fired
+    // first on dock-open) owns the from:<handle> fetch, so the two paths can't double-bill it;
+    // no fresh cache yet → skip the fold this open, pick it up next time.
+    if (learn.scanDay !== today) {
+      let stats: OwnPost[] | undefined;
+      const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
+      if (cached?.handle === handle && Date.now() - cached.at < OWN_STATS_TTL) stats = cached.stats;
+      const fresh = (await getLocal(CONFIG.X_LEARN_STATS_KEY)) as LearnStore | undefined; // multi-tab race: re-read after await
+      if (fresh && fresh.handle === handle) learn = fresh;
+      const day2 = dayKey(Date.now());
+      if (stats && learn.scanDay !== day2) {
+        const { delta, nextPrev } = foldOwnDelta(learn.prevById, stats);
+        learn.snaps[day2] = { day: day2, ...delta };
+        learn.prevById = nextPrev;
+        learn.scanDay = day2;
+        pruneSnaps(learn.snaps);
+        safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
+      }
+    }
+    // (B) Tier-2 measure-pass — the real engagement your replies earned.
+    if (learn.measureDay !== today) await runMeasurePass(handle, today);
+  } finally { learnBusy = false; renderDock(); }
+}
+
+/** The most recent avatar/display we've seen for a handle (for the insight rows). */
+function lastSeenFor(handle: string): string | undefined {
+  for (let i = replyLog.sent.length - 1; i >= 0; i--) { const s = replyLog.sent[i]; if (s.author === handle && s.avatar) return s.avatar; }
+  return undefined;
+}
+function letterChip(handle: string): HTMLElement {
+  const c = document.createElement("div"); c.className = "ins-av ins-av-l"; c.textContent = (handle[0] || "?").toUpperCase(); return c;
+}
+function avatarChip(handle: string, url?: string): HTMLElement {
+  if (!url) return letterChip(handle);
+  const img = document.createElement("img"); img.className = "ins-av"; img.src = url; img.referrerPolicy = "no-referrer";
+  img.onerror = () => img.replaceWith(letterChip(handle)); // expired pbs.twimg.com URL → degrade to the letter
+  return img;
+}
+/** "Who you show up with" — a collapsed dock section ranking the accounts you engage with by
+ *  reply INVESTMENT (always), upgraded with REAL measured engagement (✓) as outcomes settle.
+ *  Honest by construction: shrunk small samples, gated thin rows, no causation/reach claims. */
+function renderInsightPanel(d: HTMLElement): void {
+  const now = Date.now();
+  const agg = aggregateAccounts(replyLog.sent, now);
+  const { ranked, learning } = rankAccounts(agg);
+  const wrap = document.createElement("div"); wrap.className = "insight";
+
+  const head = document.createElement("div"); head.className = "ins-head";
+  head.onclick = () => { insightOpen = !insightOpen; renderDock(); };
+  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Who you show up with";
+  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = insightOpen ? "▾" : "▸";
+  const cnt = document.createElement("div"); cnt.className = "ins-cnt";
+  cnt.textContent = agg.attributed < GLOBAL_THIN ? "learning" : `${ranked.length} top`;
+  head.append(ttl, cnt, car); wrap.append(head);
+
+  if (insightOpen) {
+    const body = document.createElement("div"); body.className = "ins-body";
+    const wk = weeklyViewGrowth();
+    if (wk.views > 0) { const t = document.createElement("div"); t.className = "ins-trend"; t.textContent = `Your posts: +${fmtCount(wk.views)} views ${wk.days >= 7 ? "this week" : `last ${wk.days}d`}`; t.title = "X-reported view growth on your own posts, summed from the daily scan."; body.append(t); }
+
+    if (agg.attributed < GLOBAL_THIN) {
+      const s = document.createElement("div"); s.className = "ins-learn";
+      s.textContent = `Still learning — ${agg.attributed}/${GLOBAL_THIN} replies logged. I'll map who you show up with around a dozen.`;
+      body.append(s);
+    } else {
+      const arrow = (t: ReturnType<typeof cadenceTrend>) => (t === "up" ? "↑" : t === "down" ? "↓" : t === "flat" ? "→" : "");
+      const truncated = replyLog.sent.length >= SENT_MAX;
+      for (const r of ranked) {
+        const row = document.createElement("div"); row.className = "ins-row";
+        row.append(avatarChip(r.handle, lastSeenFor(r.handle)));
+        const mid = document.createElement("div"); mid.className = "ins-mid";
+        const top = document.createElement("div"); top.className = "ins-top";
+        const h = document.createElement("span"); h.className = "ins-h"; h.textContent = "@" + r.handle;
+        top.append(h);
+        const tr = arrow(cadenceTrend(replyLog.sent, r.handle, now, truncated));
+        if (tr) { const a = document.createElement("span"); a.className = "ins-ar"; a.textContent = tr; a.title = "your reply cadence with them — not their response"; top.append(a); }
+        if (r.tier === "measured") { const b = document.createElement("span"); b.className = "ins-badge"; const rel = r.score! > agg.muObs * 1.1 ? "▲ above your avg" : r.score! < agg.muObs * 0.9 ? "▼ below" : "~ typical"; b.textContent = "✓ " + rel; b.title = "Backed by the real likes/replies your replies to them earned (reach-normalized)."; top.append(b); }
+        else if (r.thin) { const b = document.createElement("span"); b.className = "ins-thin"; b.textContent = "thin"; top.append(b); }
+        mid.append(top);
+        const meta = document.createElement("div"); meta.className = "ins-meta";
+        const days = Math.max(0, Math.round((now - r.lastAt) / (24 * HOUR_MS)));
+        meta.textContent = `${r.replies} ${r.replies === 1 ? "reply" : "replies"} · last ${days}d` + (r.followers ? ` · ${fmtCount(r.followers)} followers` : "");
+        meta.title = "Replies you inserted through Goobi" + (r.followers ? "; their follower count when you replied — not a reach estimate." : ".");
+        mid.append(meta);
+        const bar = document.createElement("div"); bar.className = "ins-bar"; const fill = document.createElement("div"); fill.className = "ins-fill"; fill.style.width = Math.round(r.share * 100) + "%"; bar.append(fill); mid.append(bar);
+        row.append(mid);
+        const pips = document.createElement("div"); pips.className = "ins-pips"; pips.textContent = "●".repeat(r.confidence) + "○".repeat(3 - r.confidence); pips.title = "how much you've done with them — not a prediction"; row.append(pips);
+        body.append(row);
+      }
+      const conc = concentration(replyLog.sent);
+      if (conc) { const n = document.createElement("div"); n.className = "ins-nudge"; n.textContent = `You've sent ${Math.round(conc.pct * 100)}% of recent replies to @${conc.handle}. Mixing in other accounts keeps you from reading as a single-target bot.`; body.append(n); }
+      if (learning.length) { const more = document.createElement("div"); more.className = "ins-more"; more.textContent = `+${learning.length} still learning`; body.append(more); }
+      const foot = document.createElement("div"); foot.className = "ins-foot";
+      foot.textContent = "Ranked by where you invest your replies; ✓ means it's backed by the real likes/replies those replies earned. Replying to someone doesn't make them engage back — this mirrors your effort and its measured payoff.";
+      body.append(foot);
+    }
+    wrap.append(body);
+  }
+  d.append(wrap);
+}
+
 async function generateIdeas() {
   if (ideasLoading) return;
   const niche = xNiche.trim();
@@ -2322,7 +2514,9 @@ function renderDock() {
       if (dockPlayOpen) resetPlay(); // always open onto the posts list, never a stale playground
       if (goobiWelcomeBack) { goobiWelcomeBack = false; goobiReact("cheer", "Missed you!", "glad you're back", 4000); }
       touchGoobi();
-      void refreshOwnStats(); // pull today's real views when you open the dock (60-min cached)
+      // refreshOwnStats owns the single from:<handle> fetch; run it FIRST so the daily learn
+      // pass reads a warm cache (no double-bill), then the once-a-day trend + measure-pass.
+      void refreshOwnStats().catch(() => {}).then(() => { if (!invalidated) void maybeRunDailyLearn(); });
       renderDock();
     };
     const gh = document.createElement("span"); gh.className = "lgoobi"; l.append(gh); // Goobi IS the launcher icon
@@ -2406,6 +2600,9 @@ function renderDock() {
     }
     d.append(mom);
   }
+
+  // "Who you show up with" — the daily-scan engagement learning panel (collapsed by default).
+  renderInsightPanel(d);
 
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {
@@ -2536,6 +2733,8 @@ async function boot() {
   if (Array.isArray(storedIdeas)) ideaQueue = (storedIdeas as IdeaRecord[]).filter((r) => r && r.id && typeof r.text === "string");
   const storedOwn = await getLocal(CONFIG.X_MY_POSTS_KEY) as { stats?: OwnPost[] } | undefined; // seed the views stat from cache (no fetch on boot — that happens on dock-open, to save budget)
   if (storedOwn?.stats) ownStats = storedOwn.stats;
+  const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
+  if (storedLearn?.handle) learn = storedLearn;
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
@@ -2546,6 +2745,7 @@ async function boot() {
     if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
+    if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
       twttrUnconfigured = false;

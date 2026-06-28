@@ -35,6 +35,7 @@ export const CONFIG = {
   X_MY_POSTS_KEY: "xMyPosts", // cached: the user's own recent original posts (for idea de-dupe + voice), ~24h TTL
   X_GOOBI_SEEN_KEY: "goobiLastSeen", // last time you actively used Goobi (powers the neglect / welcome-back beat)
   X_GOOBI_FED_KEY: "goobiFed", // playground: which replies Goobi has eaten (ids) + lifetime total, so fed treats don't reappear
+  X_LEARN_STATS_KEY: "xLearnStats", // engagement learning loop: own-post trend snaps + cached rest_id + daily-scan gates (per-account aggregates are derived live from the reply log)
 } as const;
 
 /**

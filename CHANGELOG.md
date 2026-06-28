@@ -61,6 +61,29 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
   Views are **shown, never scored** (a measured fact, not a lever to push volume).
   Derived from data we already track — no new storage key, no new endpoint, no new
   Goobi moods. Pure model unit-tested (`scripts/test-momentum.mjs`, 15 assertions).
+- **Engagement learning loop — "Who you show up with"** (`learn-stats.ts`,
+  workflow-designed + adversarially verified): a once-a-day, dayKey-gated scan that
+  compounds over time into a dock insight panel. Two honest tiers on one path:
+  - **Tier-1 "investment"** (ships now, **0 new API cost**) ranks the accounts you reply
+    to by a recency-weighted mean of your reply *quality* (`effectiveScore`) — labeled
+    *where you invest your replies*, **never** "who pays off." Empirical-Bayes shrinkage
+    to the global mean (no crowning an account off one lucky reply) + a hard min-N gate
+    (thin accounts sit in a "still learning" bucket).
+  - **Tier-2 "engagement-backed"** (the real ask) — a daily **measure-pass** fetches the
+    likes/replies your own replies earned (`user-replies-v2`), matches each back to a
+    stored reply by text (`matchOutcomes`), and writes the dormant `SentRecord.outcome`.
+    Accounts that accrue ≥4 *settled* outcomes earn a ✓ measured, reach-normalized,
+    **relative** read (▲ above / ▼ below your average — never a fabricated number).
+  - **Own-post trend backbone:** per-post positive view-deltas (keyed by id, so the
+    sliding 15-post window can't go negative) fold into bounded daily snapshots →
+    "Your posts: +N views this week."
+  - **Honesty by construction:** title "Who you show up with"; share bars are neutral
+    (never green); footer states *replying to someone doesn't make them engage back*; a
+    single-target **spread nudge** (never "double down"); cadence arrows are *your*
+    cadence, not their response. No new permissions; reuses the `from:<handle>` cache +
+    the budget governor (`intent:true`, self-pauses on budget pressure); ~1–2 calls/day,
+    behind `LEARN_SCAN_ENABLED`. Pure model unit-tested (`scripts/test-learn-stats.mjs`,
+    21 assertions). This retires the long-deferred "what's working for YOU" bet (below).
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

@@ -16,7 +16,7 @@ cd extension
 npm install
 npm run build        # node build.mjs (esbuild) → dist/   (load dist/ as an unpacked extension)
 npm run typecheck    # tsc --noEmit   ← the type gate
-for t in twttr policy hygiene pacing community; do node scripts/test-$t.mjs; done   # pure-lib unit tests
+for t in twttr policy hygiene pacing community momentum learn-stats; do node scripts/test-$t.mjs; done   # pure-lib unit tests
 ```
 
 - **Sources** are `.ts`/`.html` under `extension/src/{background,content,popup,lib}`.
@@ -86,6 +86,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | `twttr-policy.ts` | Pure budget/cap decisions (`TWTTR_BUDGET`). | `test-policy` |
 | `reply-hygiene.ts` | Volume / repeat-author / duplicate-reply guards; `reputationStatus`. | `test-hygiene` |
 | `momentum.ts` | Pure warm-up/**momentum** model: `computeMomentum` → 0–100 score + state (cold→peak, overheating) from today's replies/posts/streak/recency. Reads `reputationStatus`'s level so it can never celebrate past the ease-off line (Peak = healthy-only). Views are shown beside it, never scored. | `test-momentum` |
+| `learn-stats.ts` | Pure **engagement learning loop** ("who you show up with"): `aggregateAccounts` (recency-weighted, Bayesian-shrunk, min-N gated per-account scores — Tier-1 investment + Tier-2 measured outcome), `rankAccounts`, `foldOwnDelta` (per-post view-growth trend), `matchOutcomes` (Tier-2 reply→engagement match-back), `concentration`/`cadenceTrend`. Honest by construction (no crowning, no causation/reach claims). x-copilot owns the daily-scan I/O + the dock panel. | `test-learn-stats` |
 | `human-pacing.ts` | Human-like delays/jitter for likes/follows. | `test-pacing` |
 | `community.ts` | `builderTier` — surface peer/community builders even off-topic. | `test-community` |
 | `heuristics.ts` | **Tab manager**: group-by-domain, idle-archivable, `normalizeUrl` dedupe. | — |
@@ -97,7 +98,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 `popup.ts` + `popup.html`: BYO-key + smart toggle, voice capture (`/user-replies` learning), products, niche, account-safety panel, follower count, the tab list, and the **side-panel Goobi playground** (its own copy, distinct from the dock's).
 
 ## Storage keys (`CONFIG`)
-Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILOT_KEY` (on/off), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
+Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILOT_KEY` (on/off), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_IDEAS_KEY`, `X_MY_POSTS_KEY` (own-posts cache: idea de-dupe + momentum views), `X_LEARN_STATS_KEY` (engagement learning loop: own-post trend + scan gates), `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
 
 ## Conventions & gotchas
 - **Closed shadow roots.** The dock and draft panel mount on hosts appended to
