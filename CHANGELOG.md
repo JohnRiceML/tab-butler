@@ -72,6 +72,11 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     measured rank* of the source post it remixed (`bandFor`), with a basis sentence and no
     fabricated multiple; no provable source caps at "Niche". Plus `callDirect` JSON-salvage
     so one bad char can't torch the batch, and cross-batch de-dupe against the live queue.
+    - **Eval Layer B** (`scripts/eval-post-ideas-live.mjs`, opt-in): generates ideas for 5
+      seed niches with the real prompt (Sonnet) then a Haiku judge scores each batch
+      0-3 on anti-generic / voice / variety / hook / source-honesty + a swap-test fail
+      rate + judge-stability check — so a prompt/selection change is a measurable delta.
+      No-op without `--live` (default gate stays $0).
 - **Warm-up / momentum meter** (`momentum.ts`, expert-led): a thin strip under the dock
   header shows your **account momentum for the day** — a 0–100 score derived from real
   activity (replies today *saturating* at a healthy target, posts shipped, day-over-day

@@ -18,6 +18,7 @@ npm run build        # node build.mjs (esbuild) → dist/   (load dist/ as an un
 npm run typecheck    # tsc --noEmit   ← the type gate
 for t in twttr policy hygiene pacing community momentum learn-stats supporters; do node scripts/test-$t.mjs; done   # pure-lib unit tests
 node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
+# ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-live.mjs --live   # Layer B: live generate→Haiku-judge quality eval (opt-in, ~$0.20/run; no-op without --live)
 ```
 
 - **Sources** are `.ts`/`.html` under `extension/src/{background,content,popup,lib}`.
