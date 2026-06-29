@@ -72,6 +72,8 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     measured rank* of the source post it remixed (`bandFor`), with a basis sentence and no
     fabricated multiple; no provable source caps at "Niche". Plus `callDirect` JSON-salvage
     so one bad char can't torch the batch, and cross-batch de-dupe against the live queue.
+    A **copy-leak guard** (`copyLeak`) drops any idea that lifted ≥60% of its source post's
+    content (plagiarism, not a pattern remix), bounded by the keep-all-if-empty net.
     - **Eval Layer B** (`scripts/eval-post-ideas-live.mjs`, opt-in): generates ideas for 5
       seed niches with the real prompt (Sonnet) then a Haiku judge scores each batch
       0-3 on anti-generic / voice / variety / hook / source-honesty + a swap-test fail

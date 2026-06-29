@@ -50,6 +50,15 @@ ok(m.percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.4) === 5, "percentile floor p
 // ---- input de-dupe ----
 ok(m.jaccard(m.ideaTokens("ship daily and measure what sticks"), m.ideaTokens("ship daily measure what sticks today")) >= m.INPUT_DEDUP, "near-identical source posts flagged as dupes");
 
+// ---- copy-leak: a remixed PATTERN shares little content; a lifted source shares a lot ----
+{
+  const source = "I raised prices 40% and lost zero customers. The cheap plan attracted people who churned anyway.";
+  const remixed = "stop discounting to win the wrong customers. the bargain hunters are the first to leave.";
+  const lifted = "I raised my prices 40% and lost zero customers. The cheap plan attracted people who churned.";
+  ok(m.copyLeak(remixed, source) < m.COPY_LEAK, "a true pattern-remix stays below the copy-leak bar");
+  ok(m.copyLeak(lifted, source) >= m.COPY_LEAK, "a near-verbatim lift trips the copy-leak bar");
+}
+
 // ---- honest virality band ----
 {
   const strong = m.bandFor(0.9, 3, true);

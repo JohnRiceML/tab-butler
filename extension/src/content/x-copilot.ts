@@ -4,7 +4,7 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
-import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
+import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -2474,6 +2474,7 @@ async function generateIdeas() {
     const ownTok = ownPosts.map((p) => ideaTokens(p.text));
     const keptTok: Set<string>[] = ideaQueue.filter((r) => r.status === "working").map((r) => ideaTokens(r.text));
     const deduped = fresh.filter((rec) => {
+      if (rec.src && copyLeak(rec.text, rec.src.text) >= COPY_LEAK) return false; // lifted the source's content, not its pattern
       const tk = ideaTokens(rec.text);
       if (ownTok.some((o) => jaccard(tk, o) >= TOO_SIMILAR)) return false;
       if (keptTok.some((k) => jaccard(tk, k) >= TOO_SIMILAR)) return false;

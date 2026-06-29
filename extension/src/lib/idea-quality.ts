@@ -21,6 +21,14 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
 }
 export const TOO_SIMILAR = 0.5;  // ≥50% shared content words = the same post, reworded (output de-dupe)
 export const INPUT_DEDUP = 0.6;  // source posts share niche vocab → a stricter bar for "same source post"
+export const COPY_LEAK = 0.6;    // a generated idea sharing ≥60% content words with its OWN source = lifted content, not remixed pattern
+
+/** Content overlap between a generated idea and the source post it remixed. High = the model
+ *  lifted the source's substance (claim/number/wording) instead of borrowing only its shape —
+ *  the core failure mode for a "remix the pattern, never the content" tool. */
+export function copyLeak(ideaText: string, sourceText: string): number {
+  return jaccard(ideaTokens(ideaText), ideaTokens(sourceText));
+}
 
 // ---------- exemplar quality filters ----------
 /** Heuristic English guard — works even when the provider omits a lang field. */
