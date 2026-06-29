@@ -53,8 +53,10 @@ const ME = 1000;
   ok(m.suggestionReason({ handle: "a", followers: 6000 }, ME) === "~6× your size", "size reason is banded, not raw");
   const r = m.suggestionReason({ handle: "b", followers: 9000, following: 9000, bioTier: 2, engRate: 0.06, learnedMult: 1.1 }, ME);
   ok(/two-way account/.test(r) && !/replies to people/.test(r), "openness is described as a follow-graph shape, never inferred reply behavior");
-  ok(/in your niche/.test(r) && /high engagement/.test(r) && /your replies here have done well/.test(r), "all earned clauses appear");
+  ok(/in your niche/.test(r) && /hit big/.test(r) && /your replies here have done well/.test(r), "all earned clauses appear (engagement reads as 'posts that hit big', not 'typical')");
   ok(!/two-way/.test(m.suggestionReason({ handle: "c", followers: 9000 }, ME)), "openness clause is omitted when following is absent");
+  ok(/comment EARLY/.test(m.suggestionReason({ handle: "hh", followers: 18000 }, ME)), "a heavy hitter (>12× you) gets the honest 'comment early' cue");
+  ok(!/comment EARLY/.test(m.suggestionReason({ handle: "mid", followers: 6000 }, ME)), "a mid-size account does not");
   ok(m.suggestionReason({ handle: "d", followers: 1200 }, ME) === "in reach", "falls back to a neutral reason when nothing specific is known");
 }
 

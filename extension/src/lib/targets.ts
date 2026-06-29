@@ -12,21 +12,28 @@
  */
 
 export const TARGET_CAP = 20;                  // research's "10-20 home accounts"
-export const TARGET_BAND = { lo: 2, hi: 12 };  // followers/myFollowers sweet spot for the LIST (2-10× + slack)
-export const ABS_CEILING_BASE = 60_000;        // small users: a "big but reachable" account is still well under this
+export const TARGET_BAND = { lo: 2, hi: 25 };  // followers/myFollowers — the research reach sweet-spot (5-25×); 2× is the floor, 25× the "heavy hitter, still reachable if you're early" ceiling
+export const MEGA_CAP = 500_000;               // an absolute "this is a mega-account, your reply is 1-of-thousands no matter how early" cut — binds for big users whose 25× would still be huge
 
 export interface Target { handle: string; followers?: number; addedAt: number; source: "auto" | "manual"; lastPolledAt?: number; lastFreshPostId?: string; }
 export interface TargetStore { handle: string; targets: Target[]; } // handle = owning user; reset on account switch
 
 const norm = (h: string): string => (h || "").replace(/^@+/, "").trim().toLowerCase();
 
+/** The relative-reach ceiling, SCALED BY YOUR SIZE. A sub-1K account replying out-of-network to a
+ *  25× giant gets buried + hit by the OON-reply + sub-1K spam screens, so small users get a tighter
+ *  band; established accounts can punch up to the full research sweet-spot (25×). */
+export function bandHiFor(myFollowers: number): number {
+  if (myFollowers < 1000) return 10;   // sub-1K: stay close, the reach-gap penalty bites hardest here
+  if (myFollowers < 10000) return 18;
+  return TARGET_BAND.hi;               // 25× — established accounts can reach the top of the sweet-spot
+}
 /** HARD membership gate: an untouchable mega-account (or one we can't classify) doesn't belong on
  *  the list at all — separate from ranking. Run at add time AND re-checked on refresh. */
 export function excludeFromTargets(followers: number | undefined, myFollowers: number): boolean {
   if (!myFollowers || !followers) return true; // can't classify → don't add
   const ratio = followers / myFollowers;
-  const ceiling = Math.max(ABS_CEILING_BASE, myFollowers * TARGET_BAND.hi);
-  return ratio > TARGET_BAND.hi || followers > ceiling;
+  return ratio > bandHiFor(myFollowers) || followers > MEGA_CAP; // too big RELATIVE to you (size-scaled), or an absolute mega
 }
 /** Big enough to matter, small enough to reach. */
 export function inReachBand(followers: number | undefined, myFollowers: number): boolean {

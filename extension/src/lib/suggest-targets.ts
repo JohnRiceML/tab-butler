@@ -15,7 +15,7 @@
  * live math. `learnedMult` is the only signal measured on our own data.
  */
 
-export interface SuggestionInput { handle: string; followers: number; following?: number; bioTier?: number; engRate?: number /* RESERVED — needs a Tier-B from:<handle> fetch; the wiring never populates it yet, so engNorm stays 1.0 */; learnedMult?: number; }
+export interface SuggestionInput { handle: string; followers: number; following?: number; bioTier?: number; engRate?: number /* the MEAN rate over an author's TOP posts (from the heavy-hitter search) — a "can this account pop in the niche" signal, NOT typical per-post engagement; absent → engNorm neutral 1.0 */; learnedMult?: number; }
 export interface Suggestion extends SuggestionInput { score: number; }
 
 const PRIOR_ENG = 0.02; // ~2% engagement-rate (eng/followers) anchor — a fixed prior for cold-start normalization
@@ -57,8 +57,9 @@ export function suggestionReason(c: SuggestionInput, myFollowers: number): strin
   const parts: string[] = [];
   const sz = sizeBand(c.followers, myFollowers); if (sz) parts.push(sz);
   if (c.bioTier === 2) parts.push("in your niche");
-  if (c.engRate != null && c.engRate >= PRIOR_ENG * 1.5) parts.push("high engagement for its size"); // only fires once engRate is wired (Tier-B); currently always absent
+  if (c.engRate != null && c.engRate >= PRIOR_ENG * 1.5) parts.push("posts that hit big here"); // their Top posts pop — not a claim about their typical post
   if (c.following != null && c.followers > 0 && c.following / c.followers >= 0.5) parts.push("a two-way account");
   if (c.learnedMult != null && c.learnedMult > 1.05) parts.push("✓ your replies here have done well");
+  if (myFollowers > 0 && c.followers / myFollowers > 12) parts.push("big — comment EARLY before it's buried"); // honest: a heavy hitter is a long shot unless you're fast
   return parts.join(" · ") || "in reach";
 }

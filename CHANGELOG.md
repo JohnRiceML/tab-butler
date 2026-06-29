@@ -178,8 +178,16 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
       `/user` lookup (reuses `maybeFetchReach` — capped at 80/session, governed,
       re-renders on completion) to fill `following` + `bio`, so the **openness** (two-way
       account) and **niche-match** factors light up beyond the free followers-only signal.
-      Still deferred: the expensive `from:<handle>` per-candidate fetch for the
-      engagement-rate factor (the one factor that needs a real timeline pull).
+    - **Heavy-hitter discovery (engagement, not just size):** a "🔥 Find heavy hitters"
+      action (auto-runs once per session) does one `search-v3 type:Top` call — the *most-
+      engaged* posts in your niche are written by the accounts whose content **lands**, and
+      the call returns their engagement for free. That **populates the engagement-rate
+      factor** (a viral post's `eng / followers`), so suggestions now rank on **size AND
+      engagement** — a big *broadcaster* with dead replies ranks below a slightly smaller
+      account whose posts pop. The reach band widened to the research **5–25× sweet-spot**
+      (with a fixed `MEGA_CAP`), and the biggest get an honest *"big — comment EARLY before
+      it's buried"* cue. Engagement reads as *"lands big in your niche"* (a viral post we
+      found, not "typical").
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

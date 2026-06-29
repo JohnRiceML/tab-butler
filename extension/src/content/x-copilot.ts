@@ -5,7 +5,7 @@ import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, bandHiFor, type TargetStore } from "../lib/targets";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
@@ -1306,6 +1306,7 @@ const DOCK_CSS = `
 .tg-sughead { font:600 11.5px -apple-system,system-ui,sans-serif; color:#cbb89c; margin:2px 0; }
 .tg-sug { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:.5px solid rgba(214,154,92,.08); }
 .tg-track { padding:5px 10px; font-size:11px; flex:0 0 auto; }
+.tg-hh { margin-top:8px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; }
@@ -2757,7 +2758,7 @@ async function addTargetByHandle(raw: string): Promise<void> {
     if (res?.error === "no-twttr-config") { targetAddMsg = "Add your RapidAPI key in the Goobi panel."; return; }
     const u = res?.ok ? parseUser(res.data) : null;
     if (!u || u.followers == null) { targetAddMsg = `Couldn't find @${handle}.`; return; }
-    if (excludeFromTargets(u.followers, myFollowers)) { targetAddMsg = `@${handle} (${fmtCount(u.followers)}) is too big to reach from your size — aim for accounts 2–12× you.`; return; }
+    if (excludeFromTargets(u.followers, myFollowers)) { targetAddMsg = `@${handle} (${fmtCount(u.followers)}) is too big to reach from your size — aim for accounts up to ~${bandHiFor(myFollowers)}× you.`; return; }
     const r = addTarget(targetStore, handle, u.followers, "manual", Date.now());
     if (r.error) { targetAddMsg = r.error; return; }
     targetStore = { ...r.store, handle: targetStore.handle || (await myHandle()) }; // stamp the owner so the list can't bleed across accounts
@@ -2798,6 +2799,39 @@ async function draftTargetReply(handle: string): Promise<void> {
   } finally { targetBusy.delete(handle); goobiDrafting = false; refreshGoobi(); renderDock(); }
 }
 
+/* ---- Heavy hitters: actively find big, HIGH-ENGAGEMENT in-niche accounts (a Top search) ---- */
+let heavyHitters = new Map<string, { followers: number; engRate: number; n: number }>(); // handle(lower) → size + MEAN engagement-rate over their Top posts
+let heavyLoading = false;
+let heavyTried = false; // auto-discover once per session on entering Targets
+/** The Top posts in your niche are written by the accounts whose content LANDS. One `search-v3
+ *  type:Top` call surfaces those heavy hitters AND their engagement (a viral post's eng / followers)
+ *  for free — which populates the suggestion ranker's engagement factor (size is no longer the only signal). */
+async function findHeavyHitters(): Promise<void> {
+  const niche = xNiche.trim();
+  if (!niche || heavyLoading) return;
+  heavyLoading = true; renderDock();
+  try {
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: niche.slice(0, 90) }, intent: true });
+    if (!res?.ok) {
+      if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to find heavy hitters.");
+      else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — heavy-hitter search is paused.");
+      else toast("Couldn't search for heavy hitters — try again.");
+      return;
+    }
+    const next = new Map(heavyHitters);
+    for (const t of parseTimelineTweets(res.data)) {
+      if (t.isReply || !t.author || t.followers == null || t.followers <= 0) continue;
+      const rate = ((t.likes ?? 0) + (t.reposts ?? 0)) / t.followers; // a post that landed, normalized for size
+      const k = t.author.toLowerCase();
+      const prev = next.get(k);
+      // MEAN over the author's Top posts, not a single max — one viral fluke shouldn't crown an account
+      next.set(k, prev ? { followers: t.followers, engRate: (prev.engRate * prev.n + rate) / (prev.n + 1), n: prev.n + 1 } : { followers: t.followers, engRate: rate, n: 1 });
+      authorReach.set(k, { ...(authorReach.get(k) ?? { at: Date.now() }), followers: t.followers }); // enrich the reach cache so they enter the candidate pool
+    }
+    heavyHitters = next;
+  } finally { heavyLoading = false; renderDock(); }
+}
+
 function buildTargets(): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "ideas"; // reuse the flex-scroll container
   const head = document.createElement("div"); head.className = "ideahead";
@@ -2818,6 +2852,12 @@ function buildTargets(): HTMLElement {
   addB.onclick = doAdd; inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
   addRow.append(inp, addB); head.append(addRow);
   if (targetAddMsg) { const m = document.createElement("div"); m.className = "ideasub"; m.textContent = targetAddMsg; head.append(m); }
+  // Actively find big, high-engagement accounts in your niche (a Top search). Auto-runs once per session.
+  const hhB = document.createElement("button"); hhB.className = "scanb tg-hh"; hhB.disabled = heavyLoading;
+  hhB.textContent = heavyLoading ? "🔥 Searching…" : heavyHitters.size ? "🔥 Refresh heavy hitters" : "🔥 Find heavy hitters";
+  hhB.onclick = () => void findHeavyHitters();
+  head.append(hhB);
+  if (xNiche.trim() && !heavyHitters.size && !heavyLoading && !heavyTried) { heavyTried = true; void findHeavyHitters(); }
   wrap.append(head);
 
   const locked = reputationStatus(repliesLastHour()).level === "easeoff"; // pace keystone (last-hour count, agrees with the pace chip)
@@ -2836,7 +2876,7 @@ function buildTargets(): HTMLElement {
     if (hl === selfHandle || tracked.has(hl)) continue;
     if (excludeFromTargets(f, myFollowers) || !inReachBand(f, myFollowers)) continue;
     const ratio = r.following != null && f > 0 ? r.following / f : undefined;
-    cands.push({ handle, followers: f, following: r.following, bioTier: r.bio ? builderTier(r.bio, xNiche, ratio) : undefined, learnedMult: learnedMultForHandle(handle, agg) });
+    cands.push({ handle, followers: f, following: r.following, bioTier: r.bio ? builderTier(r.bio, xNiche, ratio) : undefined, engRate: heavyHitters.get(hl)?.engRate, learnedMult: learnedMultForHandle(handle, agg) });
   }
   // Tier-B enrichment: fill following + bio for the strongest few candidates (cheap /user, capped at
   // REACH_CAP + governed via maybeFetchReach, which re-renders on completion) → openness + niche light up.
@@ -2844,7 +2884,7 @@ function buildTargets(): HTMLElement {
   const suggestions = rankSuggestions(cands, myFollowers, dismissedSuggestions, 5);
   if (suggestions.length) {
     const sh = document.createElement("div"); sh.className = "tg-sughead"; sh.textContent = "Suggested for you"; body.append(sh);
-    const by = document.createElement("div"); by.className = "tg-foot"; by.style.margin = "0 0 6px"; by.textContent = "From your last niche search — computed from what we can see, not guaranteed."; body.append(by);
+    const by = document.createElement("div"); by.className = "tg-foot"; by.style.margin = "0 0 6px"; by.textContent = `Big, in-reach accounts from your niche${heavyHitters.size ? " + heavy-hitter search" : ""} — ranked by size AND engagement, computed not guaranteed.`; body.append(by);
     for (const s of suggestions) {
       const sc = document.createElement("div"); sc.className = "tg-sug";
       sc.append(avatarChip(s.handle, lastSeenFor(s.handle)));
@@ -2860,7 +2900,7 @@ function buildTargets(): HTMLElement {
 
   if (!targetStore.targets.length) {
     const e = document.createElement("div"); e.className = "idea-empty";
-    e.textContent = suggestions.length ? "Track a suggestion above, or add an account 2–12× your size by @handle." : "Add a target — an account 2–12× your size in your niche. Tip: run “Find spots” on the Replies tab first and Goobi suggests reachable accounts here.";
+    e.textContent = suggestions.length ? "Track a suggestion above, or add an account up to ~25× your size by @handle." : "Add a target by @handle, or tap 🔥 Find heavy hitters to pull the big, high-engagement accounts in your niche.";
     body.append(e);
   }
   for (const tg of targetStore.targets) {

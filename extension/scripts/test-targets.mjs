@@ -22,9 +22,12 @@ ok(!m.excludeFromTargets(5000, 1000), "5× a 1k account is in-band (kept)");
 ok(m.excludeFromTargets(2_000_000, 1000), "a 2M mega vs a 1k account is excluded");
 ok(m.excludeFromTargets(undefined, 1000) && m.excludeFromTargets(5000, 0), "unclassifiable (no followers either side) is excluded");
 ok(m.inReachBand(5000, 1000) && !m.inReachBand(1200, 1000), "in-reach needs >=2× and within the ceiling");
-// absolute ceiling protects small users: 12× of 200 = 2400, but the 60k floor lets a genuinely big-but-reachable account in
-ok(!m.excludeFromTargets(40000, 4000), "40k vs 4k (10×) stays in-band under the 60k floor");
-ok(m.excludeFromTargets(80000, 4000), "80k vs 4k (20×) exceeds the band → excluded");
+// the reach band SCALES with your size (sub-1K tighter, established wider) — protects small users from buried replies
+ok(!m.excludeFromTargets(4000, 500) && m.excludeFromTargets(6500, 500), "sub-1k user (500): 8× kept, 13× cut (band ~10×)");
+ok(!m.excludeFromTargets(75000, 5000) && m.excludeFromTargets(110000, 5000), "5k user: 15× kept, 22× cut (band ~18×)");
+ok(!m.excludeFromTargets(480000, 20000) && m.excludeFromTargets(640000, 20000), "20k user: 24× kept, 32× cut (band ~25×)");
+ok(m.excludeFromTargets(600000, 50000), "a 600k account is an absolute mega (MEGA_CAP) even at 12× → excluded");
+ok(m.bandHiFor(500) === 10 && m.bandHiFor(5000) === 18 && m.bandHiFor(50000) === 25, "bandHiFor tiers by user size");
 
 // ---- reach multiple label ----
 ok(m.reachMultipleLabel(7000, 1000) === "7.0× your size", "labels a 7× account");
