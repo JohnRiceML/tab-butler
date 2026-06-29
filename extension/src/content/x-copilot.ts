@@ -953,6 +953,8 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
  *  count it, log its features, persist, refresh the header. The click is the
  *  signal — no post-confirmation. */
 function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now()): void {
+  replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
+  replyLog.times.push(now); // count EVERY recorded reply toward the hourly pace — insert, clipboard fallback, or "Mark commented"
   const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
   logSentReply(now, text, opp, angle);
@@ -974,19 +976,16 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
 
 function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | null {
   const now = Date.now();
-  replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
   const author = draftOppAuthor.toLowerCase();
   const last = author ? replyLog.authors[author] : undefined;
   const repeat = last != null && now - last < AUTHOR_REPEAT_TTL;
   const norm = normalizeReply(text);
   const recentNorms = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).map((d) => d.norm);
   const duplicate = isDuplicateReply(norm, recentNorms);
-  // reputation-guard signals committed before the shared count/log
-  replyLog.times.push(now);
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  recordSentReply(text, opp, angle, now);
+  recordSentReply(text, opp, angle, now); // pushes this reply onto replyLog.times (the hourly pace counter)
   return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
 }
 
@@ -2198,7 +2197,7 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
     rec.outcome = { at: now, likes: mt.likes, replies: mt.replies, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS };
     wrote++;
   }
-  learn.restId = restId;
+  if (fetched.length) learn.restId = restId; // cache the resolved id ONLY when it proved it works (returned replies) — a bad/transient resolve re-resolves next day instead of freezing
   learn.measureDay = today;
   if (wrote) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
   safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
@@ -2443,6 +2442,18 @@ function renderSupportersPanel(d: HTMLElement): void {
   d.append(wrap);
 }
 
+let apiAlive: boolean | undefined; // session cache: undefined = unknown, true = verified working, false = shape looks dead
+/** Tell a genuinely quiet niche apart from a DEAD integration (key on the wrong provider, a
+ *  renamed param, or a bumped endpoint version — all of which return HTTP 200 + an empty body
+ *  that parses to []). One cheap known-good search that MUST return results if the API is healthy. */
+async function verifyApiAlive(): Promise<boolean> {
+  if (apiAlive !== undefined) return apiAlive;
+  const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "5", query: "the" }, intent: true });
+  if (res?.error) return true; // a config/budget error is a different, already-surfaced failure — not a dead shape
+  apiAlive = !!res?.ok && parseTimelineTweets(res.data).length > 0;
+  return apiAlive;
+}
+
 async function generateIdeas() {
   if (ideasLoading) return;
   const niche = xNiche.trim();
@@ -2466,7 +2477,7 @@ async function generateIdeas() {
       const raw2 = await runSearch(niche.slice(0, 120));
       if (raw2?.ok) { const w2 = pickBest(parseTimelineTweets(raw2.data), 10); if (w2.length > winners.length) winners = w2; }
     }
-    if (!winners.length) { ideasError = "Didn't find strong posts in your niche to remix. Try a broader niche."; return; }
+    if (!winners.length) { ideasError = (await verifyApiAlive()) ? "Didn't find strong posts in your niche to remix. Try a broader niche." : "The X-data API returned nothing usable — your RapidAPI key may not be subscribed to the right provider (twitter241). Check your subscription in the popup."; return; }
     const ownPosts = await getOwnPosts(); // cheap (cached ~24h, [] if no handle) — voice anchor + de-dupe
     const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number }[]; error?: string }>({
       type: "POST_IDEAS",
@@ -3021,7 +3032,7 @@ function renderDock() {
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
   if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
-  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} in the last hour. X reads ~30/hr as automated — Goobi keeps you under it.`; }
+  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} you sent through Goobi this hour. X reads ~30/hr as automated — this counts your Goobi replies, so pace your native ones too.`; }
   sub.append(document.createTextNode(" · "), chip);
   t.append(sub);
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title

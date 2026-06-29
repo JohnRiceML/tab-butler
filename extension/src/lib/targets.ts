@@ -5,8 +5,9 @@
  *
  * Research-grounded: the win is from REACHABLE accounts (~2-10× your size, not untouchable
  * megas) replied to EARLY (first ~15-30 min earns the most visibility) with a reply that adds
- * real value. The spam version backfires hard — X weights a mute/block/report at roughly -74
- * (≈148× a +1 like), so annoying the big account SHRINKS your reach. Hence the membership gate
+ * real value. The spam version backfires hard — in the 2023 open-source ranker a mute/block/report
+ * weighed roughly -74 (≈148× a +1 like) (the live 2026 Grok ranker is undisclosed, so treat this as
+ * a directional prior, not a live coefficient), so annoying the big account SHRINKS your reach. Hence the membership gate
  * (no megas), the freshness window, and the empty-praise guard live alongside this.
  */
 

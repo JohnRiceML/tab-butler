@@ -197,7 +197,7 @@ export function matchOutcomes(fetched: FetchedReply[], sent: LearnReply[]): Outc
       if (sim > bestSim) { second = bestSim; bestSim = sim; best = i; }
       else if (sim > second) second = sim;
     }
-    if (best >= 0 && bestSim >= MATCH_SIM && bestSim - second >= 0.05) {
+    if (best >= 0 && bestSim >= MATCH_SIM && bestSim - second >= 0.15) { // unique-winner margin — wide enough that two similar replies to DIFFERENT accounts don't cross-attribute
       used.add(best);
       out.push({ index: best, likes: f.likes ?? 0, replies: f.replies ?? 0 });
     }

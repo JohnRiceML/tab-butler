@@ -15,7 +15,7 @@
  * live math. `learnedMult` is the only signal measured on our own data.
  */
 
-export interface SuggestionInput { handle: string; followers: number; following?: number; bioTier?: number; engRate?: number; learnedMult?: number; }
+export interface SuggestionInput { handle: string; followers: number; following?: number; bioTier?: number; engRate?: number /* RESERVED — needs a Tier-B from:<handle> fetch; the wiring never populates it yet, so engNorm stays 1.0 */; learnedMult?: number; }
 export interface Suggestion extends SuggestionInput { score: number; }
 
 const PRIOR_ENG = 0.02; // ~2% engagement-rate (eng/followers) anchor — a fixed prior for cold-start normalization
@@ -25,7 +25,7 @@ const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.m
 export function suggestionScore(c: SuggestionInput, myFollowers: number): number {
   const ratio = myFollowers > 0 && c.followers > 0 ? c.followers / myFollowers : 0;
   const reachFit = ratio >= 5 ? 1.08 : 1.0;                                              // sweet-spot: big enough to bridge out-of-network, not a 1-of-thousands mega
-  let openness = 1.0;                                                                    // proxy for the +75 reply_engaged_by_author head (the single biggest positive weight)
+  let openness = 1.0;                                                                    // proxy for the reply_engaged_by_author head (the biggest +weight in the 2023 dump; directional prior, not the live ranker)
   if (c.following != null && c.followers > 0) { const ff = c.following / c.followers; openness = ff >= 0.8 ? 1.08 : ff >= 0.3 ? 1.04 : ff >= 0.08 ? 1.0 : 0.92; }
   const nicheMatch = c.bioTier === 2 ? 1.2 : c.bioTier === 1 ? 1.1 : 1.0;                // bio-keyword proxy for audience overlap (true mutual-follow jaccard isn't fetchable)
   let engNorm = 1.0;                                                                     // the heavy ranker scores predicted engagement PER POST — follower count barely matters per-tweet
@@ -57,7 +57,7 @@ export function suggestionReason(c: SuggestionInput, myFollowers: number): strin
   const parts: string[] = [];
   const sz = sizeBand(c.followers, myFollowers); if (sz) parts.push(sz);
   if (c.bioTier === 2) parts.push("in your niche");
-  if (c.engRate != null && c.engRate >= PRIOR_ENG * 1.5) parts.push("high engagement for its size");
+  if (c.engRate != null && c.engRate >= PRIOR_ENG * 1.5) parts.push("high engagement for its size"); // only fires once engRate is wired (Tier-B); currently always absent
   if (c.following != null && c.followers > 0 && c.following / c.followers >= 0.5) parts.push("a two-way account");
   if (c.learnedMult != null && c.learnedMult > 1.05) parts.push("✓ your replies here have done well");
   return parts.join(" · ") || "in reach";
