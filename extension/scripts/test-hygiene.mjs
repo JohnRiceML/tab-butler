@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/reply-hygiene.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { normalizeReply, jaccard, isDuplicateReply, pickReplyNudge, reputationStatus } = mod;
+const { normalizeReply, jaccard, isDuplicateReply, pickReplyNudge, reputationStatus, replyQualityWarning } = mod;
 
 let pass = 0, fail = 0;
 const eq = (a, b, l) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; else { fail++; console.error("  FAIL:", l, "got", JSON.stringify(a), "want", JSON.stringify(b)); } };
@@ -53,6 +53,14 @@ eq(reputationStatus(20).level, "caution", "20/hr caution (soft line)");
 eq(reputationStatus(29).level, "caution", "29/hr caution");
 eq(reputationStatus(30).level, "easeoff", "30/hr easeoff (hard line)");
 eq(reputationStatus(45).level, "easeoff", "45/hr easeoff");
+
+// replyQualityWarning: fires on empty praise / too-short / emoji-only, clears for a real add-on
+ok(replyQualityWarning("🔥🔥") !== null, "emoji-only reply is flagged");
+ok(replyQualityWarning("great post!") !== null, "empty praise is flagged");
+ok(replyQualityWarning("so true") !== null, "short agreement is flagged");
+ok(replyQualityWarning("love this") !== null, "love-this is flagged");
+eq(replyQualityWarning("the part about pricing for churn-prone plans is exactly what killed our cheap tier last year"), null, "a specific, substantive reply passes clean");
+eq(replyQualityWarning("counterpoint: outbound still works if you send 40 not 4, we closed 2 deals that way"), null, "a real counterpoint passes clean");
 
 console.log(fail === 0 ? `\n✓ reply hygiene: ${pass} assertions passed` : `\n✗ reply hygiene: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

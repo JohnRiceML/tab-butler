@@ -5,7 +5,8 @@ import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
-import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, type TargetStore } from "../lib/targets";
+import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
 import { builderTier } from "../lib/community";
@@ -1286,6 +1287,22 @@ const DOCK_CSS = `
 .idea-err-t { color:#e8a08c; font:600 12.5px -apple-system,system-ui,sans-serif; margin-bottom:10px; }
 .idea-err .scanb { display:inline-flex; margin:0 auto; }
 .idea-empty { text-align:center; padding:26px 18px; color:#8c7d68; font-size:12.5px; line-height:1.5; }
+.tg-add { display:flex; gap:6px; margin-top:9px; }
+.tg-add .idea-steerin { flex:1; }
+.tg-card { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:7px; }
+.tg-top { display:flex; align-items:center; gap:9px; }
+.tg-x { margin-left:auto; background:none; border:0; color:#8c7d68; font-size:17px; line-height:1; cursor:pointer; padding:2px 4px; flex:0 0 auto; }
+.tg-x:hover { color:#e0a45c; }
+.tg-stand { font-size:11px; margin-top:8px; line-height:1.4; }
+.tg-good { color:#6fcf7f; }
+.tg-muted { color:#8c7d68; }
+.tg-find { margin-top:10px; background:none; border:.5px solid rgba(214,154,92,.3); color:#e7b277; border-radius:9px; padding:7px 12px; font:600 12px inherit; cursor:pointer; }
+.tg-find:hover { background:rgba(214,154,92,.1); } .tg-find:disabled { opacity:.55; cursor:default; }
+.tg-post { margin-top:10px; font-size:13px; color:#cbb89c; line-height:1.45; background:#221c15; border-radius:9px; padding:9px 10px; white-space:pre-wrap; max-height:120px; overflow:auto; }
+.tg-fresh { font-size:10.5px; color:#8c7d68; margin-top:6px; }
+.tg-live { color:#6fcf7f; font-weight:600; }
+.tg-warn { font-size:10.5px; color:#e89a3c; margin-top:7px; line-height:1.4; }
+.tg-foot { font-size:9.5px; color:#a89a85; margin-top:8px; line-height:1.4; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; }
@@ -1574,7 +1591,7 @@ function easyScore(o: Opp): number {
 
 type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
-type DockView = "replies" | "ideas"; // top-level dock mode: reply opportunities vs original post ideas
+type DockView = "replies" | "ideas" | "targets"; // top-level dock mode: reply spots vs post ideas vs big-account targeting
 let dockView: DockView = "replies";
 interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; } // the real over-performing post we remixed
 interface IdeaRecord {
@@ -2263,7 +2280,8 @@ function scanNotifications(): void {
 
 /** The most recent avatar/display we've seen for a handle (for the insight rows). */
 function lastSeenFor(handle: string): string | undefined {
-  for (let i = replyLog.sent.length - 1; i >= 0; i--) { const s = replyLog.sent[i]; if (s.author === handle && s.avatar) return s.avatar; }
+  const h = handle.toLowerCase();
+  for (let i = replyLog.sent.length - 1; i >= 0; i--) { const s = replyLog.sent[i]; if (s.author?.toLowerCase() === h && s.avatar) return s.avatar; }
   return undefined;
 }
 function letterChip(handle: string): HTMLElement {
@@ -2664,6 +2682,163 @@ function mountIdeasGoobi(): void {
   goobiIdeasTimer = window.setTimeout(dance, 350);
 }
 
+/* ---------- Target accounts: comment early on big in-reach niche accounts ---------- */
+let targetStore: TargetStore = freshStore("");
+const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string }>(); // fetched latest post per handle (session)
+const targetDrafts = new Map<string, string>(); // generated reply draft per handle (session)
+const targetBusy = new Set<string>();           // handles currently fetching/drafting
+let targetAdding = false;
+let targetAddMsg = "";
+function persistTargets(): void { safeSet({ [CONFIG.X_TARGETS_KEY]: targetStore }); }
+
+/** "your replies here…" — reuse the learning loop so the user sees which targets actually pay off. */
+function targetStanding(handle: string, agg: ReturnType<typeof aggregateAccounts>): { text: string; cls: string } {
+  const h = handle.toLowerCase();
+  const a = Object.entries(agg.accounts).find(([k]) => k.toLowerCase() === h)?.[1];
+  if (!a || a.replies === 0) return { text: "no replies here yet", cls: "tg-muted" };
+  if (a.score != null) {
+    if (a.score > agg.muObs * 1.1) return { text: `✓ your replies here beat your average (${a.replies})`, cls: "tg-good" };
+    if (a.score < agg.muObs * 0.9) return { text: `your replies here trail your average (${a.replies})`, cls: "tg-muted" };
+    return { text: `your replies here are about average (${a.replies})`, cls: "tg-muted" };
+  }
+  return { text: `${a.replies} ${a.replies === 1 ? "reply" : "replies"} · still learning (${a.nOut}/4 measured)`, cls: "tg-muted" };
+}
+
+async function addTargetByHandle(raw: string): Promise<void> {
+  if (targetAdding) return;
+  const handle = raw.replace(/^@+/, "").trim();
+  if (!handle) return;
+  if (!myFollowers) { targetAddMsg = "Set your follower count in the Goobi panel first."; renderDock(); return; }
+  targetAdding = true; targetAddMsg = `Checking @${handle}…`; renderDock();
+  try {
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
+    if (res?.error === "no-twttr-config") { targetAddMsg = "Add your RapidAPI key in the Goobi panel."; return; }
+    const u = res?.ok ? parseUser(res.data) : null;
+    if (!u || u.followers == null) { targetAddMsg = `Couldn't find @${handle}.`; return; }
+    if (excludeFromTargets(u.followers, myFollowers)) { targetAddMsg = `@${handle} (${fmtCount(u.followers)}) is too big to reach from your size — aim for accounts 2–12× you.`; return; }
+    const r = addTarget(targetStore, handle, u.followers, "manual", Date.now());
+    if (r.error) { targetAddMsg = r.error; return; }
+    targetStore = { ...r.store, handle: targetStore.handle || (await myHandle()) }; // stamp the owner so the list can't bleed across accounts
+    persistTargets(); targetAddMsg = "";
+  } finally { targetAdding = false; renderDock(); }
+}
+/** Reset the target list if the signed-in account changed mid-session (mirrors the learn store). */
+async function ensureTargetOwner(): Promise<void> {
+  if (invalidated) return;
+  const ownH = await myHandle();
+  if (ownH && targetStore.handle && targetStore.handle !== ownH) { targetStore = freshStore(ownH); persistTargets(); if (dockView === "targets") renderDock(); }
+}
+
+/** Pull the target's freshest ORIGINAL post (reuses the proven from:<handle> search). */
+async function findTargetPost(handle: string): Promise<void> {
+  if (targetBusy.has(handle)) return;
+  targetBusy.add(handle); renderDock();
+  try {
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: true });
+    if (res?.ok) {
+      const newest = parseTimelineTweets(res.data)
+        .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
+        .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))[0];
+      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author } : { id: "", text: "", author: handle });
+      targetDrafts.delete(handle);
+    }
+  } finally { targetBusy.delete(handle); renderDock(); }
+}
+
+async function draftTargetReply(handle: string): Promise<void> {
+  const post = targetPosts.get(handle);
+  if (!post?.text || targetBusy.has(handle)) return;
+  targetBusy.add(handle); goobiDrafting = true; refreshGoobi(); renderDock();
+  try {
+    const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author: post.author, text: post.text });
+    if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to draft replies."); return; }
+    if (resp?.reply) targetDrafts.set(handle, resp.reply); else toast("Couldn't draft a reply — try again.");
+  } finally { targetBusy.delete(handle); goobiDrafting = false; refreshGoobi(); renderDock(); }
+}
+
+function buildTargets(): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "ideas"; // reuse the flex-scroll container
+  const head = document.createElement("div"); head.className = "ideahead";
+  if (!myFollowers) {
+    const gate = document.createElement("div"); gate.className = "idea-gate";
+    const t = document.createElement("div"); t.className = "ideagate-t"; t.textContent = "Set your follower count first";
+    const p = document.createElement("div"); p.className = "ideasub"; p.textContent = "Targeting needs your size so it only suggests accounts you can actually reach. Add it in the Goobi side panel."; p.style.marginTop = "8px";
+    gate.append(t, p); head.append(gate); wrap.append(head);
+    return wrap;
+  }
+  const sub = document.createElement("div"); sub.className = "ideasub";
+  sub.textContent = "Comment EARLY on bigger accounts in your niche to borrow their crowd. A reply is a chance at their audience, not a promise — it only pays off when you add real value.";
+  head.append(sub);
+  const addRow = document.createElement("div"); addRow.className = "tg-add";
+  const inp = document.createElement("input"); inp.className = "idea-steerin"; inp.placeholder = "@handle to track";
+  const addB = document.createElement("button"); addB.className = "scanb"; addB.textContent = targetAdding ? "…" : "Track"; addB.disabled = targetAdding;
+  const doAdd = () => { const v = inp.value; inp.value = ""; void addTargetByHandle(v); };
+  addB.onclick = doAdd; inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
+  addRow.append(inp, addB); head.append(addRow);
+  if (targetAddMsg) { const m = document.createElement("div"); m.className = "ideasub"; m.textContent = targetAddMsg; head.append(m); }
+  wrap.append(head);
+
+  const locked = reputationStatus(repliesLastHour()).level === "easeoff"; // pace keystone (last-hour count, agrees with the pace chip)
+  const body = document.createElement("div"); body.className = "dl";
+  if (locked) { const l = document.createElement("div"); l.className = "tg-warn"; l.style.margin = "0 0 4px"; l.textContent = "Past your pace line for this hour — targeting is paused for a few minutes so you don't read as automated."; body.append(l); }
+  if (!targetStore.targets.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Add your first target — an account 2–12× your size, squarely in your niche. Goobi shows their fresh posts and which of your replies land."; body.append(e); }
+  const now = Date.now();
+  const agg = aggregateAccounts(replyLog.sent, now); // one pass → reused for every target's standing
+  for (const tg of targetStore.targets) {
+    const c = document.createElement("div"); c.className = "tg-card";
+    const top = document.createElement("div"); top.className = "tg-top";
+    top.append(avatarChip(tg.handle, lastSeenFor(tg.handle)));
+    const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
+    const h = document.createElement("a") as HTMLAnchorElement; h.className = "ins-h"; h.textContent = "@" + tg.handle; h.href = `https://x.com/${tg.handle}`; h.target = "_blank"; h.rel = "noopener"; h.style.textDecoration = "none";
+    mid.append(h);
+    const meta = document.createElement("div"); meta.className = "ins-meta";
+    const bits: string[] = [];
+    if (tg.followers) bits.push(`${fmtCount(tg.followers)} followers`);
+    const rl = reachMultipleLabel(tg.followers, myFollowers); if (rl) bits.push(rl);
+    if (inReachBand(tg.followers, myFollowers)) bits.push("in reach");
+    meta.textContent = bits.join(" · ");
+    mid.append(meta); top.append(mid);
+    const rm = document.createElement("button"); rm.className = "tg-x"; rm.textContent = "×"; rm.title = "Stop tracking";
+    rm.onclick = () => { targetStore = removeTarget(targetStore, tg.handle); targetPosts.delete(tg.handle); targetDrafts.delete(tg.handle); persistTargets(); renderDock(); };
+    top.append(rm); c.append(top);
+    const st = targetStanding(tg.handle, agg); const stEl = document.createElement("div"); stEl.className = `tg-stand ${st.cls}`; stEl.textContent = st.text; c.append(stEl);
+
+    const busy = targetBusy.has(tg.handle);
+    const post = targetPosts.get(tg.handle);
+    if (!post) {
+      const find = document.createElement("button"); find.className = "tg-find"; find.textContent = busy ? "Looking…" : "Find a fresh post →"; find.disabled = busy || locked; find.onclick = () => void findTargetPost(tg.handle); c.append(find);
+    } else if (!post.text) {
+      const none = document.createElement("div"); none.className = "ins-meta"; none.style.marginTop = "8px"; none.textContent = "No recent original post found right now.";
+      const retry = document.createElement("button"); retry.className = "tg-find"; retry.textContent = "Check again"; retry.disabled = locked; retry.onclick = () => void findTargetPost(tg.handle);
+      c.append(none, retry);
+    } else {
+      const pv = document.createElement("div"); pv.className = "tg-post"; pv.textContent = post.text; c.append(pv);
+      const fl = freshnessLabel(post.postedAt, now);
+      if (fl) { const f = document.createElement("div"); f.className = `tg-fresh ${fl.live ? "tg-live" : ""}`; f.textContent = (fl.live ? "● " : "") + fl.text; c.append(f); }
+      const draft = targetDrafts.get(tg.handle);
+      if (!draft) {
+        const d = document.createElement("button"); d.className = "tg-find"; d.textContent = busy ? "Drafting…" : "Draft a reply ↗"; d.disabled = busy || locked; d.onclick = () => void draftTargetReply(tg.handle); c.append(d);
+      } else {
+        const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = draft; ta.rows = Math.min(8, Math.max(3, Math.ceil(draft.length / 42))); ta.style.fontSize = "13.5px"; ta.style.marginTop = "8px";
+        ta.oninput = () => { targetDrafts.set(tg.handle, ta.value); };
+        c.append(ta);
+        const warn = replyQualityWarning(draft); if (warn) { const w = document.createElement("div"); w.className = "tg-warn"; w.textContent = warn; c.append(w); }
+        const row = document.createElement("div"); row.className = "idea-actions";
+        const openB = document.createElement("button"); openB.className = "idea-open"; openB.textContent = "Open post to reply ↗";
+        openB.onclick = () => window.open(`https://x.com/${tg.handle}/status/${post.id}`, "_blank", "noopener");
+        const copyB = document.createElement("button"); copyB.className = "idea-copy"; copyB.textContent = "Copy";
+        copyB.onclick = async () => { try { await navigator.clipboard.writeText(targetDrafts.get(tg.handle) || ""); copyB.textContent = "Copied ✓"; setTimeout(() => (copyB.textContent = "Copy"), 1400); } catch { /* ignore */ } };
+        row.append(openB, copyB); c.append(row);
+        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = "Draft only — opens the post so you review and reply there. Nothing posts on its own. Goobi can't count replies you post directly on X, so keep your own pace.";
+        c.append(foot);
+      }
+    }
+    body.append(c);
+  }
+  wrap.append(body);
+  return wrap;
+}
+
 function buildIdeas(): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "ideas";
   // No-niche gate — without it, Generate is a no-op. Make that explicit, not a silent toast.
@@ -2746,6 +2921,7 @@ function renderDock() {
       // refreshOwnStats owns the single from:<handle> fetch; run it FIRST so the daily learn
       // pass reads a warm cache (no double-bill), then the once-a-day trend + measure-pass.
       void refreshOwnStats().catch(() => {}).then(() => { if (!invalidated) void maybeRunDailyLearn(); });
+      void ensureTargetOwner(); // reset the target list if the account changed
       renderDock();
     };
     const gh = document.createElement("span"); gh.className = "lgoobi"; l.append(gh); // Goobi IS the launcher icon
@@ -2760,7 +2936,7 @@ function renderDock() {
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
   }
-  const d = document.createElement("div"); d.className = "d" + (dockView === "ideas" ? " wide" : "");
+  const d = document.createElement("div"); d.className = "d" + (dockView === "ideas" || dockView === "targets" ? " wide" : "");
   const gstat = goobiStatus();
   const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to play`; gh.onclick = () => togglePlay();
   const h = document.createElement("div"); h.className = "dh";
@@ -2880,7 +3056,7 @@ function renderDock() {
     b.onclick = () => { if (dockView !== id) { dockView = id; renderDock(); } };
     return b;
   };
-  modes.append(mkMode("replies", "💬 Replies"), mkMode("ideas", "✨ Post ideas"));
+  modes.append(mkMode("replies", "💬 Replies"), mkMode("ideas", "✨ Post ideas"), mkMode("targets", "🎯 Targets"));
   d.append(modes);
 
   if (dockView === "ideas") {
@@ -2888,6 +3064,12 @@ function renderDock() {
     root.appendChild(d);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
     mountIdeasGoobi(); // dance while ideas generate (after the dock is in the DOM)
+    return;
+  }
+  if (dockView === "targets") {
+    d.append(buildTargets());
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
     return;
   }
 
@@ -2966,6 +3148,10 @@ async function boot() {
   const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
   if (storedLearn?.handle) learn = storedLearn;
   hydrateInbound(await getLocal(CONFIG.X_SUPPORTERS_KEY)); // who engages with me (reciprocity)
+  const ownHandle = await myHandle();
+  const storedTargets = await getLocal(CONFIG.X_TARGETS_KEY) as TargetStore | undefined; // big-account target list
+  if (storedTargets && Array.isArray(storedTargets.targets) && (!storedTargets.handle || !ownHandle || storedTargets.handle === ownHandle)) targetStore = { ...storedTargets, handle: ownHandle || storedTargets.handle };
+  else if (ownHandle) targetStore = freshStore(ownHandle); // a different account's list — don't bleed it across users
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
@@ -2978,6 +3164,7 @@ async function boot() {
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan
     if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
+    if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets)) { targetStore = nv; renderDock(); } } // synced from another tab
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
       twttrUnconfigured = false;

@@ -135,6 +135,31 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     zero API); honest footer (a sample not a ledger, likes uncounted, notifications stay
     on-device). New `X_SUPPORTERS_KEY` (device-local, 1000-cap, 60-day prune). Pure model
     unit-tested (`scripts/test-supporters.mjs`, 11 assertions).
+- **Target accounts — "🎯 Targets" mode** (`targets.ts`, web-researched + workflow-
+  designed + adversarially verified): the growth move of **commenting early on bigger
+  in-reach niche accounts to borrow their crowd**. A third dock mode where you track
+  large accounts, pull their freshest original post on demand (reuses the proven
+  `from:<handle>` search), and **coach a quality reply** (Sonnet `DRAFT_REPLY` → edit →
+  Copy / Open-the-post). **Draft-only** — it only opens the post + copies the draft,
+  never auto-replies.
+  - **Reachable, not mega:** a hard membership gate (`excludeFromTargets`) keeps the list
+    to ~2–12× your size with an absolute ceiling — untouchable mega-accounts are
+    *structurally* excluded, not just rank-penalized (research: a reply buried under a
+    mega's thousands earns nothing).
+  - **Tracking comes free:** `targetStanding` reuses the shipped learning loop
+    (`aggregateAccounts`) — each target shows *which of your replies actually land*
+    ("✓ your replies here beat your average" / "still learning N/4"). No new tracking
+    engine.
+  - **Anti-spam by construction** (research found X weights a mute/block at ~−74, ≈148× a
+    like — annoying the account *shrinks* your reach): the **pace keystone locks** the
+    find/draft actions past 30 replies/hr; a new `replyQualityWarning` flags empty-praise
+    ("great post! 🔥") before you copy; a live freshness window ("4m old · reply while
+    it's live") nudges *early*, not *often*; honest framing ("a reply is a chance at their
+    audience, not a promise"); **no impression number is ever shown** (X doesn't report
+    reply impressions — we won't fake one). New `X_TARGETS_KEY` (device-local). Pure libs
+    unit-tested (`scripts/test-targets.mjs` 18 + the quality gate in `test-hygiene.mjs`).
+    Deferred: an ambient fresh-post poller (the `selectPollBatch` budget invariant is
+    already tested) + folding the learned per-target signal into ranking.
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

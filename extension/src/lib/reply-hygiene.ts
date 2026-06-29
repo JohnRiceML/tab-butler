@@ -55,6 +55,21 @@ export function isDuplicateReply(norm: string, recent: string[]): boolean {
   return recent.some((r) => r === norm || jaccard(norm, r) >= 0.7);
 }
 
+/** Empty-praise / low-effort reply gate. X down-weights "great post! 🔥" filler and the big
+ *  account never notices you — so a reply must add something only you would say. Returns null
+ *  when it's fine, or a reason to surface (the caller nudges; it never hard-blocks the insert).
+ *  Tuned to fire only on the unambiguous cases — false positives on a sharp short reply annoy. */
+export function replyQualityWarning(text: string): string | null {
+  const t = (text || "").trim();
+  if (!t) return null;
+  const words = t.replace(/https?:\/\/\S+/g, "").replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "An emoji-only reply adds nothing — X buries it and the author won't notice you.";
+  if (words.length < 4) return "Too short to add value. Say something only you would — a point, a question, or a quick example.";
+  const PRAISE = /^(great|love( this| it)?|nice|awesome|amazing|so (good|true)|facts|exactly|well said|good (post|point|stuff|thread|take)|fire|based|agreed?|100|preach|gold|incredible|legend|king|queen|w )\b/i;
+  if (words.length <= 6 && PRAISE.test(t)) return "Reads as empty praise. Add a specific point, question, or example so the reply earns a look (and a reply back).";
+  return null;
+}
+
 /** The single most important reputation nudge to show after an insert, or null.
  *  Priority: duplicate-reply > hourly volume > repeat-author. */
 export function pickReplyNudge(opts: { duplicate: boolean; repliesThisHour: number; repeatAuthor: string | null }): string | null {
