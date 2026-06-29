@@ -2818,8 +2818,12 @@ function buildTargets(): HTMLElement {
     const hl = handle.toLowerCase();
     if (hl === selfHandle || tracked.has(hl)) continue;
     if (excludeFromTargets(f, myFollowers) || !inReachBand(f, myFollowers)) continue;
-    cands.push({ handle, followers: f, following: r.following, learnedMult: learnedMultForHandle(handle, agg) });
+    const ratio = r.following != null && f > 0 ? r.following / f : undefined;
+    cands.push({ handle, followers: f, following: r.following, bioTier: r.bio ? builderTier(r.bio, xNiche, ratio) : undefined, learnedMult: learnedMultForHandle(handle, agg) });
   }
+  // Tier-B enrichment: fill following + bio for the strongest few candidates (cheap /user, capped at
+  // REACH_CAP + governed via maybeFetchReach, which re-renders on completion) → openness + niche light up.
+  for (const c of cands.filter((x) => x.following == null).sort((a, b) => b.followers - a.followers).slice(0, 8)) maybeFetchReach(c.handle);
   const suggestions = rankSuggestions(cands, myFollowers, dismissedSuggestions, 5);
   if (suggestions.length) {
     const sh = document.createElement("div"); sh.className = "tg-sughead"; sh.textContent = "Suggested for you"; body.append(sh);

@@ -173,9 +173,13 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     a missing signal is held neutral (never a penalty), openness is described as a
     follow-graph *shape* ("a two-way account") not inferred behavior, and only Tier-2-
     measured history earns the "✓ your replies here have done well" tag. Pure-lib
-    unit-tested (`scripts/test-suggest-targets.mjs`, 15 assertions). Deferred Tier B: a
-    budgeted enrichment pass (`/user` + `from:<handle>`) to fill the following/bio/
-    engagement factors that aren't in the free cache.
+    unit-tested (`scripts/test-suggest-targets.mjs`, 15 assertions).
+    - **Tier-B enrichment (cheap signals):** the strongest candidates get a budgeted
+      `/user` lookup (reuses `maybeFetchReach` — capped at 80/session, governed,
+      re-renders on completion) to fill `following` + `bio`, so the **openness** (two-way
+      account) and **niche-match** factors light up beyond the free followers-only signal.
+      Still deferred: the expensive `from:<handle>` per-candidate fetch for the
+      engagement-rate factor (the one factor that needs a real timeline pull).
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 
