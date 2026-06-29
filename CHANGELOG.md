@@ -160,6 +160,22 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
     unit-tested (`scripts/test-targets.mjs` 18 + the quality gate in `test-hygiene.mjs`).
     Deferred: an ambient fresh-post poller (the `selectPollBatch` budget invariant is
     already tested) + folding the learned per-target signal into ranking.
+  - **Suggested accounts** (`suggest-targets.ts`, deep-algo-research workflow + verified):
+    a "Suggested for you" list — the in-niche authors your last "Find spots" search
+    already cached (followers only, **zero extra API cost**), gated to the reach
+    sweet-spot and ranked by a `suggestionScore` where **every factor traces to a real
+    X-ranker mechanism** (sweet-spot out-of-network bridge; follow-graph openness as a
+    proxy for the +75 `reply_engaged_by_author` head; bio-niche overlap; predicted
+    engagement-rate per post; and the **only measured-on-our-data** signal — how your
+    replies to them have actually done). One-tap **+ Track**, a dismiss ×, and an honest
+    per-account reason. Honesty held to the bulletproof bar: the live 2026 ranker is
+    Grok-internal, so the byline says **"computed from what we can see, not guaranteed,"**
+    a missing signal is held neutral (never a penalty), openness is described as a
+    follow-graph *shape* ("a two-way account") not inferred behavior, and only Tier-2-
+    measured history earns the "✓ your replies here have done well" tag. Pure-lib
+    unit-tested (`scripts/test-suggest-targets.mjs`, 15 assertions). Deferred Tier B: a
+    budgeted enrichment pass (`/user` + `from:<handle>`) to fill the following/bio/
+    engagement factors that aren't in the free cache.
 - Resilience: clean **context-invalidation teardown**; **`trapKeys`** fix so X's
   keyboard shortcuts stop stealing focus from our inputs.
 

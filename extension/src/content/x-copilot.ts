@@ -6,6 +6,7 @@ import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDe
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, type TargetStore } from "../lib/targets";
+import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
@@ -1303,6 +1304,9 @@ const DOCK_CSS = `
 .tg-live { color:#6fcf7f; font-weight:600; }
 .tg-warn { font-size:10.5px; color:#e89a3c; margin-top:7px; line-height:1.4; }
 .tg-foot { font-size:9.5px; color:#a89a85; margin-top:8px; line-height:1.4; }
+.tg-sughead { font:600 11.5px -apple-system,system-ui,sans-serif; color:#cbb89c; margin:2px 0; }
+.tg-sug { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:.5px solid rgba(214,154,92,.08); }
+.tg-track { padding:5px 10px; font-size:11px; flex:0 0 auto; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; }
@@ -2689,7 +2693,28 @@ const targetDrafts = new Map<string, string>(); // generated reply draft per han
 const targetBusy = new Set<string>();           // handles currently fetching/drafting
 let targetAdding = false;
 let targetAddMsg = "";
+const dismissedSuggestions = new Set<string>(); // session-only (resets on reload) — "× not interested"
 function persistTargets(): void { safeSet({ [CONFIG.X_TARGETS_KEY]: targetStore }); }
+
+/** The ONLY measured-on-our-data factor: how our replies to this handle have actually done.
+ *  Neutral (undefined → 1.0 in the ranker) for a new candidate — never imputed. */
+function learnedMultForHandle(handle: string, agg: ReturnType<typeof aggregateAccounts>): number | undefined {
+  const a = Object.entries(agg.accounts).find(([k]) => k.toLowerCase() === handle.toLowerCase())?.[1];
+  if (!a) return undefined;
+  if (a.score != null) return Math.min(1.15, Math.max(0.9, 0.9 + 0.25 * (a.score / (agg.muObs || 1)))); // measured (Tier-2, nOut>=4)
+  if (a.nEff > 0) return Math.min(1.03, Math.max(0.97, 0.97 + 0.06 * (a.invest - agg.muInvest)));         // invest-only — near-inert, effort not payoff
+  return undefined;
+}
+
+/** Add a suggested account to the tracked list — reuses the cached follower count (no fetch). */
+function trackSuggestion(handle: string, followers: number): void {
+  if (!myFollowers || excludeFromTargets(followers, myFollowers)) return; // re-check the gate on the cached snapshot
+  const r = addTarget(targetStore, handle, followers, "auto", Date.now());
+  if (r.error) { toast(r.error); return; }
+  targetStore = { ...r.store, handle: targetStore.handle };
+  if (!targetStore.handle) void myHandle().then((h) => { targetStore = { ...targetStore, handle: h }; persistTargets(); });
+  persistTargets(); renderDock();
+}
 
 /** "your replies here…" — reuse the learning loop so the user sees which targets actually pay off. */
 function targetStanding(handle: string, agg: ReturnType<typeof aggregateAccounts>): { text: string; cls: string } {
@@ -2779,11 +2804,44 @@ function buildTargets(): HTMLElement {
   wrap.append(head);
 
   const locked = reputationStatus(repliesLastHour()).level === "easeoff"; // pace keystone (last-hour count, agrees with the pace chip)
+  const now = Date.now();
+  const agg = aggregateAccounts(replyLog.sent, now); // one pass → reused for suggestions + every target's standing
   const body = document.createElement("div"); body.className = "dl";
   if (locked) { const l = document.createElement("div"); l.className = "tg-warn"; l.style.margin = "0 0 4px"; l.textContent = "Past your pace line for this hour — targeting is paused for a few minutes so you don't read as automated."; body.append(l); }
-  if (!targetStore.targets.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Add your first target — an account 2–12× your size, squarely in your niche. Goobi shows their fresh posts and which of your replies land."; body.append(e); }
-  const now = Date.now();
-  const agg = aggregateAccounts(replyLog.sent, now); // one pass → reused for every target's standing
+
+  // Suggested for you — FREE: the in-niche authors your last "Find spots" search already cached in
+  // authorReach (followers only at Tier A), gated to the reach sweet-spot, ranked by suggestionScore.
+  const tracked = new Set(targetStore.targets.map((t) => t.handle.toLowerCase()));
+  const cands: SuggestionInput[] = [];
+  for (const [handle, r] of authorReach) {
+    const f = r.followers; if (f == null) continue;
+    const hl = handle.toLowerCase();
+    if (hl === selfHandle || tracked.has(hl)) continue;
+    if (excludeFromTargets(f, myFollowers) || !inReachBand(f, myFollowers)) continue;
+    cands.push({ handle, followers: f, following: r.following, learnedMult: learnedMultForHandle(handle, agg) });
+  }
+  const suggestions = rankSuggestions(cands, myFollowers, dismissedSuggestions, 5);
+  if (suggestions.length) {
+    const sh = document.createElement("div"); sh.className = "tg-sughead"; sh.textContent = "Suggested for you"; body.append(sh);
+    const by = document.createElement("div"); by.className = "tg-foot"; by.style.margin = "0 0 6px"; by.textContent = "From your last niche search — computed from what we can see, not guaranteed."; body.append(by);
+    for (const s of suggestions) {
+      const sc = document.createElement("div"); sc.className = "tg-sug";
+      sc.append(avatarChip(s.handle, lastSeenFor(s.handle)));
+      const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
+      const h = document.createElement("a") as HTMLAnchorElement; h.className = "ins-h"; h.textContent = "@" + s.handle; h.href = `https://x.com/${s.handle}`; h.target = "_blank"; h.rel = "noopener"; h.style.textDecoration = "none"; mid.append(h);
+      const why = document.createElement("div"); why.className = "ins-meta"; why.textContent = suggestionReason(s, myFollowers); mid.append(why);
+      sc.append(mid);
+      const track = document.createElement("button"); track.className = "scanb tg-track"; track.textContent = "+ Track"; track.disabled = locked; track.onclick = () => trackSuggestion(s.handle, s.followers); sc.append(track);
+      const dis = document.createElement("button"); dis.className = "tg-x"; dis.textContent = "×"; dis.title = "Not interested"; dis.onclick = () => { dismissedSuggestions.add(s.handle.toLowerCase()); renderDock(); }; sc.append(dis);
+      body.append(sc);
+    }
+  }
+
+  if (!targetStore.targets.length) {
+    const e = document.createElement("div"); e.className = "idea-empty";
+    e.textContent = suggestions.length ? "Track a suggestion above, or add an account 2–12× your size by @handle." : "Add a target — an account 2–12× your size in your niche. Tip: run “Find spots” on the Replies tab first and Goobi suggests reachable accounts here.";
+    body.append(e);
+  }
   for (const tg of targetStore.targets) {
     const c = document.createElement("div"); c.className = "tg-card";
     const top = document.createElement("div"); top.className = "tg-top";
