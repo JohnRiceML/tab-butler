@@ -2063,13 +2063,19 @@ function pickBest(tweets: TwttrTweet[], max: number): IdeaWinner[] {
   const base = tweets.filter((t) =>
     t.author && t.text && !t.isReply && t.text.length >= 40 &&
     !looksLikeRT(t.text) && isEnglish(t.text, t.lang) && !isBait(t.text));
-  const win = (days: number) => base.filter((t) => t.postedAt && now - t.postedAt < days * DAY_MS); // undated dropped — can't claim "now"
+  // Recency is a PREFERENCE, not a hard gate: prefer fresh, but on a quiet/evergreen niche fall
+  // back to everything usable rather than fail (the empty-pool "broader niche" bug).
+  const win = (days: number) => base.filter((t) => t.postedAt && now - t.postedAt < days * DAY_MS);
   let pool = win(21);
   if (pool.length < 6) pool = win(60);
+  if (pool.length < 3) pool = base; // recency emptied it (old/undated niche) → remix what we have
   const medUnknown = percentile(pool.filter((t) => !t.followers).map((t) => (t.likes ?? 0) + (t.reposts ?? 0)).sort((a, b) => a - b), 0.5);
   let scored = pool.map((t) => { const s = scoreWinner(t, medUnknown); return { t, eng: s.eng, score: s.score, shape: classifyShape(t.text) }; });
-  const floor = Math.max(10, percentile(scored.map((s) => s.eng).sort((a, b) => a - b), 0.40)); // 40th-pct floor, absolute min 10
-  scored = scored.filter((s) => s.eng >= floor);
+  // Engagement floor is also a PREFERENCE: apply it only if enough clear it, else keep the ranked
+  // pool (a quiet niche still gets ideas — better mediocre exemplars than a hard failure).
+  const floor = Math.max(10, percentile(scored.map((s) => s.eng).sort((a, b) => a - b), 0.40));
+  const floored = scored.filter((s) => s.eng >= floor);
+  if (floored.length >= 3) scored = floored;
   const keptTok: Set<string>[] = [];
   scored = scored.filter((s) => { const tk = ideaTokens(s.t.text); if (keptTok.some((k) => jaccard(tk, k) >= INPUT_DEDUP)) return false; keptTok.push(tk); return true; }); // drop reposted/screenshotted dupes
   scored.sort((a, b) => b.score - a.score);
@@ -2456,7 +2462,7 @@ async function generateIdeas() {
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
     const parsed = parseTimelineTweets(search.data);
     let winners = pickBest(parsed, 10);
-    if (parsed.length < 15) { // few RAW results → the provider likely rejected the operators; one raw retry (not when filtering just trimmed a full set)
+    if (parsed.length < 15 || !winners.length) { // few raw results (operators likely rejected) OR the operator query returned junk → one raw retry
       const raw2 = await runSearch(niche.slice(0, 120));
       if (raw2?.ok) { const w2 = pickBest(parseTimelineTweets(raw2.data), 10); if (w2.length > winners.length) winners = w2; }
     }
