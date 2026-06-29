@@ -16,7 +16,8 @@ local-first **tab manager** it grew out of. Made smart by Claude (BYO key).
 - **`tab-butler` CLI** — list / kill / Claude-clean localhost dev servers from the
   terminal.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
+See the [flow docs center](docs/flows/README.md) for how each feature works end to end,
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SYSTEM.md](docs/SYSTEM.md) for where things live, [docs/goobi.md](docs/goobi.md)
 for the mascot, and [CHANGELOG.md](CHANGELOG.md) for what shipped + what's next.
 

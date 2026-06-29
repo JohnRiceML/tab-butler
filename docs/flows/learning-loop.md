@@ -1,0 +1,46 @@
+# Learning loop — "Who you show up with"
+
+> A once-a-day, zero-cost-by-default loop that ranks the accounts you reply to by where you invest your effort, then upgrades those rows with the REAL likes/replies your replies earned as outcomes settle.
+
+**Surface:** Ambient on x.com, inside the Goobi content-script dock. It renders as a collapsible "Who you show up with" section (`renderInsightPanel`) in the open dock, sitting alongside its sibling "Who shows up for you" reciprocity panel. The daily scan fires automatically when you open the dock launcher.
+
+## What it does for the user
+It mirrors back the accounts you keep replying to through Goobi, ranked by reply investment (recency- and quality-weighted), so you can see who you actually show up with. As real engagement data settles, rows you do measurably well with earn a green "✓ above your avg / typical / below" badge backed by the actual likes/replies those replies pulled in. It also surfaces your own posts' X-reported view growth for the week and nudges you to spread out if you've been hammering one account. It is explicitly a mirror of YOUR effort and its measured payoff — never a claim that replying to someone causes them to engage back.
+
+## How the user uses it
+1. Open the Goobi dock on x.com (click the launcher). On open, `refreshOwnStats()` runs first, then `maybeRunDailyLearn()` fires the once-daily pass.
+2. Find the collapsed "Who you show up with" header. Its count chip reads "learning" until you've logged ~12 attributed replies, then "{N} top".
+3. Click the header to expand. If you're under the threshold you see "Still learning — {n}/12 replies logged." Otherwise you see ranked account rows.
+4. Each row shows the avatar, @handle, a reply-cadence arrow (↑/→/↓ — your cadence, not their response), a confidence pip meter (●●●○○), reply count / days-since-last / follower count, and an investment share bar.
+5. Rows with enough settled outcomes get a "✓ above your avg / ~ typical / ▼ below" badge (real measured engagement). Thin rows are tagged "thin".
+6. If you've concentrated ≥40% of recent replies on one account, a spread nudge appears. A footer restates that replying doesn't make people engage back.
+
+## How it works
+- **Trigger:** dock-open calls `maybeRunDailyLearn()` (`x-copilot.ts`). It bails if paused/invalidated/already-running/`twttrUnconfigured`, resolves `myHandle()`, resets the store on handle switch, and is gated by `dayKey` — it returns early if both `scanDay` and `measureDay` equal today.
+- **Pass A — own-post trend (zero API):** consumes the warm `X_MY_POSTS_KEY` momentum cache (populated by `refreshOwnStats`, never double-fetched here). `foldOwnDelta` (`learn-stats.ts`) computes per-post POSITIVE view/like/repost/reply deltas keyed by post id (new posts seed a baseline contributing 0), writes a `DailySnap` into `learn.snaps[day]`, advances `prevById`, sets `scanDay`, and prunes snaps older than 60 days. `weeklyViewGrowth()` sums the last 7 days of snaps for the "+N views this week" line.
+- **Pass B — Tier-2 measure-pass (`runMeasurePass`):** resolves/caches the user's `rest_id` via a `TWTTR_GET user` call, then fetches up to 40 recent replies via `TWTTR_GET user-replies-v2` (RapidAPI, NOT Claude — gated behind the user's own twttr key; on `no-twttr-config` it sets `twttrUnconfigured` and stops). `parseTimelineTweets` filters to actual replies. `matchOutcomes(fetched, replyLog.sent)` (`learn-stats.ts`) maps each fetched tweet back to a stored `SentRecord` by token-Jaccard similarity (≥0.6) within a 72h window, requiring a unique winner (≥0.15 margin over the runner-up) — ambiguous matches are dropped. Matched records get `outcome = { at, likes, replies, frozen }`, where `frozen` is true once the reply is ≥`SETTLE_DAYS` (2 days) old; frozen outcomes are never re-touched. `restId` is cached only when the fetch actually returned replies. Sets `measureDay`.
+- **Ranking (live, idempotent):** `renderInsightPanel` recomputes everything each render from the immutable `replyLog.sent` log. `aggregateAccounts` (`learn-stats.ts`) groups by author, computes a recency-weighted (30-day half-life) shrunken-to-global-mean `invest` score (Tier-1) and, when `nOut >= N_MIN_OUT` (4), a reach-normalized measured `score` (Tier-2). `rankAccounts` ranks by measured score (else invest), gates accounts below `N_MIN` (3 effective replies) into a separate "still learning" bucket, and returns the top 5. `concentration` and `cadenceTrend` add the spread nudge and per-row arrow.
+- **No Claude calls anywhere in this loop.** The only network calls are the two best-effort RapidAPI fetches in Pass B.
+- **Persistence:** `LearnStore` (`{ handle, scanDay, measureDay, restId, prevById, snaps }`) is saved under `X_LEARN_STATS_KEY` ("xLearnStats") via `safeSet`. Measured outcomes are written into the reply log under `X_REPLY_LOG_KEY` ("xReplyLog"). Per-account aggregates are NOT persisted — they're derived live. Boot rehydrates `learn` from storage (only if the stored handle is set); `chrome.storage.onChanged` syncs `learn` from another tab's scan and re-renders.
+
+## What is honest about it / limits
+- **Tier-1 "investment" is EFFORT, not payoff** — "who you show up with," explicitly never "who pays off." It's computed from data already logged (zero API cost).
+- **Tier-2 measured `score` is the only real do-well-with signal**, and it's never imputed: it stays `undefined` until `nOut >= 4` settled outcomes exist. Below that, no ✓ badge appears.
+- **Honesty is structural:** small samples are shrunk toward the global mean (`K=5`) so one lucky reply can't crown an account; thin accounts (`nEff < 3`) are gated out of the ranking into "still learning"; rows with `< 3` replies are tagged "thin"; the global view stays "learning" under 12 attributed replies.
+- **No causation claim:** the footer and tooltips state outright that replying to someone doesn't make them engage back. The cadence arrow tooltip says "your reply cadence with them — not their response." The follower tooltip says it's "their follower count when you replied — not a reach estimate." Confidence pips are "how much you've done with them — not a prediction."
+- **The concentration nudge only ever pushes toward MORE variety** (anti single-target-bot) — never "double down."
+- **Match-back is conservative:** ambiguous text matches are dropped, never guessed; outcomes settle (freeze) after 2 days so late engagement isn't perpetually re-counted.
+- **What it cannot know / does not do:** likes/reposts on inbound notifications are deferred as lossy (sibling panel); the trend only reflects X-reported view growth on your own posts; `cadenceTrend` returns null when the reply-log FIFO may have evicted older days (`logTruncated`). The keystone restraint here is that the whole loop is read-only measurement — it never auto-replies or paces for you; it mirrors effort and measured payoff.
+
+## Key files
+- `extension/src/lib/learn-stats.ts` — the pure, unit-tested math: `foldOwnDelta`, `aggregateAccounts`, `rankAccounts`, `concentration`, `cadenceTrend`, `matchOutcomes`, `jaccard`, all tunable constants, and the RESERVED (uncalled) `decayAccounts`/`pruneAccounts`.
+- `extension/src/content/x-copilot.ts` — all the I/O: `maybeRunDailyLearn`, `runMeasurePass`, `weeklyViewGrowth`, `renderInsightPanel`, the `LearnStore` type + persistence, `SentRecord.outcome`, and the boot/`onChanged` wiring.
+- `extension/src/lib/config.ts` — `X_LEARN_STATS_KEY` ("xLearnStats") and `X_REPLY_LOG_KEY` ("xReplyLog") storage keys.
+
+## Before you change it
+- **Aggregates are recomputed live every render** from the immutable reply log — there is NO persisted accumulator. `learn-stats.ts:208` explicitly marks `decayAccounts`/`pruneAccounts` (and the `DECAY`/`ACCT_MAX` constants) as RESERVED and uncalled; don't wire them in without switching to a stored, mutated table. Adding a stateful accumulator would break the idempotency guarantee.
+- **`learn-stats.ts` is pure and unit-tested** (`scripts/test-learn-stats.mjs`) — no chrome/DOM/fetch. Keep I/O in `x-copilot.ts`. Changing constants (`HALF_LIFE_DAYS`, `K`, `N_MIN`, `N_MIN_OUT`, `MATCH_SIM`, etc.) is the intended tuning surface, but the comment notes they're "reasoned, not yet calibrated."
+- **The two RapidAPI fetches are budget-sensitive and best-effort.** Pass A deliberately consumes only the cache `refreshOwnStats` warms (run first on dock-open) so the `from:<handle>` fetch isn't double-billed. The `restId` is cached only after a fetch proves it works (returned replies), so a bad/transient resolve re-resolves next day rather than freezing. Both passes are `dayKey`-gated and re-read the store after each `await` to survive multi-tab races.
+- **`frozen` outcomes are settled and must never be re-touched** (`runMeasurePass` skips them); the 2-day `SETTLE_DAYS` window is what makes a measured score stable.
+- **`matchOutcomes`' unique-winner margin (0.15) is load-bearing** — it prevents two similar replies to DIFFERENT accounts from cross-attributing. Don't loosen it casually.
+- **Don't break the honesty guards:** the `N_MIN`/`N_MIN_OUT`/`GLOBAL_THIN`/`ROW_THIN` gates, the shrinkage, and the no-causation copy in `renderInsightPanel` are the product's core promise, not incidental.

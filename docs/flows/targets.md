@@ -1,0 +1,59 @@
+# Target accounts + suggestions
+> Goobi's "punch-up" growth mode: track 10-20 reachable bigger accounts in your niche, find their freshest post, and draft a value-add reply to comment early and borrow their crowd — draft-only, pace-gated.
+
+**Surface:** A dedicated dock mode (`dockView === "targets"`) on the ambient Goobi panel injected on x.com, rendered by `x-copilot.ts:buildTargets()` and appended in `renderDock` (line 3149). It sits alongside the Replies/Find-spots and Ideas modes. Follower-count gating depends on the user's own size set in the Goobi side panel.
+
+## What it does for the user
+It points you at accounts roughly 2-12× your follower count in your niche — big enough to bridge you to a new audience, small enough that your reply won't be buried — and helps you reply EARLY, when X surfaces the first few replies the most. For each tracked account it pulls the freshest original post, shows how old it is, drafts a reply in your voice, and tells you honestly how your past replies to that account have actually performed. It deliberately never posts anything: it opens the post so you review and reply yourself, and it pauses when you've replied too much this hour.
+
+## How the user uses it
+1. Open the Goobi dock on x.com and switch to the Targets mode. If you haven't set your follower count, you see a gate telling you to add it in the side panel first.
+2. Read the "Suggested for you" list — in-niche accounts cached from your last "Find spots" search, each with an honest one-line reason ("~7× your size · in your niche · a two-way account"). Click **+ Track** to add one, or **×** to dismiss it for the session.
+3. Or type an `@handle` into the "Track" box and press Enter. Goobi verifies the account exists and is in band; if it's too big it tells you so ("@x (250K) is too big to reach from your size — aim for accounts 2–12× you").
+4. For each tracked account, read its standing line ("✓ your replies here beat your average (5)" / "no replies here yet"), then click **Find a fresh post →**.
+5. Review the surfaced post and its freshness label ("3m old · reply while it's live"). Click **Draft a reply ↗**.
+6. Edit the draft in the textarea (a quality warning shows if it reads as empty praise). Click **Open post to reply ↗** (opens the post in a new tab so you reply natively) or **Copy**.
+7. If you've passed your hourly pace line, the whole mode shows a paused banner and the Track/Find/Draft buttons are disabled for a few minutes.
+
+## How it works
+The mode is built every render by `x-copilot.ts:buildTargets()`; state lives in module-level maps and is persisted to `chrome.storage.local` under `CONFIG.X_TARGETS_KEY` via `persistTargets()`.
+
+**Candidate pool (FREE, Tier A).** No fetch of its own — it reuses the `authorReach` Map (`x-copilot.ts:1436`), which is seeded for free when "Find spots" runs (line 492: `authorReach.set(...)` from each search-discovered author's follower count). `buildTargets()` walks `authorReach`, drops self / already-tracked / out-of-band handles via `targets.ts:excludeFromTargets()` + `inReachBand()`, and builds `SuggestionInput`s. Each gets `learnedMult` from `learnedMultForHandle()` (the only signal measured on the user's own reply data, from `aggregateAccounts(replyLog.sent)`).
+
+**Tier-B enrichment (budgeted).** For the strongest ≤8 candidates still missing `following`, `buildTargets()` calls `maybeFetchReach()` (line 2843). That queues a `TWTTR_GET path:"user"` call (RapidAPI X-data, via the service worker) at `REACH_CONCURRENCY = 4`, capped at `REACH_CAP = 80` lookups/session, with a `REACH_FAIL_TTL = 600_000` (10 min) back-off on misses and a budget-error path that frees the cap slot without spending network. On completion it stores `following` + `bio` and re-renders, so openness + niche reasons light up. No Claude here.
+
+**Ranking + reasons.** `suggest-targets.ts:rankSuggestions()` scores via `suggestionScore()` — a multiplicative sort key (reachFit × openness × nicheMatch × engNorm × learnedMult), missing factors held neutral at 1.0, never displayed — and returns the top 5 minus `dismissedSuggestions`. Only `suggestionReason()` text is shown.
+
+**Add path.** Suggestions: `trackSuggestion()` re-checks the gate on the cached count and calls `targets.ts:addTarget()` (no fetch). Manual: `addTargetByHandle()` does a live `TWTTR_GET user` lookup (`intent:true`), re-runs `excludeFromTargets()`, then `addTarget()`. Both stamp the owner handle so the list can't bleed across accounts; `ensureTargetOwner()` (called on account-switch, line 3003) resets the store via `freshStore()` if the signed-in handle changed.
+
+**Find post.** `findTargetPost()` runs a `TWTTR_GET search-v3` `from:<handle>` Latest query (count 10), filters to non-reply originals authored by that handle, takes the newest by `postedAt`, and caches it in `targetPosts` (session map). No Claude.
+
+**Draft.** `draftTargetReply()` sends a `DRAFT_REPLY` message → service worker → `claude-client.ts:draftReply()`, which calls **`claude-sonnet-4-6`** (system `X_DRAFT_SYSTEM`, `maxTokens: 400`, plain-text not JSON) using the user's saved voice. The result is cached in `targetDrafts`. `no-key` surfaces a toast asking for the Anthropic key.
+
+**Pace lock.** `const locked = reputationStatus(repliesLastHour()).level === "easeoff"` (line 2823). `repliesLastHour()` counts Goobi-sent replies in the trailing hour; `reply-hygiene.ts:reputationStatus()` returns `easeoff` at `REPLY_HARD_PER_HOUR = 30` (X's automation-detection neighborhood). When locked, a banner shows and Track/Find/Draft buttons are disabled.
+
+## What is honest about it / limits
+- **MEASURED on our own data:** only `learnedMult` / `targetStanding()` — how the user's actual replies to a handle performed (from `replyLog`, requires nOut≥4 for a real score, else "still learning"). Everything else is a PRIOR or PROXY.
+- **INFERRED / proxy:** the ranking weights are a directional prior from the 2023 open-source X ranker, NOT the live 2026 Grok ranker (undisclosed) — stated in both files' headers and in the UI ("computed from what we can see, not guaranteed"). `openness` is the follow-graph shape (following/followers ratio), explicitly described as "a two-way account," never "replies to people" — a high follow-back is just as often growth-farming. `nicheMatch` is a bio-keyword proxy for audience overlap (true mutual-follow jaccard isn't fetchable).
+- **Cannot know / does not do:** `engRate` is RESERVED — the field exists but is never populated (no `from:<handle>` engagement fetch is wired), so `engNorm` stays 1.0 and "high engagement for its size" never currently fires. Follower counts are cached and age, so size is shown as banded multiples ("~7×"), never false precision.
+- **Membership gate, not just ranking:** untouchable mega-accounts (or unclassifiable ones) are excluded from the list entirely via `excludeFromTargets()`, re-checked at add time AND on refresh — grounded in the research that annoying a big account (mute/block/report ≈ -74 in the 2023 dump) SHRINKS your reach.
+- **Draft-only keystone:** nothing posts automatically. The draft opens the post in a new tab for the user to review and reply natively; the footer states this and warns "Goobi can't count replies you post directly on X, so keep your own pace."
+- **Pace keystone:** the `easeoff` lock pauses the whole mode to keep the user under the automation-detection threshold.
+
+## Key files
+- `extension/src/lib/targets.ts` — pure, unit-tested membership/band logic: `excludeFromTargets`, `inReachBand`, `reachMultipleLabel`, `addTarget`/`removeTarget`, `freshnessLabel`, the `TARGET_CAP`/`TARGET_BAND`/`ABS_CEILING_BASE` constants, and the (not-yet-used) `selectPollBatch` poll-budget primitive.
+- `extension/src/lib/suggest-targets.ts` — pure, unit-tested suggestion ranking: `suggestionScore`, `rankSuggestions`, `suggestionReason`, `sizeBand`.
+- `extension/src/content/x-copilot.ts` — all DOM/chrome/fetch/state: `buildTargets`, `addTargetByHandle`, `trackSuggestion`, `findTargetPost`, `draftTargetReply`, `targetStanding`, `learnedMultForHandle`, `ensureTargetOwner`, the `authorReach` pool + `maybeFetchReach`/`pumpReach` Tier-B enrichment, the pace lock.
+- `extension/src/lib/reply-hygiene.ts` — `reputationStatus` + `REPLY_HARD_PER_HOUR` (the pace gate), `replyQualityWarning`.
+- `extension/src/lib/claude-client.ts` — `draftReply` (claude-sonnet-4-6, 400 tokens).
+- `extension/src/background/service-worker.ts` — handles `TWTTR_GET` (RapidAPI X-data) and `DRAFT_REPLY`.
+
+## Before you change it
+- **The pure logic is unit-tested; the wiring is NOT.** `targets.ts` → `scripts/test-targets.mjs`, `suggest-targets.ts` → `scripts/test-suggest-targets.mjs`. Everything in `x-copilot.ts` (the candidate pool, enrichment budget, pace lock, render) has no unit coverage — the gate is `tsc` + build + the test scripts.
+- **The suggestion candidate pool is entirely a by-product of "Find spots."** If `authorReach` is empty (user never ran a niche search), the "Suggested for you" list is empty by design — the empty-state copy points users to run Find spots first. Don't add a standalone fetch to populate it without weighing the budget.
+- **Budget invariants are load-bearing:** `REACH_CAP = 80`, `REACH_CONCURRENCY = 4`, `REACH_FAIL_TTL`, and the `slice(0, 8)` enrichment cap bound RapidAPI cost. The `budget-` error path intentionally decrements `reachLookups` to free the slot. Don't loosen these casually.
+- **Two gating layers are separate on purpose:** `excludeFromTargets` (hard membership — can this account be on the list at all) vs `suggestionScore`/`inReachBand` (ranking/fit). Re-check `excludeFromTargets` on any cached snapshot before adding (`trackSuggestion` does).
+- **Owner-stamping prevents cross-account bleed:** every store mutation preserves/sets `targetStore.handle`; init (line 3232) and `ensureTargetOwner` reset to `freshStore` when the signed-in handle differs. Keep this if you touch persistence.
+- **`engRate` is a deliberate stub, not a bug** — wiring it would require a per-handle engagement fetch and would change `engNorm` + unlock the "high engagement" reason; treat as a feature decision, not a fix.
+- **The pace lock reads Goobi-sent replies only** (`repliesLastHour()` from `replyLog`), which is why the draft footer warns the user to pace native replies too — Goobi can't see those.
+- **Drafts use Sonnet (4-6), the costliest call in the flow.** Find-post and reach lookups are RapidAPI, not Claude. The draft is the only paid-LLM action here.
