@@ -4,7 +4,7 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
-import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, type Band, type Shape } from "../lib/idea-quality";
+import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, bandHiFor, type TargetStore } from "../lib/targets";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
@@ -2054,8 +2054,9 @@ function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : o
  *  weight — follower-normalized engagement against a SIZE-TIERED expected rate (idea-quality.ts
  *  `expectedRate`: ~4% sub-1k … ~0.65% megas, floored at 8) so a small account's genuine breakout
  *  beats a mega-account's floor post AND an ordinary small-account post isn't mistaken for one.
- *  ≤2 per author so it's not one voice. (Tiers are a published-benchmark prior; a live RapidAPI
- *  per-niche calibration would refine the numbers without changing the shape.) */
+ *  ≤2 per author so it's not one voice. (Tiers START from a published-benchmark prior; `calibrateRates`
+ *  then tunes them to the user's niche from the posts each generation already fetched — free, no extra
+ *  API call, sparse tiers keep the default.) */
 type IdeaWinner = TwttrTweet & { shape: Shape };
 /** Pick the over-performing posts the model is allowed to remix — the quality ceiling. Drops
  *  replies/RT-text/non-English/engagement-bait, keeps a recent window (21d → 60d fallback),
@@ -2476,6 +2477,7 @@ async function generateIdeas() {
     if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
     const parsed = parseTimelineTweets(search.data);
+    setRateTable(calibrateRates(parsed)); // tune the size-tiered baseline to THIS niche from the posts just fetched (free — no new API call; sparse tiers keep the published default)
     let winners = pickBest(parsed, 10);
     if (parsed.length < 15 || !winners.length) { // few raw results (operators likely rejected) OR the operator query returned junk → one raw retry
       const raw2 = await runSearch(niche.slice(0, 120));

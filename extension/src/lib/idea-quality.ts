@@ -72,15 +72,45 @@ export function classifyShape(text: string): Shape {
  *  Published 2025-26 X benchmarks: small accounts run ~10× hotter than megas, so a single flat
  *  constant (the old 0.3%) under-divided small accounts and over-credited big ones — making an
  *  ordinary small-account post look like a breakout, the exact opposite of this picker's job.
- *  Tier mid-points are a PUBLISHED-DATA prior (sub-1k ~3-6%, 100k-500k ~0.5-1.5%, 500k+ ~0.3-1%);
- *  a live RapidAPI calibration — median like-rate per tier on the user's own niche — would refine
- *  the exact numbers without changing the shape. */
-export function expectedRate(followers: number): number {
-  if (followers < 1_000) return 0.04;     // ~4%   (sub-1k run hot)
-  if (followers < 10_000) return 0.025;   // ~2.5%
-  if (followers < 100_000) return 0.015;  // ~1.5%
-  if (followers < 500_000) return 0.01;   // ~1%
-  return 0.0065;                          // ~0.65% (megas)
+ *  The tier mid-points below are a PUBLISHED-DATA prior (sub-1k ~3-6%, 100k-500k ~0.5-1.5%, 500k+
+ *  ~0.3-1%); `calibrateRates` refines them to the user's OWN niche from posts already fetched. */
+export type RateTable = { lt1k: number; lt10k: number; lt100k: number; lt500k: number; mega: number };
+export const DEFAULT_RATES: RateTable = { lt1k: 0.04, lt10k: 0.025, lt100k: 0.015, lt500k: 0.01, mega: 0.0065 };
+const RATE_MIN = 0.002, RATE_MAX = 0.12; // sane like-rate bounds — a calibrated tier can't go degenerate
+
+// The ACTIVE baseline. Defaults to the published benchmarks; `setRateTable` swaps in a per-niche
+// calibration. Module-level so scoreWinner/isBreakout pick it up without threading a param everywhere.
+let activeRates: RateTable = DEFAULT_RATES;
+export function setRateTable(t: RateTable | null): void { activeRates = t ?? DEFAULT_RATES; }
+function tierKey(followers: number): keyof RateTable {
+  if (followers < 1_000) return "lt1k";
+  if (followers < 10_000) return "lt10k";
+  if (followers < 100_000) return "lt100k";
+  if (followers < 500_000) return "lt500k";
+  return "mega";
+}
+export function expectedRate(followers: number): number { return activeRates[tierKey(followers)]; }
+
+/** Refine the size-tiered baseline to the user's OWN niche, from posts we already fetched (FREE — no
+ *  new API call). Per tier: the MEDIAN like-rate of that tier's posts, but ONLY when the tier holds
+ *  ≥ minPerTier samples (a sparse tier keeps the published default rather than trust a noisy median),
+ *  clamped to sane bounds. Worst case = the published defaults (today's behavior); upside = a tier
+ *  the niche actually populates is calibrated to its real norm. Pure — caller applies via setRateTable. */
+export function calibrateRates(samples: { followers?: number; likes?: number; reposts?: number }[], minPerTier = 6): RateTable {
+  const buckets: Record<keyof RateTable, number[]> = { lt1k: [], lt10k: [], lt100k: [], lt500k: [], mega: [] };
+  for (const s of samples) {
+    const f = s.followers ?? 0; if (f <= 0) continue;
+    buckets[tierKey(f)].push(((s.likes ?? 0) + (s.reposts ?? 0)) / f);
+  }
+  const out: RateTable = { ...DEFAULT_RATES };
+  (Object.keys(buckets) as (keyof RateTable)[]).forEach((k) => {
+    const xs = buckets[k].sort((a, b) => a - b);
+    if (xs.length < minPerTier) return;                                  // sparse tier → keep the published default
+    const mid = xs.length >> 1;
+    const med = xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;   // true median (avg the two central for even N)
+    out[k] = Math.min(RATE_MAX, Math.max(RATE_MIN, med));
+  });
+  return out;
 }
 /** A post's "punched above its weight" score. Follower-normalized against the size-tiered expected
  *  rate when reach is known; else measured against the median of the unknown-reach subset so it

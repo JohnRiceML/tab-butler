@@ -94,6 +94,21 @@ ok(m.jaccard(m.ideaTokens("ship daily and measure what sticks"), m.ideaTokens("s
   ok(m.isBreakout({ likes: 100, followers: 5000 }) === false, "100 likes on 5k (below the tier norm) is not a breakout");
   ok(m.isBreakout({ likes: 50 }) === false, "unknown reach can't be called a size-relative breakout");
 }
+// ---- per-niche calibration of the size baseline (free, from already-fetched posts) ----
+{
+  const samples = [];
+  for (let i = 0; i < 8; i++) samples.push({ followers: 5000, likes: 250 }); // 8 posts @ 5% in the 1k-10k tier
+  samples.push({ followers: 50000, likes: 500 });                            // 1 post in the 10k-100k tier (sparse)
+  const t = m.calibrateRates(samples);
+  ok(Math.abs(t.lt10k - 0.05) < 1e-9, "a well-sampled tier calibrates to its median like-rate");
+  ok(t.lt100k === m.DEFAULT_RATES.lt100k && t.lt1k === m.DEFAULT_RATES.lt1k, "a sparse/empty tier keeps the published default (worst case = today's behavior)");
+  const viral = Array.from({ length: 8 }, () => ({ followers: 1000, likes: 5000 })); // 500% rate
+  ok(m.calibrateRates(viral).lt10k === 0.12, "a degenerate tier is clamped to the sane max");
+  m.setRateTable({ lt1k: 0.06, lt10k: 0.03, lt100k: 0.02, lt500k: 0.012, mega: 0.007 });
+  ok(m.expectedRate(500) === 0.06, "setRateTable swaps the active baseline expectedRate reads");
+  m.setRateTable(null);
+  ok(m.expectedRate(500) === 0.04, "reset restores the published default");
+}
 
 console.log(fail === 0 ? `\n✓ post-ideas eval: ${pass} assertions passed` : `\n✗ post-ideas eval: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

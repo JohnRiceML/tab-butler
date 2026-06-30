@@ -264,6 +264,15 @@ post genuinely over-performed for its size (≥2× its tier norm); `bandFor`'s n
 gate caps a non-breakout top source at **Solid** and narrates it honestly ("only modestly
 out-performed"). The pool-*quality* sibling of the earlier pool-*size* haircut. +7 eval (37 total).
 
+**Post-ideas — per-niche calibration of the engagement baseline (2026-06-30)** — the passive,
+zero-cost version of the audit's "live X-API calibration." `calibrateRates` computes the median
+like-rate per follower-tier from the niche posts each generation **already fetched** (no new API
+call) and `setRateTable` swaps it into the baseline `expectedRate` reads — so the size-fairness
+math is tuned to the user's *actual* niche, not just published benchmarks. Conservative by design:
+a tier needs ≥6 samples to override (else it keeps the published default), rates are clamped to
+sane bounds, and the worst case is exactly today's behavior. Reviewed (no leakage — the table is
+consumed only inside the Ideas flow); +5 eval assertions (42 total).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
