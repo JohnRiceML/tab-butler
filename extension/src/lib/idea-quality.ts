@@ -68,12 +68,27 @@ export function classifyShape(text: string): Shape {
 }
 
 // ---------- breakout scoring (RANK-only; never shown as an absolute multiple) ----------
-/** A post's "punched above its weight" score. Follower-normalized when reach is known; else
- *  measured against the median of the unknown-reach subset so it competes on its own scale. */
+/** The "normal" engagement rate (engagement / followers) a post must BEAT, by audience size.
+ *  Published 2025-26 X benchmarks: small accounts run ~10× hotter than megas, so a single flat
+ *  constant (the old 0.3%) under-divided small accounts and over-credited big ones — making an
+ *  ordinary small-account post look like a breakout, the exact opposite of this picker's job.
+ *  Tier mid-points are a PUBLISHED-DATA prior (sub-1k ~3-6%, 100k-500k ~0.5-1.5%, 500k+ ~0.3-1%);
+ *  a live RapidAPI calibration — median like-rate per tier on the user's own niche — would refine
+ *  the exact numbers without changing the shape. */
+export function expectedRate(followers: number): number {
+  if (followers < 1_000) return 0.04;     // ~4%   (sub-1k run hot)
+  if (followers < 10_000) return 0.025;   // ~2.5%
+  if (followers < 100_000) return 0.015;  // ~1.5%
+  if (followers < 500_000) return 0.01;   // ~1%
+  return 0.0065;                          // ~0.65% (megas)
+}
+/** A post's "punched above its weight" score. Follower-normalized against the size-tiered expected
+ *  rate when reach is known; else measured against the median of the unknown-reach subset so it
+ *  competes on its own scale. */
 export function scoreWinner(t: { likes?: number; reposts?: number; followers?: number }, medianUnknownEng: number): { eng: number; score: number } {
   const eng = (t.likes ?? 0) + (t.reposts ?? 0);
   const f = t.followers ?? 0;
-  const rate = f > 0 ? eng / Math.max(8, f * 0.003) : eng / (medianUnknownEng || eng || 1); // ~0.3% like-rate baseline
+  const rate = f > 0 ? eng / Math.max(8, f * expectedRate(f)) : eng / (medianUnknownEng || eng || 1);
   return { eng, score: rate * Math.log10(eng + 10) }; // log keeps absolute pull mattering, not just rate
 }
 export function percentile(sorted: number[], p: number): number {

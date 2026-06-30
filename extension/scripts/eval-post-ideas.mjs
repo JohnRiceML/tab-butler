@@ -45,6 +45,16 @@ ok(m.classifyShape("consistency beats intensity") === "oneLiner", "one-liner");
   const b = m.scoreWinner({ likes: 10, reposts: 0 }, 20).score;
   ok(a > b, "unknown-reach posts rank on their own engagement scale");
 }
+// ---- size-tiered engagement baseline (small accounts run hotter; not a flat 0.3%) ----
+{
+  ok(m.expectedRate(500) === 0.04 && m.expectedRate(5000) === 0.025 && m.expectedRate(50000) === 0.015
+     && m.expectedRate(200000) === 0.01 && m.expectedRate(2_000_000) === 0.0065, "expected-rate baseline is size-tiered (sub-1k hottest, megas coldest)");
+  ok(m.expectedRate(500) > m.expectedRate(2_000_000), "a small account's 'normal' rate is higher than a mega's");
+  // The fix: an ordinary-for-its-size small post no longer reads as a breakout that beats a real large breakout.
+  const smallNormal = m.scoreWinner({ likes: 125, followers: 5000 }, 0).score;   // 2.5% = exactly the tier norm
+  const largeBreakout = m.scoreWinner({ likes: 12000, followers: 200000 }, 0).score; // 6% = 6× the 1% tier norm
+  ok(largeBreakout > smallNormal, "a genuine large breakout outranks an ordinary-for-its-size small post (flat-constant bug fixed)");
+}
 ok(m.percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.4) === 5, "percentile floor picks the 40th-pct value");
 
 // ---- input de-dupe ----

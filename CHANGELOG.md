@@ -248,6 +248,15 @@ changes it flagged are deferred to data-driven validation, not shipped as more p
   doc now describes the real (best-effort, key-gated, ≥4-outcome) loop and notes the replies
   ranker doesn't yet consume it.
 
+**Post-ideas ranking — size-tiered engagement baseline (2026-06-30)** — acted on the audit's
+clearest data-backed finding. `scoreWinner` divided engagement by a flat 0.3% like-rate, but
+published 2025-26 X benchmarks show small accounts run ~10× hotter than megas — so the flat
+constant under-divided small accounts and mistook an *ordinary* small-account post for a
+breakout (the opposite of what the picker is for). Replaced with `expectedRate(followers)`, a
+size-tiered baseline (~4% sub-1k → ~0.65% megas) derived from those published benchmarks;
+structured so a live RapidAPI per-niche calibration can refine the numbers without changing the
+shape. The breakout-vs-floor property is preserved; +3 eval assertions (30 total).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

@@ -2051,11 +2051,11 @@ function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : o
 /* ---------- post ideas (remix what's overperforming in your niche) ---------- */
 
 /** The best PATTERNS to remix: recent original niche posts that punch above their
- *  weight — follower-normalized engagement (eng / (followers·0.003), a ~0.3% like-rate baseline,
- *  floored at 8; see scoreWinner) so a small account's genuine breakout beats a mega-account's floor
- *  post. ≤2 per author so it's not one voice. (The flat 0.3% is mis-shaped across sizes — the real
- *  like-rate runs several× higher for sub-1K accounts than for megas — so a per-size-band baseline is
- *  the right fix, gated on measuring per-tier rates; tracked as a measure-first item.) */
+ *  weight — follower-normalized engagement against a SIZE-TIERED expected rate (idea-quality.ts
+ *  `expectedRate`: ~4% sub-1k … ~0.65% megas, floored at 8) so a small account's genuine breakout
+ *  beats a mega-account's floor post AND an ordinary small-account post isn't mistaken for one.
+ *  ≤2 per author so it's not one voice. (Tiers are a published-benchmark prior; a live RapidAPI
+ *  per-niche calibration would refine the numbers without changing the shape.) */
 type IdeaWinner = TwttrTweet & { shape: Shape };
 /** Pick the over-performing posts the model is allowed to remix — the quality ceiling. Drops
  *  replies/RT-text/non-English/engagement-bait, keeps a recent window (21d → 60d fallback),
