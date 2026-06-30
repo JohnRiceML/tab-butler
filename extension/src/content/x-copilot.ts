@@ -4,7 +4,7 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
-import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, type Band, type Shape } from "../lib/idea-quality";
+import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, bandHiFor, type TargetStore } from "../lib/targets";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
@@ -2506,7 +2506,8 @@ async function generateIdeas() {
         if (w) rank = winners.indexOf(w);
       }
       const anchor = rank >= 0 ? 1 - rank / Math.max(1, winners.length - 1) : 0; // #1 winner → 1.0
-      const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w, winners.length); // poolSize → thin-pool confidence haircut
+      const sourceStrong = w && (w.followers ?? 0) > 0 ? isBreakout(w) : undefined; // real over-performer vs its size, not just rank #1
+      const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w, winners.length, sourceStrong); // poolSize → thin-pool haircut; sourceStrong → Strong needs a real breakout
       return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why,
         band, basis, sortScore: sort,
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,

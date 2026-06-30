@@ -82,6 +82,17 @@ ok(m.jaccard(m.ideaTokens("ship daily and measure what sticks"), m.ideaTokens("s
   ok(m.bandFor(1, 3, true, 2).band === "Solid", "a two-post pool caps a #1 + strong-hook idea at Solid");
   ok(m.bandFor(0.9, 3, true, 4).band === "Strong", "a healthy pool (>=4 winners) still reaches Strong");
   ok(/thin signal/.test(m.bandFor(1, 3, true, 1).basis) && /thin signal/.test(m.bandFor(1, 3, true, 2).basis), "a thin pool (1 OR 2 posts) is always labeled a thin signal — even a 2-post pool at its Solid cap");
+  // Strong requires a REAL breakout source, not just rank #1 of a weak pool
+  ok(m.bandFor(0.9, 3, true, 4, true).band === "Strong", "a healthy pool whose top source genuinely over-performed → Strong");
+  ok(m.bandFor(0.9, 3, true, 4, false).band === "Solid", "the #1 of a healthy pool that only weakly over-performed caps at Solid, not Strong");
+  ok(/modestly out-performed/.test(m.bandFor(0.9, 3, true, 4, false).basis), "a weak-but-top source is narrated honestly, not as a top breakout");
+  ok(m.bandFor(0.9, 3, true, 4).band === "Strong", "unknown source strength (omitted) keeps the rank-based Strong (back-compat)");
+}
+// ---- isBreakout: genuine over-performance for size, not just rank ----
+{
+  ok(m.isBreakout({ likes: 300, followers: 5000 }) === true, "300 likes on 5k (2.4× the ~2.5% tier norm) is a real breakout");
+  ok(m.isBreakout({ likes: 100, followers: 5000 }) === false, "100 likes on 5k (below the tier norm) is not a breakout");
+  ok(m.isBreakout({ likes: 50 }) === false, "unknown reach can't be called a size-relative breakout");
 }
 
 console.log(fail === 0 ? `\n✓ post-ideas eval: ${pass} assertions passed` : `\n✗ post-ideas eval: ${fail} failed, ${pass} passed`);

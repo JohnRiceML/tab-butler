@@ -91,6 +91,16 @@ export function scoreWinner(t: { likes?: number; reposts?: number; followers?: n
   const rate = f > 0 ? eng / Math.max(8, f * expectedRate(f)) : eng / (medianUnknownEng || eng || 1);
   return { eng, score: rate * Math.log10(eng + 10) }; // log keeps absolute pull mattering, not just rate
 }
+export const BREAKOUT_RATE = 2; // a "real" over-performer beats its size-tier expected rate by ≥2×
+/** Did this post GENUINELY over-perform for its audience size (a real breakout), vs merely ranking
+ *  #1 of a weak pool? Used to gate the "Strong" virality band on absolute quality, not just relative
+ *  rank. Unknown reach (no followers) → false: we can't claim a size-relative breakout we can't size. */
+export function isBreakout(t: { likes?: number; reposts?: number; followers?: number }): boolean {
+  const f = t.followers ?? 0;
+  if (f <= 0) return false;
+  const eng = (t.likes ?? 0) + (t.reposts ?? 0);
+  return eng / Math.max(8, f * expectedRate(f)) >= BREAKOUT_RATE;
+}
 export function percentile(sorted: number[], p: number): number {
   if (!sorted.length) return 0;
   return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
@@ -107,7 +117,7 @@ export type Band = "Strong" | "Solid" | "Niche" | "Long shot";
  *  evidence, so the anchor is scaled DOWN by a confidence factor — a sample-of-one cannot mint a
  *  "Strong" band off "one of the top posts" when there was only one post. ≥4 winners = full credit;
  *  omit poolSize for no haircut (back-compat). This keeps the honest-mirror promise on the band. */
-export function bandFor(anchor: number, hook: number, hasSource: boolean, poolSize?: number): { band: Band; sort: number; basis: string } {
+export function bandFor(anchor: number, hook: number, hasSource: boolean, poolSize?: number, sourceStrong?: boolean): { band: Band; sort: number; basis: string } {
   const h = Math.max(0, Math.min(3, hook));
   const conf = poolSize == null ? 1 : Math.min(1, Math.max(0, (poolSize - 1) / 3)); // 1→0, 2→0.33, 3→0.67, ≥4→1
   const a = (hasSource ? Math.max(0, Math.min(1, anchor)) : 0) * conf;
@@ -116,15 +126,20 @@ export function bandFor(anchor: number, hook: number, hasSource: boolean, poolSi
     return { band: h >= 2 ? "Niche" : "Long shot", sort, basis: h >= 2 ? "Your own theme, strong hook — no proven source to anchor it." : "Your own theme, soft hook." };
   }
   const hi = a >= 0.66, mid = a >= 0.33, thin = poolSize != null && poolSize <= 2;
+  // "Strong" claims the proof post genuinely over-performed. Relative rank alone can crown the #1 of
+  // a WEAK pool, so when we KNOW the source under-performed for its size (sourceStrong === false), cap
+  // it at Solid — only a real breakout earns Strong. Unknown (undefined) keeps the rank-based behavior.
+  const weakTop = hi && h >= 2 && sourceStrong === false;
   let band: Band;
-  if (hi && h >= 2) band = "Strong";
-  else if ((mid && h >= 2) || (hi && h === 1)) band = "Solid";
+  if (hi && h >= 2 && sourceStrong !== false) band = "Strong";
+  else if ((mid && h >= 2) || (hi && h === 1) || weakTop) band = "Solid";
   else if (h === 0) band = "Long shot";
   else band = "Niche";
   // A thin pool (1-2 winners) ALWAYS reads as a thin signal, even at its Solid cap — never let a
   // sample of two narrate as "a solid over-performer" without the honesty caveat. (hi is unreachable
   // when thin, since the confidence haircut caps a ≤2 pool's anchor below 0.66.)
   const where = thin ? "one of only a couple posts we found in your niche, a thin signal"
+    : weakTop ? "the best of the posts we found in your niche, though it only modestly out-performed for its size"
     : hi ? "one of the top posts we found in your niche"
     : mid ? "a solid over-performer in your niche"
     : "a milder signal in your niche";

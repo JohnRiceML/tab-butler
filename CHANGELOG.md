@@ -257,6 +257,13 @@ size-tiered baseline (~4% sub-1k → ~0.65% megas) derived from those published 
 structured so a live RapidAPI per-niche calibration can refine the numbers without changing the
 shape. The breakout-vs-floor property is preserved; +3 eval assertions (30 total).
 
+**Post-ideas honesty — "Strong" band now requires a real breakout (2026-06-30)** — the virality
+band could mint **Strong** off the #1 post of a *weak* pool, because the anchor is relative rank
+only. Building on the size-tiered baseline above, `isBreakout(w)` checks whether the matched proof
+post genuinely over-performed for its size (≥2× its tier norm); `bandFor`'s new `sourceStrong`
+gate caps a non-breakout top source at **Solid** and narrates it honestly ("only modestly
+out-performed"). The pool-*quality* sibling of the earlier pool-*size* haircut. +7 eval (37 total).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
