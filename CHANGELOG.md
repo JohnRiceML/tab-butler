@@ -230,6 +230,24 @@ or harmful to the honest-mirror keystone):
   LIVE (for heavy-hitter-search authors; coverage partial), the band is the size-scaled
   ~2–25×, and the constant is `MEGA_CAP` (not the long-gone `ABS_CEILING_BASE`).
 
+**Assumptions audit — correctness/honesty fixes (2026-06-30)** — a deeper multi-agent audit
+backed each system's load-bearing assumptions with logic + published data (the tweet
+half-life paper, the 2023 open-source weights, TweepCred, engagement-rate benchmarks) and an
+adversarial fabrication check. These are the zero-risk corrections it surfaced (the *ranking*
+changes it flagged are deferred to data-driven validation, not shipped as more priors):
+- **Fixed a baked-in non-sequitur:** `targets.ts`/`targets.md` justified the mega-account
+  exclusion with the 2023 ranker's −74 mute/block penalty — but that penalty is about a
+  reply's QUALITY (readers blocking spam), independent of the target's size. The size gate
+  now correctly rests on visibility dilution (your reply is 1-of-thousands under a mega
+  thread); the −74 belongs to the empty-praise guard. Two distinct mechanisms, un-welded.
+- **Fixed a lying comment:** the post-ideas exemplar picker's header claimed "engagement per
+  √followers," but `scoreWinner` divides by `followers` linearly (~0.3% baseline, floored).
+  Comment now matches the code, and flags the flat-constant shape problem as measure-first.
+- **Fixed a stale doc:** `reply-spots.md` said outcome learning is "not wired / dead weight" —
+  it IS (`runMeasurePass` writes `SentRecord.outcome`, `aggregateAccounts` reads it). The
+  doc now describes the real (best-effort, key-gated, ≥4-outcome) loop and notes the replies
+  ranker doesn't yet consume it.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

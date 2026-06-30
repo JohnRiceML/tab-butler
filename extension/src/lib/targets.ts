@@ -5,10 +5,15 @@
  *
  * Research-grounded: the win is from REACHABLE accounts (~2-25× your size, size-scaled ceiling via
  * bandHiFor, not untouchable megas) replied to EARLY (first ~15-30 min earns the most visibility) with a reply that adds
- * real value. The spam version backfires hard — in the 2023 open-source ranker a mute/block/report
- * weighed roughly -74 (≈148× a +1 like) (the live 2026 Grok ranker is undisclosed, so treat this as
- * a directional prior, not a live coefficient), so annoying the big account SHRINKS your reach. Hence the membership gate
- * (no megas), the freshness window, and the empty-praise guard live alongside this.
+ * real value. TWO SEPARATE failure modes, don't conflate them: (1) the membership gate excludes megas
+ * because of VISIBILITY DILUTION — under a mega-thread your reply is 1-of-thousands no matter how
+ * early you are, so the borrowed audience per reply collapses; this is a function of the target's
+ * SIZE + reply pile-up, not of your reply. (2) The empty-praise guard handles the other risk — a
+ * spammy/low-value reply that readers mute/block/report (≈ -74 in the 2023 open-source ranker, a
+ * directional prior; the live 2026 Grok ranker is undisclosed). That penalty is a function of YOUR
+ * reply's QUALITY, independent of how big the target is — so it does NOT justify the size gate (it's
+ * why the empty-praise guard exists). The freshness window, the size gate, and the empty-praise guard
+ * each address a distinct mechanism.
  */
 
 export const TARGET_CAP = 20;                  // research's "10-20 home accounts"
