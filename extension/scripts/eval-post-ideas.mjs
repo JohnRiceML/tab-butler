@@ -67,6 +67,11 @@ ok(m.jaccard(m.ideaTokens("ship daily and measure what sticks"), m.ideaTokens("s
   ok(m.bandFor(1, 3, false).band === "Niche", "no source can never exceed Niche, even with a great hook");
   ok(!/\d+×|\d+x typical|\/100/.test(strong.basis), "basis never fabricates a multiple or /100 score");
   ok(m.bandFor(0.9, 3, true).sort > m.bandFor(0.3, 1, true).sort, "sort tiebreaker orders stronger ideas first");
+  // pool-size confidence haircut: weak evidence (a thin winner pool) can't mint a high band
+  ok(m.bandFor(1, 3, true, 1).band === "Niche", "a single-exemplar pool can't be Strong (no 'top posts' off a sample of one)");
+  ok(m.bandFor(1, 3, true, 2).band === "Solid", "a two-post pool caps a #1 + strong-hook idea at Solid");
+  ok(m.bandFor(0.9, 3, true, 4).band === "Strong", "a healthy pool (>=4 winners) still reaches Strong");
+  ok(/thin signal/.test(m.bandFor(1, 3, true, 1).basis) && /thin signal/.test(m.bandFor(1, 3, true, 2).basis), "a thin pool (1 OR 2 posts) is always labeled a thin signal — even a 2-post pool at its Solid cap");
 }
 
 console.log(fail === 0 ? `\n✓ post-ideas eval: ${pass} assertions passed` : `\n✗ post-ideas eval: ${fail} failed, ${pass} passed`);

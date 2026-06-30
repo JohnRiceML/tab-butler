@@ -86,20 +86,33 @@ export type Band = "Strong" | "Solid" | "Niche" | "Long shot";
 /** Grounded band: `anchor` (0..1) is the source post's measured rank in the user's real winner
  *  pool (#1 → 1.0); `hook` (0..3) is the model's hook grade. No source → capped at Niche. The
  *  `basis` sentence cites the real rank, never a fabricated multiple. `sort` is a hidden
- *  continuous tiebreaker so the dock keeps a stable order under the 4-band collapse. */
-export function bandFor(anchor: number, hook: number, hasSource: boolean): { band: Band; sort: number; basis: string } {
+ *  continuous tiebreaker so the dock keeps a stable order under the 4-band collapse.
+ *
+ *  `poolSize` is how many real winners we mined from the niche. A thin pool (1-2 posts) is weak
+ *  evidence, so the anchor is scaled DOWN by a confidence factor — a sample-of-one cannot mint a
+ *  "Strong" band off "one of the top posts" when there was only one post. ≥4 winners = full credit;
+ *  omit poolSize for no haircut (back-compat). This keeps the honest-mirror promise on the band. */
+export function bandFor(anchor: number, hook: number, hasSource: boolean, poolSize?: number): { band: Band; sort: number; basis: string } {
   const h = Math.max(0, Math.min(3, hook));
-  const sort = (hasSource ? Math.max(0, Math.min(1, anchor)) : 0) * 4 + h;
+  const conf = poolSize == null ? 1 : Math.min(1, Math.max(0, (poolSize - 1) / 3)); // 1→0, 2→0.33, 3→0.67, ≥4→1
+  const a = (hasSource ? Math.max(0, Math.min(1, anchor)) : 0) * conf;
+  const sort = a * 4 + h;
   if (!hasSource) {
     return { band: h >= 2 ? "Niche" : "Long shot", sort, basis: h >= 2 ? "Your own theme, strong hook — no proven source to anchor it." : "Your own theme, soft hook." };
   }
-  const hi = anchor >= 0.66, mid = anchor >= 0.33;
+  const hi = a >= 0.66, mid = a >= 0.33, thin = poolSize != null && poolSize <= 2;
   let band: Band;
   if (hi && h >= 2) band = "Strong";
   else if ((mid && h >= 2) || (hi && h === 1)) band = "Solid";
   else if (h === 0) band = "Long shot";
   else band = "Niche";
-  const where = hi ? "one of the top posts we found in your niche" : mid ? "a solid over-performer in your niche" : "a milder signal in your niche";
+  // A thin pool (1-2 winners) ALWAYS reads as a thin signal, even at its Solid cap — never let a
+  // sample of two narrate as "a solid over-performer" without the honesty caveat. (hi is unreachable
+  // when thin, since the confidence haircut caps a ≤2 pool's anchor below 0.66.)
+  const where = thin ? "one of only a couple posts we found in your niche, a thin signal"
+    : hi ? "one of the top posts we found in your niche"
+    : mid ? "a solid over-performer in your niche"
+    : "a milder signal in your niche";
   const hk = h >= 2 ? "and your hook leads with a real stake" : h === 1 ? "but your hook is a notch soft" : "but your hook needs work";
   return { band, sort, basis: `Remixes ${where}, ${hk}.` };
 }

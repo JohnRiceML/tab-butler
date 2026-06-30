@@ -60,6 +60,7 @@ Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":n
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
 
 The reply MUST add genuine value: a specific insight, a sharp take, a useful question, or a real experience.
+The best reply also earns a PROFILE CLICK — a stranger getting curious enough about you to tap your name (that click, not the reply itself, is what becomes a follow). Earn it the honest way: by showing specific, demonstrated competence, the kind of concrete detail only someone who actually did the thing would know. NEVER by making the reply about yourself, teasing "more in my bio", adding any call to action, or withholding the point to bait the click. If the value is specific and real, the curiosity takes care of itself.
 NEVER: generic praise ("great post", "so true", "love this"), hashtags, or emojis unless the voice clearly uses them.
 Never be aggressive, hostile, or combative, even when disagreeing — X deboosts aggressive replies regardless of engagement. Be sharp but civil.
 
@@ -98,6 +99,7 @@ PASS 2, CRITIQUE each seed harshly, PASS or CUT (one short reason each, in your 
 - KILL IF IT LIFTS A SOURCE: reuses a source's specific claim, number, or example rather than its shape: CUT.
 - KILL IF WEAK HOOK: line 1 has no number, stake, arguable claim, or named tension; or buries the point in line 2: CUT.
 - KILL IF AI-TELL: uses any banned construction below: CUT.
+- KILL IF IT DUNKS: a contrarian or quiet-part take that lands as a sneer, a pile-on, or a cheap dunk instead of a sharp-but-constructive point — X's 2026 ranker reads tone directly and throttles combative or purely negative posts regardless of engagement: CUT.
 
 PASS 3, FINALIZE. Expand the 5 strongest survivors into full posts. If fewer than 5 survive, regenerate replacements for the gaps rather than shipping a weak one. Across the final 5 enforce the VARIETY rules below.
 
@@ -116,6 +118,10 @@ Before finalizing each idea, reread ONLY its first line in isolation. If it does
 - DISTINCT SHAPES: 5 different playbook structures. No two ideas the same shape.
 - CONTENT TYPES: aim to cover at least 4 of these 5: {a strong opinion, a personal story or reversal, a useful list or framework, a concrete number or result, a sharp observation}. BUT do not fabricate a number, metric, or story to fill a slot. If the user's own posts and the source set do not support a real number or story, prefer a true observation or opinion in a distinct shape instead. Real-but-narrow beats invented-but-varied.
 - NO TOPIC CLUSTERING: the 5 must not all orbit one sub-topic. If the source set is thin or clustered, deliberately spread across the user's OTHER themes from their own posts.
+
+=== TONE (2026 ranker — a prior, not a hard count) ===
+
+X's ranker now reads each post's tone and meaning directly: it THROTTLES the reach of combative, sneering, dunking, or purely negative posts even when they would earn engagement, and AMPLIFIES substantive, constructive ones. This points the same way as everything above. So keep every sharp take CONSTRUCTIVE: contrarian, myth-bust, and "say the quiet part" shapes are encouraged, but each must puncture the belief with a real REASON and leave a better idea standing, never land as a pile-on or a cheap dunk. Sharp, honest, specific — not bitter.
 
 === PERFORMANCE PLAYBOOK (pick the shape that fits the insight, never force it) ===
 
@@ -175,6 +181,7 @@ Hard rules you must NEVER break (same as the user's other posts):
 - Never use an em dash or en dash (the — or – characters); use a period or a comma. Never use hyphenated compound words ("long term" not "long-term").
 - No hashtags, and no emojis unless the voice clearly uses them.
 - Avoid AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question.
+- Keep the tone constructive: sharp and honest, never a sneer or a dunk. X's 2026 ranker throttles combative posts even when they would get engagement.
 - Keep line 1 a real hook (a number, a stake, or an arguable claim); never open with throat-clearing or a windup.
 - Use real line breaks where the format calls for them. Keep it tight and postable.
 

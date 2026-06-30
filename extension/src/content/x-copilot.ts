@@ -2503,7 +2503,7 @@ async function generateIdeas() {
         if (w) rank = winners.indexOf(w);
       }
       const anchor = rank >= 0 ? 1 - rank / Math.max(1, winners.length - 1) : 0; // #1 winner → 1.0
-      const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w);
+      const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w, winners.length); // poolSize → thin-pool confidence haircut
       return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why,
         band, basis, sortScore: sort,
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,

@@ -1,0 +1,43 @@
+/**
+ * Static prompt-invariant guard (Layer A) for the load-bearing rules in prompts.ts — the honesty,
+ * anti-AI-tell, source-attribution, and X-ranker levers the post-ideas + reply-draft prompts encode.
+ * The real generation QUALITY is judged by the opt-in Layer B (eval-post-ideas-live.mjs); this $0
+ * check just makes sure a silent prompt edit can't DELETE an invariant and still ship green.
+ * esbuild → data-URL import (prompts.ts is import-free). Run: node scripts/test-prompts.mjs
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import * as esbuild from "esbuild";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = readFileSync(join(here, "../src/lib/prompts.ts"), "utf8");
+const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
+const m = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+
+let pass = 0, fail = 0;
+const ok = (c, l) => { if (c) pass++; else { fail++; console.error("  FAIL:", l); } };
+
+// ---- POST_IDEAS_SYSTEM: honesty + quality invariants (deletions here silently degrade output) ----
+const P = m.POST_IDEAS_SYSTEM;
+ok(/NO DASHES/.test(P), "post-ideas keeps the NO DASHES rule");
+ok(/handle EXACTLY as written/.test(P), "post-ideas keeps the exact-handle source-attribution rule (load-bearing for honest banding)");
+ok(/judge ONLY line 1/.test(P), "post-ideas keeps 'hookStrength judges ONLY line 1'");
+ok(/PROVEN ANGLE/.test(P), "post-ideas keeps the PROVEN ANGLE (own-winners) steer");
+ok(/throttle/i.test(P) && /dunk/i.test(P), "post-ideas encodes the 2026 ranker tone gate (constructive amplified, combative throttled)");
+
+// ---- X_DRAFT_SYSTEM: reply-draft invariants ----
+const D = m.X_DRAFT_SYSTEM;
+ok(/em dash or en dash/.test(D), "reply draft keeps the no-dash rule");
+ok(/generic praise/.test(D), "reply draft keeps the no-empty-praise rule");
+ok(/deboosts aggressive replies/.test(D), "reply draft keeps the civility / anti-aggression tone rule");
+ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the funnel step that makes follows)");
+
+// ---- POST_IDEA_REWRITE_SYSTEM: mirrors the tone gate so a rewrite can't undo it ----
+ok(/constructive/i.test(m.POST_IDEA_REWRITE_SYSTEM) && /(dunk|sneer)/i.test(m.POST_IDEA_REWRITE_SYSTEM), "rewrite prompt mirrors the constructive-tone rule");
+
+// ---- reply angles still wired (the draft-panel steer chips) ----
+ok(Array.isArray(m.REPLY_ANGLES) && m.REPLY_ANGLES.length > 0 && m.REPLY_ANGLES.every((a) => a.id && a.directive), "REPLY_ANGLES are present and well-formed");
+
+console.log(fail === 0 ? `\n✓ prompts: ${pass} assertions passed` : `\n✗ prompts: ${fail} failed, ${pass} passed`);
+process.exit(fail === 0 ? 0 : 1);

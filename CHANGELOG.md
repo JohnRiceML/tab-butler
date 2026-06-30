@@ -207,6 +207,29 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
 - Rewrote README + ARCHITECTURE; added [docs/SYSTEM.md](docs/SYSTEM.md) (where things
   live); marked `docs/goobi-design-v1.md` historical.
 
+**Systems validation + fixes (2026-06-30)** — a multi-agent validation of the three X
+surfaces (replies, post-ideas, targets) found all three algorithmically sound; it shipped
+five verified fixes (and refuted ~11 other proposed changes as already-done, mis-grounded,
+or harmful to the honest-mirror keystone):
+- **Post-ideas — 2026 ranker tone gate.** `POST_IDEAS_SYSTEM` (+ the rewrite prompt) now
+  teach the model that X's ranker reads tone directly — combative/dunking posts get
+  throttled even at high engagement, constructive ones amplified — with a PASS-2
+  "KILL IF IT DUNKS" critique. Contrarian/myth-bust shapes stay encouraged, just
+  sharp-not-bitter.
+- **Replies — profile-click draft directive.** `X_DRAFT_SYSTEM` now optimizes the reply
+  for the funnel step that actually makes follows (a curious profile click), earned
+  honestly via demonstrated competence — never self-promo, a CTA, or click-bait.
+- **Post-ideas — honest thin-pool band.** `bandFor` takes a `poolSize` confidence haircut
+  so a single mined exemplar can no longer mint a "Strong / one of the top posts" band; a
+  thin pool (1-2 posts) always reads as "a thin signal" (`idea-quality.ts`, + eval locks).
+- **Prompt-invariant guard.** New `scripts/test-prompts.mjs` (in the default gate) asserts
+  the load-bearing prompt rules (no-dash, exact-handle attribution, hook-only scoring,
+  PROVEN ANGLE, the tone gate, the profile-click lever) so a silent prompt edit can't
+  delete one and still ship green.
+- **Doc honesty.** Corrected stale `targets.md` / `SYSTEM.md`: `engRate`/`engNorm` is now
+  LIVE (for heavy-hitter-search authors; coverage partial), the band is the size-scaled
+  ~2–25×, and the constant is `MEGA_CAP` (not the long-gone `ABS_CEILING_BASE`).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
