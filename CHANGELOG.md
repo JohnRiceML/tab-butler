@@ -313,6 +313,14 @@ machine-local only), fill it once, build. The build bundles it into `dist/` and 
 worker seeds every EMPTY setting from it on install/startup — never overwriting live panel
 edits. Re-adds are now zero-retyping.
 
+**Fix the post-ideas empty-pool "try a broader niche" error (2026-07-05)** — a multi-keyword
+niche ("AI builders, indie SaaS founders") was sent to X search as an implicit AND of every
+word, so almost no tweet matched and the pool came back empty. New `twttr.ts:nicheSearchQuery`
+(pure, +7 tests, twttr 61) ORs the topic phrases — `((AI builders) OR (indie SaaS founders))`
+— so a post matching ANY topic qualifies; used by all three search paths (Find spots, ideas,
+heavy hitters). The ideas retry now broadens to the single strongest topic (also dodges any
+provider quirk with OR/parens), and the error copy tells the user to use fewer/broader keywords.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile, nicheQuery } = mod;
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile, nicheQuery, nicheTopics, nicheSearchQuery } = mod;
 
 let pass = 0,
   fail = 0;
@@ -299,6 +299,15 @@ ok(nicheQuery("AI builders\nposts with real numbers") === "AI builders", "a newl
 ok(nicheQuery("AI builders, indie SaaS") === "AI builders, indie SaaS", "no separator -> unchanged");
 ok(nicheQuery("  ; only intent here") === "; only intent here", "degenerate empty first clause falls back to the full trim");
 ok(nicheQuery("") === "", "empty stays empty");
+
+/* ---- nicheSearchQuery: OR the topics so search matches ANY, not ALL keywords (the empty-pool fix) ---- */
+ok(nicheTopics("AI builders, indie SaaS founders; intent here").join("|") === "AI builders|indie SaaS founders", "topics split on comma, intent clause dropped");
+ok(nicheTopics("AI/ML, robotics").join("|") === "AI|ML|robotics", "slashes split too");
+ok(nicheSearchQuery("AI builders, indie SaaS founders; intent") === "((AI builders) OR (indie SaaS founders))", "multi-topic -> OR of parenthesized groups");
+ok(nicheSearchQuery("AI builders, indie SaaS founders", "lang:en -giveaway") === "((AI builders) OR (indie SaaS founders)) lang:en -giveaway", "operators append after the OR group");
+ok(nicheSearchQuery("AI builders", "lang:en") === "AI builders lang:en", "single topic -> bare + operators");
+ok(nicheSearchQuery("aa, bb, cc, dd, ee, ff").split(" OR ").length === 4, "caps at 4 topics so the OR doesn't explode");
+ok(nicheSearchQuery("") === "", "empty niche -> empty query");
 
 /* ---- robustness ---- */
 eq(parseTimelineTweets(null), [], "null -> []");

@@ -311,3 +311,23 @@ export function nicheQuery(niche: string): string {
   const first = (niche || "").split(/[;\n]/, 1)[0].trim();
   return first || (niche || "").trim();
 }
+
+/** The niche's topic phrases: the keyword clause split on commas / slashes, ≥2 chars each.
+ *  "AI builders, indie SaaS founders" → ["AI builders", "indie SaaS founders"]. */
+export function nicheTopics(niche: string): string[] {
+  return nicheQuery(niche).split(/\s*[,/]\s*/).map((p) => p.trim()).filter((p) => p.length >= 2);
+}
+
+/** Build an X search query that matches ANY of the user's topics, not ALL their keywords. A niche
+ *  like "AI builders, indie SaaS founders" sent raw is an implicit AND of five words — almost no
+ *  tweet contains all of them, so the pool comes back EMPTY ("try a broader niche"). We OR the
+ *  parenthesized topic groups so a post about EITHER topic qualifies: `((AI builders) OR (indie SaaS
+ *  founders))`. One topic → returned bare. `extra` appends server-side operators (lang/filters).
+ *  Capped at 4 topics so the OR stays sane. */
+export function nicheSearchQuery(niche: string, extra = ""): string {
+  const topics = nicheTopics(niche).slice(0, 4);
+  const core = topics.length <= 1
+    ? (topics[0] ?? nicheQuery(niche)).slice(0, 100)
+    : `(${topics.map((t) => `(${t})`).join(" OR ")})`;
+  return (extra ? `${core} ${extra}` : core).trim();
+}
