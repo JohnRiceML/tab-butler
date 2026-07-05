@@ -273,6 +273,23 @@ a tier needs ≥6 samples to override (else it keeps the published default), rat
 sane bounds, and the worst case is exactly today's behavior. Reviewed (no leakage — the table is
 consumed only inside the Ideas flow); +5 eval assertions (42 total).
 
+**Niche-profile review fixes (2026-07-05)** — a third review pass judged all three systems
+against the owner's actual profile (AI/build-in-public founder, 1K–10K, follower growth) —
+the most bait-saturated niche on X — and shipped what it found:
+- **Heavy hitters no longer crownable by engagement farmers.** `findHeavyHitters` folded EVERY
+  non-reply Top result into `engRate` — no bait screen — and on a bait-heavy niche, Top skews
+  giveaway/RT posts, so a farmer could rank as a 🔥 heavy hitter (and their audience is other
+  farmers: worthless follows). Now the query is hardened like the ideas search (`lang:en
+  -filter:… -giveaway`) and results pass the same `looksLikeRT`/`isEnglish`/`isBait` screen as
+  `pickBest` before touching `engRate` or the candidate pool. (Also fixed the stale "best post"
+  doc phrase — it's been a mean since the earlier review.)
+- **The niche setting's double duty is now explicit and honored.** The full niche text (intent
+  included) is right for the Claude scorer but poisons X search, which reads every word as a
+  keyword. New `twttr.ts:nicheQuery` (unit-tested, +5) takes the clause before the first
+  `;`/newline; ALL three search paths (Find spots, ideas, heavy hitters) now use it, while
+  prompts keep the full text. The popup placeholder + label and `voice-and-profile.md` teach
+  the format: `keywords; intent`.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

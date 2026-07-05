@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile } = mod;
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile, nicheQuery } = mod;
 
 let pass = 0,
   fail = 0;
@@ -292,6 +292,13 @@ const ownS = pickOwnPostsWithStats(repliesJson, "me", 15);
 ok(ownS.some((p) => p.text === "No takesies backsies" && p.likes === 1), "own-stats: original kept with real engagement");
 ok(ownS.every((p) => p.text !== "good point, the trick is to ship daily and measure what sticks"), "own-stats: drops replies");
 eq(pickOwnPostsWithStats({}, "me"), [], "own-stats empty -> []");
+
+/* ---- nicheQuery: search gets the keyword clause, prompts keep the full niche ---- */
+ok(nicheQuery("AI SaaS, indie founders, MRR; posts I can add a build lesson to") === "AI SaaS, indie founders, MRR", "keyword clause before the ; drives search");
+ok(nicheQuery("AI builders\nposts with real numbers") === "AI builders", "a newline splits the same way");
+ok(nicheQuery("AI builders, indie SaaS") === "AI builders, indie SaaS", "no separator -> unchanged");
+ok(nicheQuery("  ; only intent here") === "; only intent here", "degenerate empty first clause falls back to the full trim");
+ok(nicheQuery("") === "", "empty stays empty");
 
 /* ---- robustness ---- */
 eq(parseTimelineTweets(null), [], "null -> []");

@@ -300,3 +300,14 @@ export function buildVoiceProfile(handle: string, samples: string[]): string {
     samples.map((s) => `- ${s}`).join("\n")
   );
 }
+
+/** The SEARCH-facing slice of the user's niche. The niche setting does double duty: the FULL text
+ *  goes to the Claude scorer as intent ("posts I can add a build lesson to" helps it judge fit),
+ *  but X search treats every word as a keyword — an intent clause poisons the query and starves
+ *  the pool. Convention (modeled by the popup placeholder): search keywords first, then ";" or a
+ *  newline, then intent. Search paths use only the keyword clause; prompts keep everything.
+ *  No ";"/newline → unchanged. Degenerate input (empty first clause) falls back to the full trim. */
+export function nicheQuery(niche: string): string {
+  const first = (niche || "").split(/[;\n]/, 1)[0].trim();
+  return first || (niche || "").trim();
+}

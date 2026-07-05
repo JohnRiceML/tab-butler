@@ -1,6 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, type OwnPost, type TwttrTweet } from "../lib/twttr";
+import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheQuery, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
@@ -458,7 +458,7 @@ async function findSpots() {
   toast("Searching X for fresh posts in your niche…");
   try {
     const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: q.slice(0, 120) }, intent: true,
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: nicheQuery(q).slice(0, 120) }, intent: true, // keyword clause only — the intent half of the niche poisons X search
     });
     if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Goobi panel to find spots."); return; }
     if (search?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — Find spots is paused. It resets on the 1st."); return; }
@@ -2472,7 +2472,7 @@ async function generateIdeas() {
     const runSearch = (q: string) => send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
       type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "40", query: q }, intent: true,
     });
-    const search = await runSearch(`${niche.slice(0, 90)} lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway`);
+    const search = await runSearch(`${nicheQuery(niche).slice(0, 90)} lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway`);
     if (search?.error === "no-twttr-config") { ideasError = "Add your RapidAPI key in the Goobi panel to gather niche posts."; return; }
     if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
@@ -2480,7 +2480,7 @@ async function generateIdeas() {
     setRateTable(calibrateRates(parsed)); // tune the size-tiered baseline to THIS niche from the posts just fetched (free — no new API call; sparse tiers keep the published default)
     let winners = pickBest(parsed, 10);
     if (parsed.length < 15 || !winners.length) { // few raw results (operators likely rejected) OR the operator query returned junk → one raw retry
-      const raw2 = await runSearch(niche.slice(0, 120));
+      const raw2 = await runSearch(nicheQuery(niche).slice(0, 120));
       if (raw2?.ok) { const w2 = pickBest(parseTimelineTweets(raw2.data), 10); if (w2.length > winners.length) winners = w2; }
     }
     if (!winners.length) { ideasError = (await verifyApiAlive()) ? "Didn't find strong posts in your niche to remix. Try a broader niche." : "The X-data API returned nothing usable — your RapidAPI key may not be subscribed to the right provider (twitter241). Check your subscription in the popup."; return; }
@@ -2817,7 +2817,7 @@ async function findHeavyHitters(): Promise<void> {
   if (!niche || heavyLoading) return;
   heavyLoading = true; renderDock();
   try {
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: niche.slice(0, 90) }, intent: true });
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: `${nicheQuery(niche).slice(0, 90)} lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway` }, intent: true }); // hardened like the ideas search — Top on a bait-heavy niche (buildinpublic!) skews giveaway/RT otherwise
     if (!res?.ok) {
       if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to find heavy hitters.");
       else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — heavy-hitter search is paused.");
@@ -2827,6 +2827,10 @@ async function findHeavyHitters(): Promise<void> {
     const next = new Map(heavyHitters);
     for (const t of parseTimelineTweets(res.data)) {
       if (t.isReply || !t.author || t.followers == null || t.followers <= 0) continue;
+      // Same poison-exemplar screen as pickBest: a giveaway/RT/non-English "Top" post must not crown
+      // an engagement FARMER as a heavy hitter (their audience is other farmers — worthless follows).
+      // Skipping entirely (no authorReach enrichment either) keeps farmer accounts out of the pool.
+      if (!t.text || looksLikeRT(t.text) || !isEnglish(t.text, t.lang) || isBait(t.text)) continue;
       const rate = ((t.likes ?? 0) + (t.reposts ?? 0)) / t.followers; // a post that landed, normalized for size
       const k = t.author.toLowerCase();
       const prev = next.get(k);

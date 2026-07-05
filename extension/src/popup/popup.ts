@@ -447,8 +447,8 @@ function render(d: ViewData): string {
     ${replyShowcaseHTML(d.replyStats)}
     ${accountSafetyHTML(d.safety)}
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— your niche/goals</span></div>
-      <textarea id="xniche" rows="2" placeholder="e.g. AI builders, indie SaaS founders; posts I can add a specific build lesson to" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
+      <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— search keywords, then ";", then your intent</span></div>
+      <textarea id="xniche" rows="2" placeholder="e.g. AI SaaS, indie founders, MRR; posts I can add a specific build lesson to — words before the ; drive X search, the rest guides scoring" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your products <span class="dim" style="font-weight:400">— name, link &amp; a one-liner each</span></div>

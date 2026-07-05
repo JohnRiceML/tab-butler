@@ -17,7 +17,7 @@ You tap one button and Goobi pulls the recent posts that are over-performing in 
 ## How it works
 **Trigger:** `generateIdeas()` (`x-copilot.ts:2457`), gated on a non-empty niche and a not-already-loading flag.
 
-**1. Fetch niche posts (RapidAPI, not Claude).** Sends a `TWTTR_GET` `search-v3` `Latest` query (count 40) built from the niche plus server-side operators (`lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway`). Distinct error branches handle `no-twttr-config`, `budget-*`, and HTTP failures. If raw results are thin (<15) or yield no winners, it does one raw retry without operators (`runSearch`).
+**1. Fetch niche posts (RapidAPI, not Claude).** Sends a `TWTTR_GET` `search-v3` `Latest` query (count 40) built from the niche's **keyword clause** (`twttr.ts:nicheQuery` — the part before the first `;`/newline; the intent half of the niche setting is for the Claude scorer, and as search keywords it poisons/starves the query) plus server-side operators (`lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway`). Distinct error branches handle `no-twttr-config`, `budget-*`, and HTTP failures. If raw results are thin (<15) or yield no winners, it does one raw retry without operators (`runSearch`).
 
 **2. Pick the exemplars to remix (`pickBest`, `x-copilot.ts:2060`).** Pure-ish selection over `idea-quality.ts` helpers:
 - Filter junk: drop replies, short text (<40 chars), RT-text (`looksLikeRT`), non-English (`isEnglish`), engagement-bait (`isBait`).

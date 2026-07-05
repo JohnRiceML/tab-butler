@@ -11,7 +11,7 @@ This is the one place you describe yourself so every draft sounds like *you* and
 1. Open the popup and click the **"X copilot"** tab.
 2. See **"Replies sent"** (today / week / all-time counters + a 7-day bar trend) and the **"Account safety"** card (Healthy / Caution / Ease off, with a reply-pace meter) — both read-only.
 3. Toggle the copilot on/off with the switch in the section header.
-4. Fill **"What's worth replying to"** (niche textarea) and add **products** (name + optional URL + one-liner each; "+ Add product" appends a row, favicons hydrate from Chrome's cache).
+4. Fill **"What's worth replying to"** (niche textarea) and add **products** (name + optional URL + one-liner each; "+ Add product" appends a row, favicons hydrate from Chrome's cache). The niche does double duty, and the format matters: **search keywords first, then `;`, then intent** (e.g. `AI SaaS, indie founders, MRR; posts I can add a specific build lesson to`). Every search path (Find spots, post ideas, heavy hitters) uses only the keyword clause (`twttr.ts:nicheQuery`); the full text — intent included — goes to the Claude scorer. Phrase the keywords as words that appear in *substance* posts, not in bait ("MRR", "shipped", a stack), or the searches pull the niche's spam slice.
 5. Optionally set **Draft defaults** — a default angle and (if products exist) a default product.
 6. Paste a **RapidAPI key** (twitter241 provider) to enable reach-aware ranking + voice-learning; a monthly usage meter shows if a key is stored.
 7. Type your **X handle** and click **"Learn my voice."** A toast streams progress ("Reading @handle's recent replies…"); on success the **voice** textarea is filled with your real replies and scrolled into view.
