@@ -2,6 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
+import { activityCells, chain, pickCallout } from "../lib/activity";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
@@ -3161,6 +3162,36 @@ function renderDock() {
       stat.textContent = v.posts ? `◷ ${v.posts} post${v.posts === 1 ? "" : "s"} today${v.hasViews ? ` · ${fmtCount(v.views)} views` : ""}` : "No posts yet today";
       stat.title = "X-reported views on the posts you've shipped today, pulled from the X-data API. Refreshed on dock open (~hourly), not live.";
       mom.append(stat);
+    }
+    // ---- the "show up" chain: measured activity dots + ONE algo-backed callout (gamified, honest) ----
+    // Every dot/number is measured (Goobi replies + shipped posts per day); the flame never fires
+    // past the safety line; the callout is contextual and names its evidence class in the tooltip.
+    {
+      const postsByDay: Record<string, number> = {};
+      for (const [k, sn] of Object.entries(learn.snaps)) postsByDay[k] = sn.posts;
+      const cells = activityCells(replyLog.daily, postsByDay, Date.now(), dayKey, 14);
+      const ch = chain(cells);
+      let postsThisWeek = 0; for (const c of cells.slice(-7)) postsThisWeek += c.posts;
+      const shades = ["rgba(214,154,92,.15)", "rgba(232,154,60,.4)", "rgba(232,154,60,.7)", "#e89a3c"];
+      const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:7px";
+      const dots = document.createElement("div"); dots.style.cssText = "display:flex;gap:3px;align-items:center";
+      cells.forEach((c, i) => {
+        const dot = document.createElement("span");
+        dot.style.cssText = `width:7px;height:7px;border-radius:2px;background:${shades[c.intensity]}` + (i === cells.length - 1 ? ";box-shadow:0 0 0 1px rgba(232,154,60,.5)" : "");
+        dot.title = `${c.day} — ${c.replies} ${c.replies === 1 ? "reply" : "replies"} · ${c.posts} ${c.posts === 1 ? "post" : "posts"} (measured: sent through Goobi)`;
+        dots.append(dot);
+      });
+      const chainEl = document.createElement("span");
+      chainEl.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#8c7d68;white-space:nowrap";
+      chainEl.textContent = stt.level === "easeoff" ? `⏸ ${ch.current}-day chain` : ch.current >= 2 ? `🔥 ${ch.current}-day chain` : ch.current === 1 ? "1 active day" : "start a chain";
+      chainEl.title = `Consecutive days with a Goobi reply or a shipped post (best in this window: ${ch.best}). Measured activity. X has no literal streak bonus — consistency pays through repeat engagement (affinity) and account reputation, which is exactly what a gap decays.`;
+      row.append(dots, chainEl);
+      mom.append(row);
+      const co = pickCallout({ easeoff: stt.level === "easeoff", trend: accountTrend(learn.snaps, Date.now())?.state ?? null, chainDays: ch.current, repliesToday: repliesToday(), postsThisWeek });
+      const coEl = document.createElement("div"); coEl.className = "mom-cue";
+      coEl.textContent = (co.kind === "measured" ? "✓ " : "✦ ") + co.text;
+      coEl.title = co.why + (co.kind === "measured" ? " — measured on your own data." : " — an algo prior (directional; the live ranker is undisclosed).");
+      mom.append(coEl);
     }
     d.append(mom);
   }

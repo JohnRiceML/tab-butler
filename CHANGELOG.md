@@ -341,6 +341,15 @@ until both windows hold ≥2 posts, and the tooltip says it straight — X has n
 bonus; consistency compounds through repeat engagement, so this tracks RESULTS, not activity.
 Zero new API calls.
 
+**The "show up" chain — gamified, honest (2026-07-05)** — the momentum strip now carries a
+GitHub-style 14-day heat-dot row + a 🔥 N-day active chain + one contextual algo-backed callout
+(new pure `activity.ts`, +17 tests). Gamified visuals, honest core: every dot/number is
+measured (Goobi replies + shipped posts per day), the flame flips to ⏸ at easeoff (it never
+cheers past the safety line), callouts are picked by deterministic priority (safety → measured
+trend → show-up / post-mix nudges → the timing lever) and each names its evidence class in the
+tooltip — none claims a literal streak bonus, because there isn't one: consistency pays through
+repeat-engagement affinity + account reputation, and that's what the copy says.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
