@@ -306,6 +306,13 @@ were still builder-overfit, and one already-fetched signal was being thrown away
   "only N replies so far — you'd be near the top"; ≥30 reads "you'd be buried; wait for their
   next post"; unknown counts say nothing (honest-mirror).
 
+**Local settings seed (2026-07-05)** — a remove+re-add of the unpacked extension wipes
+`chrome.storage.local`, forcing every key/voice/product to be re-typed. Now: copy
+`extension/goobi.local.example.json` → `goobi.local.json` (GITIGNORED — plaintext secrets,
+machine-local only), fill it once, build. The build bundles it into `dist/` and the service
+worker seeds every EMPTY setting from it on install/startup — never overwriting live panel
+edits. Re-adds are now zero-retyping.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

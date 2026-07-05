@@ -3,7 +3,7 @@ import { archiveAndClose, undoLast } from "../lib/archive";
 import { advise, classify, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter } from "../lib/twttr-governor";
-import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, RecommendationKind } from "../lib/types";
+import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
   "blue",
@@ -18,11 +18,58 @@ const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
 
 /* ---------- lifecycle ---------- */
 
+/** Seed settings from an OPTIONAL, gitignored `goobi.local.json` bundled into dist/ by the build.
+ *  Solves the unpacked-extension pain: a remove+re-add wipes chrome.storage.local, forcing every
+ *  key / voice / product to be re-typed by hand. On install/startup this fills ONLY EMPTY keys —
+ *  it never overwrites live in-app edits, so the side panel stays the source of truth once set.
+ *  The file holds real secrets in plaintext: it is gitignored (and dist/ is too), machine-local
+ *  only. Values are never logged. Template: goobi.local.example.json. */
+async function seedFromLocalFile(): Promise<void> {
+  let cfg: Record<string, unknown>;
+  try {
+    const res = await fetch(chrome.runtime.getURL("goobi.local.json"));
+    if (!res.ok) return;
+    cfg = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return; // no seed bundled (or unparseable) → nothing to do
+  }
+  const K = CONFIG;
+  const strMap: Array<[from: string, to: string]> = [
+    ["anthropicKey", K.ANTHROPIC_KEY_KEY],
+    ["rapidApiKey", K.TWTTR_KEY_KEY],
+    ["handle", K.X_MY_HANDLE_KEY],
+    ["niche", K.X_NICHE_KEY],
+    ["voice", K.X_VOICE_KEY],
+    ["defaultAngle", K.X_DEFAULT_ANGLE_KEY],
+    ["defaultProduct", K.X_DEFAULT_PRODUCT_KEY],
+  ];
+  const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY]);
+  const set: Record<string, unknown> = {};
+  for (const [from, to] of strMap) {
+    const v = cfg[from];
+    if (typeof v === "string" && v.trim() && !(cur[to] as string | undefined)) {
+      set[to] = from === "handle" ? v.trim().replace(/^@+/, "") : v.trim();
+    }
+  }
+  const followers = cfg["followers"];
+  if (typeof followers === "number" && followers > 0 && !cur[K.X_MY_FOLLOWERS_KEY]) set[K.X_MY_FOLLOWERS_KEY] = Math.round(followers);
+  const prods = cfg["products"];
+  if (Array.isArray(prods) && !((cur[K.X_PRODUCTS_KEY] as ProductItem[] | undefined)?.length)) {
+    const clean: ProductItem[] = prods
+      .filter((p): p is { name: string; url?: unknown; blurb?: unknown } => !!p && typeof (p as { name?: unknown }).name === "string" && !!(p as { name: string }).name.trim())
+      .map((p) => ({ name: p.name.trim(), url: typeof p.url === "string" ? p.url.trim() : "", blurb: typeof p.blurb === "string" ? p.blurb.trim() : "" }));
+    if (clean.length) set[K.X_PRODUCTS_KEY] = clean;
+  }
+  if (Object.keys(set).length) await chrome.storage.local.set(set);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(CONFIG.SCAN_ALARM, {
     periodInMinutes: CONFIG.SCAN_PERIOD_MIN,
   });
+  void seedFromLocalFile(); // fresh install (or reload): restore any empty settings from the local seed
 });
+chrome.runtime.onStartup.addListener(() => void seedFromLocalFile());
 
 // Clicking the toolbar icon opens Tab Butler as a right-edge, full-height side
 // panel (a drawer) instead of a small popup. Idempotent + persists across sessions.

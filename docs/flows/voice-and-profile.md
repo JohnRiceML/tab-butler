@@ -17,6 +17,9 @@ This is the one place you describe yourself so every draft sounds like *you* and
 7. Type your **X handle** and click **"Learn my voice."** A toast streams progress ("Reading @handle's recent replies…"); on success the **voice** textarea is filled with your real replies and scrolled into view.
 8. Edit the voice box if desired, then click **"Save copilot settings."** A toast confirms (and counts saved products).
 
+## Settings survive reinstalls: the local seed file
+A plain extension **reload keeps everything** (`chrome.storage.local` persists). What wipes settings is a **remove + re-add** (needed when permissions change). The fix: copy `extension/goobi.local.example.json` → `extension/goobi.local.json`, fill in your keys / handle / followers / niche / voice / products, and build. The build copies it into `dist/`, and on a fresh install the service worker (`seedFromLocalFile`) fills every **empty** setting from it — it never overwrites values you've since edited in the panel. The file holds real secrets in plaintext, so it is **gitignored** (and `dist/` is too): machine-local only, never commit or share it, rotate anything that leaks.
+
 ## How it works
 **Load:** `getData()` reads all `X_*` keys from `chrome.storage.local` (niche, voice, products, default angle/product, RapidAPI key presence, handle, reply log) plus, if a key is stored, a `GET_TWTTR_METER` round-trip to the service worker. `render()` builds the `#view-x` HTML. Reply stats come from `computeReplyStats()` over the per-day `X_REPLY_LOG_KEY` buckets (pure local read, no API). Account-safety level comes from `reputationStatus(repliesThisHour)` in `reply-hygiene.ts`.
 
