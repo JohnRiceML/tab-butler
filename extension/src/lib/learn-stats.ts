@@ -224,3 +224,67 @@ export function pruneAccounts(accounts: Record<string, AccountAgg>, max = ACCT_M
   keys.sort((a, b) => accounts[a].nEff - accounts[b].nEff);
   for (const k of keys.slice(0, keys.length - max)) delete accounts[k];
 }
+
+/* ---------- account trend: is this account actually PICKING UP? ---------- */
+// The momentum meter scores today's EFFORT (activity + streak). This is the OUTCOME half: over
+// the daily snaps we already collect, are your posts earning more per post than they did last
+// week? Honest by construction: it compares your last 7 days against the prior 7, needs real
+// data in BOTH windows before it claims anything (else null — "still collecting"), prefers
+// X-reported views and falls back to engagement, and reports the measured numbers, never a
+// score. Consistency helps through real mechanisms (repeat engagement compounds per-user
+// affinity + account reputation) — there is NO literal "streak bonus" in the ranker, so this
+// deliberately measures results, not activity.
+
+/** Same LOCAL-date key format as x-copilot's dayKey — keys must match the snaps' keys exactly. */
+export function dayKeyLocal(ts: number): string {
+  const d = new Date(ts); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+export interface TrendSnap extends DailyDelta { day: string; followers?: number; }
+export interface AccountTrend {
+  state: "picking-up" | "steady" | "cooling";
+  metric: "views" | "engagement";   // what the comparison is based on
+  nowPer: number;                    // per-post average, trailing 7d
+  prevPer: number;                   // per-post average, the 7d before that
+  nowPosts: number; prevPosts: number;
+  followerDelta?: number;            // measured follower change across the 14d window (when known)
+}
+
+const TREND_MIN_POSTS = 2;   // per window — below this a per-post average is noise
+const TREND_UP = 1.25, TREND_DOWN = 0.8;
+
+export function accountTrend(snaps: Record<string, TrendSnap>, now: number): AccountTrend | null {
+  const lastKeys = new Set<string>(), prevKeys = new Set<string>();
+  for (let i = 0; i < 7; i++) lastKeys.add(dayKeyLocal(now - i * DAY_MS));
+  for (let i = 7; i < 14; i++) prevKeys.add(dayKeyLocal(now - i * DAY_MS));
+  const win = (keys: Set<string>) => {
+    let posts = 0, views = 0, viewPosts = 0, eng = 0;
+    for (const k of keys) {
+      const sn = snaps[k]; if (!sn) continue;
+      posts += sn.posts; eng += sn.likes + sn.reposts + sn.replies;
+      if (sn.hadViews) { views += sn.views; viewPosts += sn.posts; }
+    }
+    return { posts, views, viewPosts, eng };
+  };
+  const a = win(lastKeys), b = win(prevKeys);
+  // Prefer views-per-post (X-reported reach); fall back to engagement-per-post; else no claim.
+  let metric: "views" | "engagement"; let nowPer: number; let prevPer: number;
+  if (a.viewPosts >= TREND_MIN_POSTS && b.viewPosts >= TREND_MIN_POSTS) {
+    metric = "views"; nowPer = a.views / a.viewPosts; prevPer = b.views / b.viewPosts;
+  } else if (a.posts >= TREND_MIN_POSTS && b.posts >= TREND_MIN_POSTS) {
+    metric = "engagement"; nowPer = a.eng / a.posts; prevPer = b.eng / b.posts;
+  } else return null; // not enough posts in both windows — say nothing rather than guess
+  const state: AccountTrend["state"] = prevPer <= 0
+    ? (nowPer > 0 ? "picking-up" : "steady")
+    : nowPer / prevPer >= TREND_UP ? "picking-up" : nowPer / prevPer <= TREND_DOWN ? "cooling" : "steady";
+  // Follower delta: earliest vs latest follower snapshot in the 14d window, only over a real span.
+  let followerDelta: number | undefined;
+  const withF = Object.values(snaps)
+    .filter((sn) => sn.followers != null && (lastKeys.has(sn.day) || prevKeys.has(sn.day)))
+    .sort((x, y) => (x.day < y.day ? -1 : 1));
+  if (withF.length >= 2 && withF[0].day !== withF[withF.length - 1].day) {
+    followerDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
+  }
+  return { state, metric, nowPer, prevPer, nowPosts: a.posts, prevPosts: b.posts, followerDelta };
+}

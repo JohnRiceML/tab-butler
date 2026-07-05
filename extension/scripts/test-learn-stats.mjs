@@ -100,5 +100,37 @@ const DAY = 86_400_000;
   ok(m.matchOutcomes([{ text: "nothing in common whatsoever", at: NOW }], sent).length === 0, "match: a non-match is dropped, never guessed");
 }
 
+/* ---- accountTrend: measured "is the account picking up?" (results, not activity) ---- */
+{
+  const DAY = 86_400_000;
+  const snap = (daysAgo, posts, views, extra = {}) => {
+    const day = m.dayKeyLocal(NOW - daysAgo * DAY);
+    return [day, { day, posts, views, likes: 0, reposts: 0, replies: 0, hadViews: views > 0, ...extra }];
+  };
+  // picking up: this week's posts average far more views than last week's
+  const up = Object.fromEntries([snap(1, 2, 2000), snap(3, 2, 1800), snap(8, 2, 600), snap(10, 2, 700)]);
+  const atUp = m.accountTrend(up, NOW);
+  ok(atUp?.state === "picking-up" && atUp.metric === "views", "2x views/post week-over-week reads as picking up (views metric)");
+  // cooling: the reverse
+  const down = Object.fromEntries([snap(1, 2, 500), snap(3, 2, 400), snap(8, 2, 1500), snap(10, 2, 1600)]);
+  ok(m.accountTrend(down, NOW)?.state === "cooling", "a big week-over-week drop reads as cooling");
+  // steady: within the band
+  const flat = Object.fromEntries([snap(1, 2, 1000), snap(3, 2, 1000), snap(8, 2, 1000), snap(10, 2, 950)]);
+  ok(m.accountTrend(flat, NOW)?.state === "steady", "roughly-equal weeks read as steady");
+  // honest null: not enough posts in both windows → no claim
+  ok(m.accountTrend(Object.fromEntries([snap(1, 1, 900)]), NOW) === null, "one post total → null (say nothing, never guess)");
+  ok(m.accountTrend({}, NOW) === null, "no snaps → null");
+  // engagement fallback when views are missing in a window
+  const noViews = Object.fromEntries([
+    snap(1, 2, 0, { likes: 40, hadViews: false }), snap(3, 2, 0, { likes: 44, hadViews: false }),
+    snap(8, 2, 0, { likes: 10, hadViews: false }), snap(10, 2, 0, { likes: 12, hadViews: false })]);
+  const atEng = m.accountTrend(noViews, NOW);
+  ok(atEng?.state === "picking-up" && atEng.metric === "engagement", "no views → falls back to engagement-per-post");
+  // follower delta: measured across the window, needs a real span
+  const withF = Object.fromEntries([snap(1, 2, 1000, { followers: 3300 }), snap(3, 2, 1000), snap(9, 2, 900, { followers: 3200 }), snap(11, 2, 950)]);
+  ok(m.accountTrend(withF, NOW)?.followerDelta === 100, "follower delta = latest minus earliest snapshot in the window");
+  ok(m.accountTrend(up, NOW)?.followerDelta === undefined, "no follower snapshots → no delta claimed");
+}
+
 console.log(fail === 0 ? `\n✓ learn-stats: ${pass} assertions passed` : `\n✗ learn-stats: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

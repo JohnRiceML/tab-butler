@@ -330,6 +330,17 @@ seen post — zero API calls, no stored DOM refs; a post is only stale while it 
 (The full fix for never-re-rendered posts would need a per-post API fetch — a budget decision,
 deliberately not taken here.)
 
+**Account trend — the measured "is it picking up?" meter (2026-07-05)** — the momentum strip
+scores today's EFFORT (activity + streak); this adds the missing OUTCOME half. New pure
+`learn-stats.ts:accountTrend` (+8 tests, learn-stats 29) compares the last 7 days vs the prior
+7 on per-post results (views/post when X-reported views exist in both windows, else
+engagement/post) over the daily snaps the learning loop already collects, plus a free daily
+followers snapshot → the insights panel now opens with "📈 Picking up: ~2.1K views/post this
+week vs 900 last week · +34 followers" (or Steady / Cooling). Honest by construction: silent
+until both windows hold ≥2 posts, and the tooltip says it straight — X has no literal streak
+bonus; consistency compounds through repeat engagement, so this tracks RESULTS, not activity.
+Zero new API calls.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

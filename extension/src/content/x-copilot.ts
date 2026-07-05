@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
@@ -2173,7 +2173,7 @@ function postedToday(): number {
  * reply log (idempotent) — only the own-post trend + scan gates persist. */
 const LEARN_SCAN_ENABLED = true;   // the once-daily API fetch (Tier-1 ranking itself needs no fetch)
 const SETTLE_DAYS = 2;             // freeze a reply's measured outcome once it's this old
-interface DailySnap extends DailyDelta { day: string; }
+interface DailySnap extends DailyDelta { day: string; followers?: number; } // followers = free daily snapshot (already in storage) → the measured "picking up" trend
 interface LearnStore { handle: string; scanDay: string; measureDay?: string; restId?: string; prevById: Record<string, PostMetrics>; snaps: Record<string, DailySnap>; }
 function freshLearn(handle: string): LearnStore { return { handle, scanDay: "", prevById: {}, snaps: {} }; }
 let learn: LearnStore = freshLearn("");
@@ -2242,7 +2242,7 @@ async function maybeRunDailyLearn(): Promise<void> {
       const day2 = dayKey(Date.now());
       if (stats && learn.scanDay !== day2) {
         const { delta, nextPrev } = foldOwnDelta(learn.prevById, stats);
-        learn.snaps[day2] = { day: day2, ...delta };
+        learn.snaps[day2] = { day: day2, ...delta, followers: myFollowers || undefined }; // free follower snapshot → measured trend
         learn.prevById = nextPrev;
         learn.scanDay = day2;
         pruneSnaps(learn.snaps);
@@ -2339,6 +2339,20 @@ function renderInsightPanel(d: HTMLElement): void {
 
   if (insightOpen) {
     const body = document.createElement("div"); body.className = "ins-body";
+    // The OUTCOME half of momentum: is the account actually picking up? Measured per-post results,
+    // week over week, from the daily snaps — silent until both windows have real posts (no guessing).
+    const at = accountTrend(learn.snaps, now);
+    if (at) {
+      const t = document.createElement("div"); t.className = "ins-trend";
+      const icon = at.state === "picking-up" ? "\u{1F4C8} " : at.state === "cooling" ? "\u{1F4C9} " : "\u2192 ";
+      const label = at.state === "picking-up" ? "Picking up" : at.state === "cooling" ? "Cooling" : "Steady";
+      const unit = at.metric === "views" ? "views" : "eng";
+      const fd = at.followerDelta;
+      t.textContent = `${icon}${label}: ~${fmtCount(Math.round(at.nowPer))} ${unit}/post this week vs ${fmtCount(Math.round(at.prevPer))} last week`
+        + (fd != null && fd !== 0 ? ` \u00B7 ${fd > 0 ? "+" : ""}${fd} followers` : "");
+      t.title = `Measured from ${at.metric === "views" ? "X-reported views" : "likes+reposts+replies"} on your own posts: ${at.nowPosts} post${at.nowPosts === 1 ? "" : "s"} this week vs ${at.prevPosts} last. Consistency compounds through repeat engagement (affinity + reputation) \u2014 X has no literal streak bonus, so this tracks RESULTS, not activity.`;
+      body.append(t);
+    }
     const wk = weeklyViewGrowth();
     if (wk.views > 0) { const t = document.createElement("div"); t.className = "ins-trend"; t.textContent = `Your posts: +${fmtCount(wk.views)} views ${wk.days >= 7 ? "this week" : `last ${wk.days}d`}`; t.title = "X-reported view growth on your own posts, summed from the daily scan."; body.append(t); }
 
