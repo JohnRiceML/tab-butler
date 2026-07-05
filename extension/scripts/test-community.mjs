@@ -38,5 +38,12 @@ eq(builderTier("designer who loves coffee and dogs", NICHE, 0.6), 0, "no builder
 eq(builderTier("", NICHE, 0.6), 0, "empty bio -> 0");
 eq(builderTier("relationship coach, building rapport", NICHE, 0.5), 1, "'relationship' doesn't false-match 'ship'; 'building' does");
 
+// ---- vertical-agnostic peers: niche-bio overlap makes a tier-2 peer WITHOUT builder-speak ----
+const LAW = "personal injury law, med mal, trial strategy; posts where I can add a real trial insight";
+eq(builderTier("personal injury attorney in Tampa. dad, runner.", LAW, 0.5), 2, "a lawyer peer (niche-bio overlap, zero builder cue) = 2 — works for any vertical");
+eq(builderTier("strength coach, hypertrophy programs for over-40s", "strength training, hypertrophy; posts I can add programming detail to", 0.4), 2, "a fitness peer = 2");
+eq(builderTier("personal injury attorney in Tampa", LAW, 0.01), 0, "niche overlap still gated on the two-way ratio");
+eq(builderTier("crypto day trader to the moon", LAW, 0.6), 0, "no niche overlap + no builder cue is still 0");
+
 console.log(fail === 0 ? `\n✓ community: ${pass} assertions passed` : `\n✗ community: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

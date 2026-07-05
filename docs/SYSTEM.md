@@ -96,7 +96,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | `targets.ts` | Pure **"Target accounts" logic** (comment early on big in-reach niche accounts): `excludeFromTargets`/`inReachBand`/`reachMultipleLabel`/`bandHiFor` (the size-scaled ~2–25× sweet-spot + `MEGA_CAP` hard mega-exclusion), `addTarget`/`removeTarget` (cap/dedupe), `freshnessLabel` (the early-comment window), `selectPollBatch` (the ≤5/open + TTL budget invariant for the deferred ambient poller). x-copilot owns the dock mode + the (user-initiated, governed) fetches; tracking reuses `learn-stats`. | `test-targets` |
 | `idea-quality.ts` | Pure **Post-ideas exemplar quality + honest virality**: `isEnglish`/`looksLikeRT`/`isBait` (drop poison exemplars), `classifyShape` (diversity), `scoreWinner`/`percentile` (genuine-breakout ranking), `ideaTokens`/`jaccard` (de-dupe), `bandFor` (virality band anchored to the source's real measured rank — never a fabricated number). x-copilot's `pickBest` orchestrates these. | `eval-post-ideas` |
 | `human-pacing.ts` | Human-like delays/jitter for likes/follows. | `test-pacing` |
-| `community.ts` | `builderTier` — surface peer/community builders even off-topic. | `test-community` |
+| `community.ts` | `builderTier` — vertical-agnostic niche-peer detection (bio ∩ niche words + two-way ratio → tier 2 for ANY vertical; builder/creator bio language alone → tier 1). Surfaces peers worth engaging even off-topic. | `test-community` |
 | `heuristics.ts` | **Tab manager**: group-by-domain, idle-archivable, `normalizeUrl` dedupe. | — |
 | `archive.ts` | **Tab manager**: archive-not-delete + undo. | — |
 | `config.ts` | The storage-key registry (`CONFIG`). Tab keys + X keys. | — |

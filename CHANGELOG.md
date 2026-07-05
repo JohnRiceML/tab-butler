@@ -290,6 +290,22 @@ the most bait-saturated niche on X — and shipped what it found:
   prompts keep the full text. The popup placeholder + label and `voice-and-profile.md` teach
   the format: `keywords; intent`.
 
+**Generalize to ANY niche + squeeze the API harder (2026-07-05)** — the growth playbook is
+universal (add value, be personal, engage the right people, jump on early posts); two places
+were still builder-overfit, and one already-fetched signal was being thrown away:
+- **Niche peers in any vertical.** `builderTier` hard-required builder/creator bio language, so
+  a lawyer/coach/designer peer never got the community lift. Now niche-bio word overlap (+ the
+  two-way ratio) makes a tier-2 peer in ANY vertical; the builder regex alone is the tier-1
+  off-niche community cue. (+4 tests, community 16.)
+- **Post-ideas playbook is vertical-agnostic.** The hardcoded "BUILDER / FOUNDER VERTICAL"
+  block became "ANY EXPERTISE NICHE": insider specificity over-performs everywhere — with the
+  builder, lawyer, coach, and designer translations spelled out. (+1 prompt invariant.)
+- **The free early/buried read on targets.** `findTargetPost` fetched each post's reply count
+  and discarded it. Now `targets.ts:earlyLabel` (+7 tests, targets 28) turns it into the
+  "jump on early posts" signal at ZERO extra API cost: a live post with ≤5 replies reads
+  "only N replies so far — you'd be near the top"; ≥30 reads "you'd be buried; wait for their
+  next post"; unknown counts say nothing (honest-mirror).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

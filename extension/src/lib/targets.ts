@@ -77,6 +77,23 @@ export function freshnessLabel(postedAt: number | undefined, now: number): { liv
   return { live: false, text: h < 24 ? `${h}h old` : `${Math.round(h / 24)}d old` };
 }
 
+// "Jump on it EARLY": only the first handful of replies under a post get meaningful visibility
+// (research prior: roughly the first 5-10; later ones collapse under "Show more replies"). The
+// fetched target post already carries its reply count, so this competition read is FREE and
+// MEASURED — no extra API call. Thresholds are conservative priors, not live platform math.
+export const EARLY_MAX_REPLIES = 5;    // ≤5 replies and still live → you'd be near the top
+export const CROWDED_MIN_REPLIES = 30; // ≥30 → you'd be buried regardless of freshness
+/** The pile-up read for a fetched target post. Unknown count → null (say nothing, honest-mirror).
+ *  "crowded" applies at any age; "early" only while the post is still in the live window. */
+export function earlyLabel(replies: number | undefined, postedAt: number | undefined, now: number): { level: "early" | "crowded"; text: string } | null {
+  if (replies == null) return null;
+  if (replies >= CROWDED_MIN_REPLIES) return { level: "crowded", text: `${replies} replies already — you'd be buried; wait for their next post` };
+  if (freshnessLabel(postedAt, now)?.live === true && replies <= EARLY_MAX_REPLIES) {
+    return { level: "early", text: `only ${replies} ${replies === 1 ? "reply" : "replies"} so far — you'd be near the top` };
+  }
+  return null;
+}
+
 // Poll-batch primitive for a future ambient fresh-post poller — the ≤N/open + TTL invariant,
 // tested now so the eventual poller can't blow the budget (one full list ≤ POLLS_PER_OPEN calls).
 export const POLLS_PER_OPEN = 5;

@@ -135,7 +135,7 @@ X's ranker now reads each post's tone and meaning directly: it THROTTLES the rea
 
 LEVER MAP (aim each post at ONE outcome): REPOST = an identity-level truth the reader wants to be seen agreeing with. REPLY = a real question or a take sharp enough to argue with. BOOKMARK = genuinely useful material worth saving. PROFILE-CLICK = a flex of specific competence only someone who did the thing would know.
 
-BUILDER / FOUNDER VERTICAL: over-performs = concrete numbers (MRR, users, churn, build time), real build or revenue detail, scar-tissue lessons, contrarian takes on standard startup advice, the honest version of what everyone soft-pedals. Flops = vague hustle-porn, motivation, humblebrags as lessons, "grind" platitudes, advice with nothing specific under it.
+ANY EXPERTISE NICHE: what over-performs is insider specificity — the concrete numbers, process detail, and scar-tissue lessons only someone who does the work would know, contrarian takes on the niche's standard advice, and the honest version of what everyone in the space soft-pedals. What flops in EVERY niche: vague motivation, platitudes, humblebrags as lessons, advice with nothing specific under it. Translate to the user's vertical: a builder's specifics are MRR/users/churn/build time; a lawyer's are case outcomes and where the textbook is wrong; a coach's are client results and the method detail; a designer's are before/afters and the decision that made the difference.
 
 === HARD RULES (never break) ===
 

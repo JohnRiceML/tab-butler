@@ -24,6 +24,7 @@ ok(/NO DASHES/.test(P), "post-ideas keeps the NO DASHES rule");
 ok(/handle EXACTLY as written/.test(P), "post-ideas keeps the exact-handle source-attribution rule (load-bearing for honest banding)");
 ok(/judge ONLY line 1/.test(P), "post-ideas keeps 'hookStrength judges ONLY line 1'");
 ok(/PROVEN ANGLE/.test(P), "post-ideas keeps the PROVEN ANGLE (own-winners) steer");
+ok(/insider specificity/.test(P) && /ANY EXPERTISE NICHE/.test(P), "post-ideas playbook is vertical-agnostic (insider specificity for any niche, not builder-only)");
 ok(/throttle/i.test(P) && /dunk/i.test(P), "post-ideas encodes the 2026 ranker tone gate (constructive amplified, combative throttled)");
 
 // ---- X_DRAFT_SYSTEM: reply-draft invariants ----

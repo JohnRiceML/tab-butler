@@ -54,6 +54,15 @@ ok(m.freshnessLabel(NOW - 4 * MIN, NOW).live === true, "a 4-min-old post is live
 ok(m.freshnessLabel(NOW - 45 * MIN, NOW).live === false, "a 45-min-old post is past the window");
 ok(m.freshnessLabel(undefined, NOW) === null, "no timestamp → no freshness label");
 
+// ---- early/buried pile-up read (the free competition signal from the fetched post) ----
+ok(m.earlyLabel(2, NOW - 4 * MIN, NOW)?.level === "early", "fresh + 2 replies → early (high-impression window)");
+ok(m.earlyLabel(0, NOW - 2 * MIN, NOW)?.level === "early", "zero replies on a live post is the best slot");
+ok(m.earlyLabel(2, NOW - 45 * MIN, NOW) === null, "few replies but past the live window → no early claim");
+ok(m.earlyLabel(45, NOW - 4 * MIN, NOW)?.level === "crowded", "45 replies → buried even while fresh");
+ok(m.earlyLabel(45, NOW - 300 * MIN, NOW)?.level === "crowded", "crowded applies at any age");
+ok(m.earlyLabel(12, NOW - 4 * MIN, NOW) === null, "mid pile-up (between thresholds) says nothing");
+ok(m.earlyLabel(undefined, NOW - 4 * MIN, NOW) === null, "unknown reply count → no claim (honest-mirror)");
+
 // ---- poll-batch invariant: <=N per open, oldest-polled first, TTL-skipped ----
 {
   const targets = [

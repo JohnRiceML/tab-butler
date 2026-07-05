@@ -11,7 +11,7 @@ It points you at accounts in your niche that are bigger but still reachable — 
 2. Read the "Suggested for you" list — in-niche accounts cached from your last "Find spots" search, each with an honest one-line reason ("~7× your size · in your niche · a two-way account"). Click **+ Track** to add one, or **×** to dismiss it for the session.
 3. Or type an `@handle` into the "Track" box and press Enter. Goobi verifies the account exists and is in band; if it's too big it tells you so ("@x (250K) is too big to reach from your size — aim for accounts up to ~18× you", where the ceiling scales with your size via `bandHiFor`).
 4. For each tracked account, read its standing line ("✓ your replies here beat your average (5)" / "no replies here yet"), then click **Find a fresh post →**.
-5. Review the surfaced post and its freshness label ("3m old · reply while it's live"). Click **Draft a reply ↗**.
+5. Review the surfaced post, its freshness label ("3m old · reply while it's live"), and the pile-up read when counts are known ("◔ only 2 replies so far — you'd be near the top" / "34 replies already — you'd be buried; wait for their next post"). Click **Draft a reply ↗**.
 6. Edit the draft in the textarea (a quality warning shows if it reads as empty praise). Click **Open post to reply ↗** (opens the post in a new tab so you reply natively) or **Copy**.
 7. If you've passed your hourly pace line, the whole mode shows a paused banner and the Track/Find/Draft buttons are disabled for a few minutes.
 
@@ -28,7 +28,7 @@ The mode is built every render by `x-copilot.ts:buildTargets()`; state lives in 
 
 **Add path.** Suggestions: `trackSuggestion()` re-checks the gate on the cached count and calls `targets.ts:addTarget()` (no fetch). Manual: `addTargetByHandle()` does a live `TWTTR_GET user` lookup (`intent:true`), re-runs `excludeFromTargets()`, then `addTarget()`. Both stamp the owner handle so the list can't bleed across accounts; `ensureTargetOwner()` (called on account-switch, line 3003) resets the store via `freshStore()` if the signed-in handle changed.
 
-**Find post.** `findTargetPost()` runs a `TWTTR_GET search-v3` `from:<handle>` Latest query (count 10), filters to non-reply originals authored by that handle, takes the newest by `postedAt`, and caches it in `targetPosts` (session map). No Claude.
+**Find post.** `findTargetPost()` runs a `TWTTR_GET search-v3` `from:<handle>` Latest query (count 10), filters to non-reply originals authored by that handle, takes the newest by `postedAt`, and caches it — WITH its reply/like counts — in `targetPosts` (session map). No Claude. The counts power the free **early/buried read** (`targets.ts:earlyLabel`): a live post with ≤5 replies shows "only N replies so far — you'd be near the top" (the high-impression window: only the first handful of replies get seen), ≥30 shows "you'd be buried; wait for their next post", unknown counts say nothing (honest-mirror). Zero extra API cost — the counts were already in the fetch.
 
 **Draft.** `draftTargetReply()` sends a `DRAFT_REPLY` message → service worker → `claude-client.ts:draftReply()`, which calls **`claude-sonnet-4-6`** (system `X_DRAFT_SYSTEM`, `maxTokens: 400`, plain-text not JSON) using the user's saved voice. The result is cached in `targetDrafts`. `no-key` surfaces a toast asking for the Anthropic key.
 

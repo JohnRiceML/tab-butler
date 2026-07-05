@@ -5,7 +5,7 @@ import { computeMomentum } from "../lib/momentum";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, bandHiFor, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
@@ -2712,7 +2712,7 @@ function mountIdeasGoobi(): void {
 
 /* ---------- Target accounts: comment early on big in-reach niche accounts ---------- */
 let targetStore: TargetStore = freshStore("");
-const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string }>(); // fetched latest post per handle (session)
+const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number }>(); // fetched latest post per handle (session) — counts kept for the free early/buried read
 const targetDrafts = new Map<string, string>(); // generated reply draft per handle (session)
 const targetBusy = new Set<string>();           // handles currently fetching/drafting
 let targetAdding = false;
@@ -2788,7 +2788,7 @@ async function findTargetPost(handle: string): Promise<void> {
       const newest = parseTimelineTweets(res.data)
         .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))[0];
-      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author } : { id: "", text: "", author: handle });
+      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes } : { id: "", text: "", author: handle });
       targetDrafts.delete(handle);
     }
   } finally { targetBusy.delete(handle); renderDock(); }
@@ -2944,6 +2944,9 @@ function buildTargets(): HTMLElement {
       const pv = document.createElement("div"); pv.className = "tg-post"; pv.textContent = post.text; c.append(pv);
       const fl = freshnessLabel(post.postedAt, now);
       if (fl) { const f = document.createElement("div"); f.className = `tg-fresh ${fl.live ? "tg-live" : ""}`; f.textContent = (fl.live ? "● " : "") + fl.text; c.append(f); }
+      // The FREE competition read (reply count came with the fetch): early = high-impression window.
+      const early = earlyLabel(post.replies, post.postedAt, now);
+      if (early) { const e = document.createElement("div"); e.className = `tg-fresh ${early.level === "early" ? "tg-live" : ""}`; e.textContent = (early.level === "early" ? "◔ " : "") + early.text; c.append(e); }
       const draft = targetDrafts.get(tg.handle);
       if (!draft) {
         const d = document.createElement("button"); d.className = "tg-find"; d.textContent = busy ? "Drafting…" : "Draft a reply ↗"; d.disabled = busy || locked; d.onclick = () => void draftTargetReply(tg.handle); c.append(d);
