@@ -276,7 +276,10 @@ function engagement(el: HTMLElement): PostStats {
 }
 
 /** Snapshot a post's stats at capture time (counts can't be re-read once X
- *  recycles the node; the timestamp is absolute so age stays accurate). */
+ *  recycles the node; the timestamp is absolute so age stays accurate).
+ *  NOTE: when the virtualized timeline RE-RENDERS a seen post, scan()'s cached
+ *  branch refreshes the opp's likes/replies from the live node — so counts are
+ *  frozen only while a post stays off-screen, not forever. */
 function snapStats(el: HTMLElement): PostStats {
   if (!el.isConnected) return {};
   return { postedAt: postedAtMs(el), ...engagement(el) };
@@ -329,7 +332,17 @@ function scan() {
     if (cached) {
       const o = opps.get(info.id);
       if (commentedIds.has(info.id)) badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); // replied → green badge, not in the dock
-      else if (o) badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
+      else if (o) {
+        // Surfaced — refresh counts from the LIVE node X just re-rendered, so pileup/buried and the
+        // likes-reach fallback track the thread as it GROWS (freshness already recomputes live;
+        // frozen counts were the one stale term — a post that blew up after queueing kept ranking
+        // as an easy fresh reply). Zero API calls, no stored DOM refs: only nodes the virtualized
+        // timeline has put back on screen. Off-screen opps still refresh the next time you scroll by.
+        const live = engagement(el);
+        if (live.likes != null) o.likes = live.likes;
+        if (live.replies != null) o.replies = live.replies;
+        badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
+      }
       else addButton(el); // scored but didn't make the cut → offer a manual "+ Add"
       return;
     }

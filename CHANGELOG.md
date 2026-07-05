@@ -321,6 +321,15 @@ word, so almost no tweet matched and the pool came back empty. New `twttr.ts:nic
 heavy hitters). The ideas retry now broadens to the single strongest topic (also dodges any
 provider quirk with OR/parens), and the error copy tells the user to use fewer/broader keywords.
 
+**Reply ranker — live pileup on remount (2026-07-05)** — the one stale term in
+`effectiveScore`: freshness recomputed live, but likes/replies were frozen at first-scan, so a
+post that BLEW UP after being queued kept ranking as an easy fresh reply (contradicting the
+"first ~5-10 replies get seen" premise `buried` exists to honor). Now scan()'s cached branch
+refreshes the opp's counts from the live node whenever X's virtualized timeline re-renders a
+seen post — zero API calls, no stored DOM refs; a post is only stale while it stays off-screen.
+(The full fix for never-re-rendered posts would need a per-post API fetch — a budget decision,
+deliberately not taken here.)
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
