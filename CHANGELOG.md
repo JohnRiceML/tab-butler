@@ -350,6 +350,21 @@ trend → show-up / post-mix nudges → the timing lever) and each names its evi
 tooltip — none claims a literal streak bonus, because there isn't one: consistency pays through
 repeat-engagement affinity + account reputation, and that's what the copy says.
 
+**The system now LEARNS what works — and shows it (2026-07-05)** — closing the loop from
+measurement to behavior. Every sent reply already logs its features (angle, post-age-at-reply,
+stage-1 fit, author reach) and gets its real engagement measured daily; new pure
+`learn-stats.ts:learnFeatures` (+9 tests, learn-stats 38) turns those settled outcomes into:
+- **★ your measured-best angle** on the draft-panel chips — the angle whose replies earned
+  ≥1.15× your reach-normalized average (min 4 outcomes per angle, ≥2 angles ranked; shrunk,
+  recency-weighted). Soft steer only — the per-post category still drives the default.
+- **"What's working" insight lines** — per-angle ▲/▼ and the measured timing gradient
+  ("replies to <15m-old posts earn ~2.3× your 1h+ ones"), each labeled correlation-not-
+  causation and silent below the min-N gates.
+- **A live fit-validity check** — Spearman between the stage-1 fit score and real outcomes
+  (the assumptions audit's A4 test), surfaced in the tooltip once n≥12.
+Same honesty machinery as the account learner; zero new API calls. Also fixed the stale
+"outcome is NOT YET IMPLEMENTED" SentRecord comment (the measure pass has written it for weeks).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

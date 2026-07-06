@@ -42,6 +42,8 @@ export interface LearnReply {
   at: number;
   author?: string;
   score?: number;       // effectiveScore (0..1) of the opportunity
+  angle?: string;       // the drafting angle used (REPLY_ANGLES id) — feature learning
+  ageMs?: number;       // post age at reply time — the timing lever, measured
   followers?: number;
   norm?: string;        // normalized reply text (for match-back)
   snippet?: string;
@@ -287,4 +289,101 @@ export function accountTrend(snaps: Record<string, TrendSnap>, now: number): Acc
     followerDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
   }
   return { state, metric, nowPer, prevPer, nowPosts: a.posts, prevPosts: b.posts, followerDelta };
+}
+
+/* ---------- feature learning: WHAT works for this user (not just WHO) ---------- */
+// The self-tuning half of the loop. The same settled outcomes the account learner uses, sliced
+// by the features logged on every sent reply (drafting angle, post-age-at-reply, stage-1 fit).
+// Same honesty machinery as aggregateAccounts — recency-weighted, reach-normalized fit,
+// K-shrunk toward the user's own global mean, min-N gated: below the gate a slice simply
+// doesn't rank, and nothing here ever claims causation. Consumption is deliberately SOFT:
+// a star on the measured-best angle chip + measured display lines — never a hard override of
+// the per-post category (fit is post-specific; this learner is user-specific).
+
+export interface AngleLearn { angle: string; n: number; rel: number } // rel = shrunk fit / the user's global mean
+export interface AgeBucketLearn { label: string; n: number; fit: number }
+export interface FeatureLearn {
+  nOut: number;                 // settled outcomes seen
+  angles: AngleLearn[];         // ranked desc, only slices with n >= N_MIN_OUT
+  bestAngle?: string;           // only when >=2 angles ranked AND the top is clearly above avg
+  ageBuckets: AgeBucketLearn[]; // the timing lever measured on YOUR replies
+  ageGradient?: number;         // fresh (<15m) fit / stale (>=1h) fit — only when both sides clear the gate
+  freshN?: number; staleN?: number;
+  fitCorr?: number;             // Spearman(stage-1 fit, outcome) — runs the audit's "is fit real?" test continuously
+}
+
+const AGE_BUCKETS: Array<{ label: string; maxMs: number }> = [
+  { label: "<15m", maxMs: 15 * 60_000 },
+  { label: "15-60m", maxMs: 3_600_000 },
+  { label: "1-6h", maxMs: 6 * 3_600_000 },
+  { label: ">6h", maxMs: Infinity },
+];
+export const BEST_ANGLE_REL = 1.15; // the top angle must beat the mean by >=15% (post-shrinkage) to earn the star
+export const FIT_CORR_MIN_N = 12;   // Spearman below this n is noise — say nothing
+
+function spearman(pairs: Array<[number, number]>): number {
+  const rank = (vals: number[]): number[] => {
+    const idx = vals.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]);
+    const rs = new Array<number>(vals.length);
+    for (let i = 0; i < idx.length; ) {
+      let j = i; while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++;
+      const r = (i + j) / 2 + 1;
+      for (let k = i; k <= j; k++) rs[idx[k][1]] = r;
+      i = j + 1;
+    }
+    return rs;
+  };
+  const xs = rank(pairs.map((p) => p[0])), ys = rank(pairs.map((p) => p[1]));
+  const n = pairs.length, mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) { const a = xs[i] - mx, b = ys[i] - my; num += a * b; dx += a * a; dy += b * b; }
+  return dx > 0 && dy > 0 ? num / Math.sqrt(dx * dy) : 0;
+}
+
+export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
+  const out: Array<{ fit: number; w: number; angle?: string; ageMs?: number; score?: number }> = [];
+  let gwo = 0, gwf = 0;
+  for (const r of sent) {
+    if (!r.outcome) continue;
+    const w = recencyW((now - r.at) / DAY_MS);
+    const fit = ((r.outcome.likes ?? 0) + W_REPLY * (r.outcome.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
+    out.push({ fit, w, angle: r.angle, ageMs: r.ageMs, score: r.score });
+    gwo += w * fit; gwf += w;
+  }
+  const mu = gwf > 0 ? gwo / gwf : 0;
+  const res: FeatureLearn = { nOut: out.length, angles: [], ageBuckets: [] };
+  if (!out.length || mu <= 0) return res;
+
+  // per-angle: shrunk toward the user's own mean; below the gate a slice doesn't rank at all
+  const byAngle = new Map<string, typeof out>();
+  for (const o of out) { if (!o.angle) continue; const xs = byAngle.get(o.angle); if (xs) xs.push(o); else byAngle.set(o.angle, [o]); }
+  for (const [angle, xs] of byAngle) {
+    if (xs.length < N_MIN_OUT) continue;
+    let sw = 0, swf = 0; for (const o of xs) { sw += o.w; swf += o.w * o.fit; }
+    const shrunk = (K * mu + sw * (swf / sw)) / (K + sw);
+    res.angles.push({ angle, n: xs.length, rel: shrunk / mu });
+  }
+  res.angles.sort((a, b) => b.rel - a.rel);
+  if (res.angles.length >= 2 && res.angles[0].rel >= BEST_ANGLE_REL) res.bestAngle = res.angles[0].angle;
+
+  // age buckets: the timing lever, measured on the user's own replies
+  for (const b of AGE_BUCKETS) {
+    let lo = -1;
+    const bi = AGE_BUCKETS.indexOf(b); if (bi > 0) lo = AGE_BUCKETS[bi - 1].maxMs;
+    let sw = 0, swf = 0, n = 0;
+    for (const o of out) { if (o.ageMs == null) continue; if (o.ageMs <= lo || o.ageMs > b.maxMs) continue; sw += o.w; swf += o.w * o.fit; n++; }
+    if (n > 0 && sw > 0) res.ageBuckets.push({ label: b.label, n, fit: swf / sw });
+  }
+  const fresh = out.filter((o) => o.ageMs != null && o.ageMs <= 15 * 60_000);
+  const stale = out.filter((o) => o.ageMs != null && o.ageMs > 3_600_000);
+  if (fresh.length >= N_MIN_OUT && stale.length >= N_MIN_OUT) {
+    const wm = (xs: typeof out) => { let sw = 0, swf = 0; for (const o of xs) { sw += o.w; swf += o.w * o.fit; } return sw > 0 ? swf / sw : 0; };
+    const sf = wm(stale);
+    if (sf > 0) { res.ageGradient = wm(fresh) / sf; res.freshN = fresh.length; res.staleN = stale.length; }
+  }
+
+  // does the stage-1 fit score actually predict outcomes? (the assumptions-audit A4 test, live)
+  const pairs = out.filter((o) => o.score != null).map((o) => [o.score as number, o.fit] as [number, number]);
+  if (pairs.length >= FIT_CORR_MIN_N) res.fitCorr = spearman(pairs);
+  return res;
 }

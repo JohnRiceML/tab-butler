@@ -3,7 +3,7 @@ import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
@@ -697,10 +697,11 @@ let draftOppAuthor = "";
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
  *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
-/** One sent reply's features — the raw material for the planned "what's working"
- *  learning loop. NOT YET IMPLEMENTED: `outcome` is reserved for a future measure
- *  pass (match to your posted reply via /user-replies, read its engagement) — nothing
- *  currently writes it. See CHANGELOG.md "Next phase". */
+/** One sent reply's features — the raw material for the "what's working" learning
+ *  loop. `outcome` IS written by the daily measure pass (runMeasurePass matches your
+ *  posted replies via /user-replies and reads their real engagement); the features are
+ *  consumed by learn-stats aggregateAccounts (WHO works) + learnFeatures (WHAT works:
+ *  angle, timing, fit-validity). */
 interface SentRecord {
   id?: string;           // unique per reply (stable key for playground treats + fed-tracking; old records fall back to String(at))
   at: number;            // when we handed you the reply
@@ -1066,11 +1067,16 @@ async function draftFor(req: DraftReq) {
  *  toggles it back off (neutral). Reuses lastDraft so post/context are kept. */
 function angleRow(active?: string): HTMLElement {
   const row = document.createElement("div"); row.className = "angles";
+  // The learner's SOFT steer: star the angle whose replies measurably out-earn the user's average.
+  // Display-only — the model's per-post category still drives the default (fit is post-specific).
+  const fl = learnFeatures(replyLog.sent, Date.now());
   for (const a of REPLY_ANGLES) {
     const c = document.createElement("button");
     c.className = "ang" + (active === a.id ? " on" : "");
-    c.textContent = a.label;
-    c.title = a.directive;
+    const starred = fl.bestAngle === a.id;
+    c.textContent = starred ? `\u2605 ${a.label}` : a.label;
+    const starWhy = starred ? ` \u2605 Your measured-best angle: these replies earned ${fl.angles[0].rel.toFixed(1)}\u00D7 your average engagement (n=${fl.angles[0].n}, reach-normalized). Correlation, not causation.\n` : "";
+    c.title = starWhy + a.directive;
     c.onclick = () => {
       const d = lastDraft;
       if (!d) return;
@@ -2353,6 +2359,23 @@ function renderInsightPanel(d: HTMLElement): void {
         + (fd != null && fd !== 0 ? ` \u00B7 ${fd > 0 ? "+" : ""}${fd} followers` : "");
       t.title = `Measured from ${at.metric === "views" ? "X-reported views" : "likes+reposts+replies"} on your own posts: ${at.nowPosts} post${at.nowPosts === 1 ? "" : "s"} this week vs ${at.prevPosts} last. Consistency compounds through repeat engagement (affinity + reputation) \u2014 X has no literal streak bonus, so this tracks RESULTS, not activity.`;
       body.append(t);
+    }
+    // WHAT works for you (the feature learner): measured per-angle + the timing lever, min-N gated —
+    // below the gate a line simply doesn't render. Soft consumption only (the \u2605 on the angle chips).
+    {
+      const fl = learnFeatures(replyLog.sent, now);
+      const bits: Array<[string, string]> = [];
+      for (const a of fl.angles.slice(0, 2)) {
+        if (a.rel >= 1.15 || a.rel <= 0.85) bits.push([`${a.rel >= 1.15 ? "\u25B2" : "\u25BC"} ${catLabel(a.angle)} replies: ${a.rel.toFixed(1)}\u00D7 your avg (n=${a.n})`, "Reach-normalized engagement on your own measured replies, shrunk toward your mean. Correlation, not causation."]);
+      }
+      if (fl.ageGradient != null && (fl.ageGradient >= 1.5 || fl.ageGradient <= 0.67)) {
+        bits.push([`\u23F1 Replies to <15m-old posts earn ~${fl.ageGradient.toFixed(1)}\u00D7 your 1h+ ones (n=${fl.freshN} vs ${fl.staleN})`, "The timing lever measured on YOUR replies \u2014 the same early-window mechanism the ranker rewards."]);
+      }
+      for (const [txt, why] of bits) {
+        const li = document.createElement("div"); li.className = "ins-trend"; li.textContent = txt;
+        li.title = why + (fl.fitCorr != null ? ` (fit\u2194outcome \u03C1=${fl.fitCorr.toFixed(2)}, n=${fl.nOut})` : "");
+        body.append(li);
+      }
     }
     const wk = weeklyViewGrowth();
     if (wk.views > 0) { const t = document.createElement("div"); t.className = "ins-trend"; t.textContent = `Your posts: +${fmtCount(wk.views)} views ${wk.days >= 7 ? "this week" : `last ${wk.days}d`}`; t.title = "X-reported view growth on your own posts, summed from the daily scan."; body.append(t); }

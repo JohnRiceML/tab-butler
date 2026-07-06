@@ -9,7 +9,7 @@ As you scroll X, it quietly flags the handful of posts where a reply is actually
 ## How the user uses it
 1. Scroll the X timeline normally. Posts worth replying to get a brand-orange left border + a pill badge like `✦ 78% · Add value` (score = reply fit, tag = angle). Posts the scorer saw but passed on get a faint `+ Add` you can click to override and pull them in.
 2. Open the dock (bottom-right) to see the ranked list of collected spots, sortable Best / Recent / Reach / Easy, filterable by author/text. Each card shows the author, avatar, age, engagement, fit verdict, and category.
-3. Click a badge or a dock card to open the draft panel. It shows "Drafting in your voice…", then a textarea with the reply, angle chips (Connect / Add value / Ask / Joke / Support / Promote), a "Steer it" free-text input, Copy, and ↻ Regenerate.
+3. Click a badge or a dock card to open the draft panel. It shows "Drafting in your voice…", then a textarea with the reply, angle chips (Connect / Add value / Ask / Joke / Support / Promote — a ★ marks your measured-best angle once ≥2 angles have ≥4 settled outcomes each, `learnFeatures`), a "Steer it" free-text input, Copy, and ↻ Regenerate.
 4. Optionally switch angle (re-drafts), type a steer + Regenerate, or edit the textarea by hand.
 5. Click "Insert into reply box." Goobi opens the post's reply composer, types the draft in, likes the post (once), and shows a toast (plus any pacing/duplicate nudge). You review and hit Post yourself — it never submits.
 6. Optional extras: ⟳ Rescan re-evaluates the visible feed from scratch; "Find spots" searches X (RapidAPI) for fresh niche posts off-page; Pause goes quiet.

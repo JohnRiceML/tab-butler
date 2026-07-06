@@ -100,6 +100,44 @@ const DAY = 86_400_000;
   ok(m.matchOutcomes([{ text: "nothing in common whatsoever", at: NOW }], sent).length === 0, "match: a non-match is dropped, never guessed");
 }
 
+/* ---- learnFeatures: WHAT works (angles, timing, fit-validity) — the self-tuning half ---- */
+{
+  const MIN = 60_000;
+  const rec = (angle, ageMs, likes, score, daysAgo = 1) => ({
+    at: NOW - daysAgo * 86_400_000, author: "a", angle, ageMs, followers: 1000, score,
+    outcome: { at: NOW, likes, replies: 0 },
+  });
+  // "ask" replies consistently outperform "value" ones
+  const sent = [
+    ...Array.from({ length: 6 }, (_, i) => rec("ask", 5 * MIN, 20, 0.7, i + 1)),
+    ...Array.from({ length: 6 }, (_, i) => rec("value", 5 * MIN, 2, 0.6, i + 1)),
+  ];
+  const fl = m.learnFeatures(sent, NOW);
+  ok(fl.nOut === 12 && fl.angles.length === 2, "both angles clear the min-N gate");
+  ok(fl.angles[0].angle === "ask" && fl.bestAngle === "ask", "the measured-best angle wins the star");
+  // min-N gate: 3 outcomes never rank
+  const thin = m.learnFeatures([...Array.from({ length: 3 }, (_, i) => rec("joke", 5 * MIN, 50, 0.5, i + 1))], NOW);
+  ok(thin.angles.length === 0 && thin.bestAngle === undefined, "a 3-outcome angle stays unranked (min-N gate)");
+  // a lone ranked angle can't be "best" (nothing to beat)
+  const lone = m.learnFeatures([...Array.from({ length: 5 }, (_, i) => rec("ask", 5 * MIN, 30, 0.5, i + 1))], NOW);
+  ok(lone.angles.length === 1 && lone.bestAngle === undefined, "one ranked angle alone earns no star");
+  // timing gradient: fresh replies out-earn stale ones
+  const timed = [
+    ...Array.from({ length: 5 }, (_, i) => rec("value", 4 * MIN, 12, 0.5, i + 1)),
+    ...Array.from({ length: 5 }, (_, i) => rec("value", 3 * 60 * MIN, 3, 0.5, i + 1)),
+  ];
+  const ft = m.learnFeatures(timed, NOW);
+  ok(ft.ageGradient > 2 && ft.freshN === 5 && ft.staleN === 5, "fresh-vs-stale gradient is measured (fresh ~4x here)");
+  ok(ft.ageBuckets.some((b) => b.label === "<15m") && ft.ageBuckets.some((b) => b.label === "1-6h"), "age buckets populate");
+  // fit correlation: high fit → high outcome gives a positive Spearman (n >= 12)
+  const corr = Array.from({ length: 14 }, (_, i) => rec("value", 5 * MIN, i * 3, i / 14, (i % 5) + 1));
+  ok(m.learnFeatures(corr, NOW).fitCorr > 0.8, "stage-1 fit that tracks outcomes shows a strong positive rho");
+  ok(m.learnFeatures(corr.slice(0, 8), NOW).fitCorr === undefined, "below n=12 the correlation stays silent (noise)");
+  // no outcomes → no claims at all
+  const none = m.learnFeatures([{ at: NOW, angle: "ask" }], NOW);
+  ok(none.nOut === 0 && none.angles.length === 0 && none.ageGradient === undefined, "no settled outcomes → the learner says nothing");
+}
+
 /* ---- accountTrend: measured "is the account picking up?" (results, not activity) ---- */
 {
   const DAY = 86_400_000;

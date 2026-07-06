@@ -23,6 +23,12 @@ It mirrors back the accounts you keep replying to through Goobi, ranked by reply
 - **No Claude calls anywhere in this loop.** The only network calls are the two best-effort RapidAPI fetches in Pass B.
 - **Persistence:** `LearnStore` (`{ handle, scanDay, measureDay, restId, prevById, snaps }`) is saved under `X_LEARN_STATS_KEY` ("xLearnStats") via `safeSet`. Measured outcomes are written into the reply log under `X_REPLY_LOG_KEY` ("xReplyLog"). Per-account aggregates are NOT persisted — they're derived live. Boot rehydrates `learn` from storage (only if the stored handle is set); `chrome.storage.onChanged` syncs `learn` from another tab's scan and re-renders.
 
+## The WHAT-works learner (`learnFeatures`)
+Alongside WHO-works (`aggregateAccounts`), `learn-stats.ts:learnFeatures` slices the SAME settled outcomes by the features logged on every sent reply — drafting **angle**, **post-age-at-reply**, and the stage-1 **fit score** — with identical honesty machinery (recency weights, reach-normalized fit, K-shrinkage toward the user's own mean, `N_MIN_OUT` gates; below a gate a slice doesn't rank). Three consumptions, all SOFT:
+- **★ on the measured-best angle chip** in the draft panel — only when ≥2 angles clear the gate AND the top beats the mean by ≥15% post-shrinkage. Display-only: the model's per-post category still drives the default, because fit is post-specific.
+- **"What's working" lines in the insights panel** — per-angle ▲/▼ (only when ≥1.15× or ≤0.85×) and the measured timing gradient ("replies to <15m posts earn ~N× your 1h+ ones"), each labeled correlation-not-causation.
+- **`fitCorr`** — a live Spearman between the stage-1 fit score and real outcomes (silent under n=12): the assumptions audit's "is the fit score real?" test, running continuously in the tooltip.
+
 ## What is honest about it / limits
 - **Tier-1 "investment" is EFFORT, not payoff** — "who you show up with," explicitly never "who pays off." It's computed from data already logged (zero API cost).
 - **Tier-2 measured `score` is the only real do-well-with signal**, and it's never imputed: it stays `undefined` until `nOut >= 4` settled outcomes exist. Below that, no ✓ badge appears.
