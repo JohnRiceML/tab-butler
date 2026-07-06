@@ -126,6 +126,7 @@ interface ViewData {
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
   safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
   todaySent: string[]; // snippets of today's sent replies — the playground treats
+  signals: { measureDay: string; settled: number; fitN: number; backs: number; inboundN: number; inboundAgeD: number | null; ownAgeH: number | null; profileAgeD: number | null; reachN: number; heavyN: number } | null;
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -169,6 +170,7 @@ const MOCK: ViewData = {
   xMyHandle: "",
   xPremium: "",
   twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
+  signals: null,
   replyStats: { today: 7, week: 35, total: 142, days: [
     { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
     { label: "We", count: 8, today: false }, { label: "Th", count: 4, today: false },
@@ -216,10 +218,10 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string }[] } | undefined;
+  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; outcome?: { likes?: number; replies?: number; authorReplied?: boolean } }[] } | undefined;
   const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
   const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
   const repliesThisHour = (log?.times || []).filter((t) => now - t < 3_600_000).length;
@@ -256,6 +258,33 @@ async function getData(): Promise<ViewData> {
     replyStats,
     safety,
     todaySent,
+    signals: (() => {
+      // Signal health: the honest gates make panels legitimately QUIET — this makes the silence
+      // inspectable (how much data each learner has, how fresh each harvest is) so "quiet" and
+      // "broken" stop looking identical.
+      const sent = log?.sent ?? [];
+      const measured = sent.filter((r) => r.outcome && (r.outcome.likes != null || r.outcome.replies != null));
+      const learnS = store[CONFIG.X_LEARN_STATS_KEY] as { measureDay?: string } | undefined;
+      const inboundArr = (store[CONFIG.X_SUPPORTERS_KEY] as { at: number }[] | undefined) ?? [];
+      const prof = store[CONFIG.X_PROFILE_KEY] as { at?: number } | undefined;
+      const own = store[CONFIG.X_MY_POSTS_KEY] as { at?: number } | undefined;
+      const reach = store[CONFIG.X_AUTHOR_REACH_KEY] as Record<string, unknown> | undefined;
+      const heavy = store[CONFIG.X_HEAVY_HITTERS_KEY] as { entries?: Record<string, unknown> } | undefined;
+      const now = Date.now(), DAY = 86_400_000;
+      const lastInbound = inboundArr.length ? Math.max(...inboundArr.map((e) => e.at)) : null;
+      return {
+        measureDay: learnS?.measureDay || "never",
+        settled: measured.length,
+        fitN: measured.filter((r) => r.score != null).length,
+        backs: sent.filter((r) => r.outcome?.authorReplied).length,
+        inboundN: inboundArr.length,
+        inboundAgeD: lastInbound ? Math.round((now - lastInbound) / DAY) : null,
+        ownAgeH: own?.at ? Math.round((now - own.at) / 3_600_000) : null,
+        profileAgeD: prof?.at ? Math.round((now - prof.at) / DAY) : null,
+        reachN: reach ? Object.keys(reach).length : 0,
+        heavyN: heavy?.entries ? Object.keys(heavy.entries).length : 0,
+      };
+    })(),
   };
 }
 
@@ -286,6 +315,25 @@ function replyShowcaseHTML(s: ViewData["replyStats"]): string {
 
 /** "Account safety" — surfaces the reputation/anti-spam protection so it's a
  *  visible feature, not silent plumbing. Reads the same numbers the nudges use. */
+/** "Signal health" — why the honest panels are quiet, in numbers: each learner's data volume,
+ *  each harvest's freshness, and the distance to the gates that unlock measured claims. */
+function signalHealthHTML(g: ViewData["signals"]): string {
+  if (!g) return "";
+  const row = (k: string, v: string, hint: string) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:2px 0" title="${k}"><span class="dim">${k}</span><span style="color:var(--t1);text-align:right">${v}${hint ? ` <span class="dim">${hint}</span>` : ""}</span></div>`;
+  const today = dayKeyOf(Date.now());
+  return `<div class="li" style="display:block">
+    <div class="name" style="margin-bottom:4px">Signal health <span class="dim" style="font-weight:400">— why quiet panels are quiet</span></div>
+    ${row("Outcome measure pass", g.measureDay === today ? "ran today ✓" : g.measureDay === "never" ? "never" : g.measureDay, g.measureDay === "never" ? "(needs the RapidAPI key + a dock open)" : "")}
+    ${row("Measured reply outcomes", String(g.settled), `(fit-validity check unlocks at 12 — ${Math.min(g.fitN, 12)}/12)`)}
+    ${row("↩ Engaged-back credits", String(g.backs), g.inboundN ? "" : "(visit /notifications to feed this)")}
+    ${row("Notifications harvest", g.inboundN ? `${g.inboundN} events` : "empty", g.inboundAgeD != null ? `(last ${g.inboundAgeD === 0 ? "today" : `${g.inboundAgeD}d ago`})` : "(visit your notifications page)")}
+    ${row("Own-posts cache", g.ownAgeH != null ? `${g.ownAgeH}h old` : "empty", g.ownAgeH == null ? "(open the dock on x.com)" : "")}
+    ${row("Profile-coach harvest", g.profileAgeD != null ? `${g.profileAgeD === 0 ? "today" : `${g.profileAgeD}d ago`}` : "never", g.profileAgeD == null ? "(visit your own profile once)" : "")}
+    ${row("Coverage caches", `${g.reachN} authors · ${g.heavyN} heavy hitters`, "")}
+    <div class="dim" style="font-size:10px;margin-top:5px">Every learner stays silent below its min-N gate rather than guessing — these numbers are the distance to each gate.</div>
+  </div>`;
+}
+
 function accountSafetyHTML(s: ViewData["safety"]): string {
   const HEX: Record<RepLevel, string> = { healthy: "#4fae6a", caution: "#e89a3c", easeoff: "#d6604a" };
   const CAP: Record<RepLevel, string> = { healthy: "Healthy", caution: "Caution", easeoff: "Ease off" };
@@ -449,6 +497,7 @@ function render(d: ViewData): string {
   <div class="list">
     ${replyShowcaseHTML(d.replyStats)}
     ${accountSafetyHTML(d.safety)}
+    ${signalHealthHTML(d.signals)}
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— search keywords, then ";", then your intent</span></div>
       <textarea id="xniche" rows="2" placeholder="e.g. AI SaaS, indie founders, MRR; posts I can add a specific build lesson to — words before the ; drive X search, the rest guides scoring" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>

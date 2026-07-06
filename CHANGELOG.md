@@ -433,6 +433,19 @@ challenge-verified items for the other two surfaces:
   notifications join, surfaced where you pick who to invest in (display-only, visit-dependent
   caveat in the docs).
 
+**The funnel line + signal health (2026-07-05)** — two verified items plus the robustness fix
+the expert brief called for:
+- **🔀 14d funnel** in the insights panel: replies → distinct engagers-back → follower delta,
+  all measured, labeled correlation-never-attribution (profile clicks are invisible
+  client-side; the tooltip says the causality is not claimed).
+- **Supporters' dormant reachBoost activated**: inbound engagers' follower counts backfill
+  from the reach cache at harvest, so the whale-vs-peer weighting finally varies instead of
+  sitting at the fallback constant.
+- **Signal health card** (popup): the honest min-N gates make panels legitimately QUIET, which
+  looked identical to broken. Now inspectable — measure-pass freshness, outcomes vs the
+  fit-validity gate (n/12), engaged-back credits, harvest ages (notifications / own-posts /
+  profile-coach), coverage-cache sizes — each with the action that feeds it.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

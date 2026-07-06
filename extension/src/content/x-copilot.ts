@@ -2427,6 +2427,24 @@ function renderInsightPanel(d: HTMLElement): void {
       t.title = `Measured from ${at.metric === "views" ? "X-reported views" : "likes+reposts+replies"} on your own posts: ${at.nowPosts} post${at.nowPosts === 1 ? "" : "s"} this week vs ${at.prevPosts} last. Consistency compounds through repeat engagement (affinity + reputation) \u2014 X has no literal streak bonus, so this tracks RESULTS, not activity.`;
       body.append(t);
     }
+    // The 14d funnel — measured totals that CO-OCCURRED, never attribution (profile clicks are
+    // invisible to us; follows can come from anywhere). The arc is the growth mechanism the
+    // 2026 pipeline scores (reply → profile visit → follow-author); the numbers are real.
+    {
+      const cutF = dayKey(now - 14 * 24 * HOUR_MS);
+      let sent14 = 0; for (const [k, v] of Object.entries(replyLog.daily)) if (k >= cutF) sent14 += v;
+      if (sent14 > 0) {
+        const cutMs = now - 14 * 24 * HOUR_MS;
+        const people = new Set(inbound.filter((e) => e.at >= cutMs).map((e) => e.handle.toLowerCase())).size;
+        let fDelta: number | undefined;
+        const withF = Object.values(learn.snaps).filter((sn) => sn.followers != null && sn.day >= cutF).sort((a, b) => (a.day < b.day ? -1 : 1));
+        if (withF.length >= 2 && withF[0].day !== withF[withF.length - 1].day) fDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
+        const t2 = document.createElement("div"); t2.className = "ins-trend";
+        t2.textContent = `🔀 14d: ${sent14} ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged back` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : "");
+        t2.title = "Measured totals that co-occurred over the last 14 days — correlation, NOT attribution: profile clicks aren't visible to us and follows can come from anywhere. The arc is the growth mechanism (reply → profile visit → follow); the numbers are real, the causality is not claimed. Engaged-back is matched from your notifications (visit-dependent, undercounts if you don't visit).";
+        body.append(t2);
+      }
+    }
     // WHAT works for you (the feature learner): measured per-angle + the timing lever, min-N gated —
     // below the gate a line simply doesn't render. Soft consumption only (the \u2605 on the angle chips).
     {
