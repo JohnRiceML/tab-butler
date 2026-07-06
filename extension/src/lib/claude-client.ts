@@ -217,13 +217,13 @@ export interface OwnPostLite { text: string; likes?: number; reposts?: number; }
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet.
  *  The model scores ONLY hookStrength (0-3); the honest virality band is computed in the
  *  content script from hookStrength + the real measured rank of the source it remixed. */
-export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number): Promise<PostIdea[]> {
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number, shapeLine?: string): Promise<PostIdea[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p, i) => {
     const eng = (p.likes ?? 0) + (p.reposts ?? 0);
     const ctx = p.followers ? `${eng} eng on ~${p.followers} followers` : `${eng} eng`;
-    return `${i + 1}. @${p.author} [${ctx}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
+    return `${i + 1}. @${p.author} [${ctx}${p.shape ? ` \u00b7 ${p.shape}` : ""}]: ${p.text.replace(/\s+/g, " ").slice(0, 280)}`;
   }).join("\n");
   // The user's own recent posts: primary voice/structure anchor + de-dupe guard. Top engagers
   // first + flagged "(this landed for you)" so "EXTEND your themes" operates on winners.
@@ -232,11 +232,12 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     ? `\n\nThe user's OWN recent posts (your PRIMARY voice + structure anchor; do NOT duplicate these topics, angles, takes, or examples — extend their themes from a new angle):\n${sortedOwn.slice(0, 15).map((p, i) => `${i + 1}. ${i < 3 ? "(this landed for you) " : ""}${p.text.replace(/\s+/g, " ").slice(0, 280)}`).join("\n")}`
     : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only and be extra careful not to write generic niche advice.)";
   const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
+  const shp = shapeLine?.trim() ? `\n\nMEASURED shape signal for this user (X-reported, settled posts only): ${shapeLine.trim()} When two seeds are equally strong, prefer that shape for 1-2 of the 5 — never force it onto a weak seed.` : "";
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
-    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
+    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}${shp}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
     2200,
   );
   return (raw.ideas || [])

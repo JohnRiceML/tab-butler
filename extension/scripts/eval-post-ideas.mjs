@@ -110,5 +110,32 @@ ok(m.jaccard(m.ideaTokens("ship daily and measure what sticks"), m.ideaTokens("s
   ok(m.expectedRate(500) === 0.04, "reset restores the published default");
 }
 
+// ---- shape → outcome: measured, settle-gated, one metric, min-N ----
+{
+  const NOW = 1_700_000_000_000, DAY = 86_400_000;
+  const mk = (text, daysAgo, views) => ({ text, postedAt: NOW - daysAgo * DAY, views });
+  const posts = [
+    mk("I almost quit last year. Then I changed one thing. It worked out fine.", 5, 4000),
+    mk("I shipped the wrong feature first. I learned the hard way. It cost me a month.", 6, 3600),
+    mk("I raised prices and braced for churn. Nothing happened. I had been scared of a ghost.", 7, 3900),
+    mk("consistency beats intensity", 5, 900),
+    mk("shipping daily beats planning weekly", 6, 800),
+    mk("small teams move faster", 8, 1000),
+    mk("What if your onboarding is the problem?", 9, 700),
+    mk("Why do founders fear pricing?", 10, 600),
+    mk("Should you build in public?", 11, 800),
+  ];
+  const sp = m.shapePerformance(posts, NOW);
+  ok(sp && sp.metric === "views", "majority-views pool → views metric, never mixed scales");
+  ok(sp.shapes[0].shape === "story" && sp.shapes[0].rel > 2, "the measured best shape ranks first with an honest multiple");
+  // settle gate: a fresh viral post never enters (selection bias — it hasn't finished earning)
+  const withFresh = [...posts, mk("I went viral an hour ago with this story. It felt amazing. Numbers still climbing.", 0, 90000)];
+  const sp2 = m.shapePerformance(withFresh, NOW);
+  ok(sp2.shapes.find((x) => x.shape === "story").n === 3, "posts younger than the settle window are excluded");
+  // min-N: a shape with 2 posts never ranks
+  ok(!sp.shapes.some((x) => x.shape === "numberLead"), "unranked shapes stay silent (min-N)");
+  ok(m.shapePerformance(posts.slice(0, 3), NOW) === null, "too few settled posts → null (silence, not guesses)");
+}
+
 console.log(fail === 0 ? `\n✓ post-ideas eval: ${pass} assertions passed` : `\n✗ post-ideas eval: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

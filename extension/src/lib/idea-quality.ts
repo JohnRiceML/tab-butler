@@ -176,3 +176,42 @@ export function bandFor(anchor: number, hook: number, hasSource: boolean, poolSi
   const hk = h >= 2 ? "and your hook leads with a real stake" : h === 1 ? "but your hook is a notch soft" : "but your hook needs work";
   return { band, sort, basis: `Remixes ${where}, ${hk}.` };
 }
+
+/* ---------- shape → outcome: which SHAPES actually land for THIS user ---------- */
+// Phoenix ranks on learned per-author outcome history with zero hand-engineered content
+// features — so the only shape calibration that transfers is what THIS user's audience
+// measurably rewarded. Honest by construction: only SETTLED posts count (a fresh post hasn't
+// finished earning — the same selection bias that killed the Latest-backfill pitch), ONE metric
+// per computation (views when most settled posts carry them, else engagement — never mixed
+// scales in one median), min-N per shape, and rel is vs the user's OWN median, not the niche's.
+export const SHAPE_SETTLE_MS = 48 * 3_600_000;
+export const SHAPE_MIN_N = 3;
+export interface ShapePerf { shape: Shape; n: number; rel: number } // rel = shape median / overall median
+export function shapePerformance(
+  posts: Array<{ text: string; postedAt?: number; views?: number; likes?: number; reposts?: number }>,
+  now: number,
+): { metric: "views" | "eng"; shapes: ShapePerf[] } | null {
+  const settled = posts.filter((p) => p.text && p.postedAt != null && now - p.postedAt >= SHAPE_SETTLE_MS);
+  if (settled.length < SHAPE_MIN_N + 1) return null;
+  const withViews = settled.filter((p) => p.views != null && p.views > 0);
+  const useViews = withViews.length >= Math.max(SHAPE_MIN_N + 1, Math.ceil(settled.length * 0.6));
+  const pool = useViews ? withViews : settled;
+  const out = (p: { views?: number; likes?: number; reposts?: number }): number => (useViews ? (p.views ?? 0) : (p.likes ?? 0) + (p.reposts ?? 0));
+  const usable = pool.filter((p) => out(p) > 0);
+  if (usable.length < SHAPE_MIN_N + 1) return null;
+  const all = usable.map(out).sort((a, b) => a - b);
+  const med = all[all.length >> 1];
+  if (med <= 0) return null;
+  const byShape = new Map<Shape, number[]>();
+  for (const p of usable) { const sh = classifyShape(p.text); const xs = byShape.get(sh); if (xs) xs.push(out(p)); else byShape.set(sh, [out(p)]); }
+  const shapes: ShapePerf[] = [];
+  for (const [shape, xs] of byShape) {
+    if (xs.length < SHAPE_MIN_N) continue;
+    xs.sort((a, b) => a - b);
+    shapes.push({ shape, n: xs.length, rel: xs[xs.length >> 1] / med });
+  }
+  if (!shapes.length) return null;
+  shapes.sort((a, b) => b.rel - a.rel);
+  return { metric: useViews ? "views" : "eng", shapes };
+}
+

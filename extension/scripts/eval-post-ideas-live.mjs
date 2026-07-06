@@ -139,13 +139,14 @@ const JUDGE_SYSTEM = `You are a harsh X/Twitter growth editor scoring a batch of
 - variety: 5 genuinely distinct shapes + a spread of content types, no topic clustering.
 - hookCraft: does line 1 of each earn line 2 (a number, a stake, an arguable claim, or named tension; no throat-clearing or windup)?
 - sourceHonesty: do they remix the PATTERN of the source posts and never lift a source's specific claim, number, or wording?
+- slopFree: 3 = a strict LLM quality grader would score every idea as substantive human writing (no "it's not just X it's Y", no hollow superlatives, no listicle filler, no detectably-AI cadence — X's published pipeline computes an explicit slop score, so this is a ranked variable). 0 = mostly reads as AI slop.
 Also return swapTestFails: 1-based indices of ideas that fail the swap test.
-Return ONLY JSON: {"antiGeneric":n,"voiceMatch":n,"variety":n,"hookCraft":n,"sourceHonesty":n,"swapTestFails":[...],"note":"one sentence"}`;
+Return ONLY JSON: {"antiGeneric":n,"voiceMatch":n,"variety":n,"hookCraft":n,"sourceHonesty":n,"slopFree":n,"swapTestFails":[...],"note":"one sentence"}`;
 
 const judgeUser = (f, ideas) =>
   `User niche: ${f.niche}\n\nThe user's own posts:\n${(f.ownPosts || []).map((p, i) => `${i + 1}. ${p.text}`).join("\n") || "(none)"}\n\nThe source posts the tool was told to remix the PATTERN of:\n${f.winners.map((p, i) => `${i + 1}. @${p.author}: ${p.text}`).join("\n")}\n\nThe 5 generated ideas to judge:\n${ideas.map((d, i) => `${i + 1}. [${d.pattern || "?"}] ${d.text}`).join("\n\n")}`;
 
-const DIMS = ["antiGeneric", "voiceMatch", "variety", "hookCraft", "sourceHonesty"];
+const DIMS = ["antiGeneric", "voiceMatch", "variety", "hookCraft", "sourceHonesty", "slopFree"];
 const ok = [];
 for (const f of FIXTURES) {
   try {

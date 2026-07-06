@@ -415,6 +415,24 @@ Plus an **X Premium tier** setting (never a score input): free-tier users get on
 external-study callout (~10× median reach, Buffer 18.8M posts, self-selection caveat named,
 priority BELOW every actionable lever); unset stays silent — unknown ≠ free.
 
+**Post-ideas + targets: the measured-shape loop and friends (2026-07-05)** — the remaining
+challenge-verified items for the other two surfaces:
+- **Shape→outcome loop** (`shapePerformance`, +5 eval, 47): from the user's SETTLED own posts
+  (>48h; one metric, never mixed scales; min-3 per shape), which shapes actually land — a
+  measured header line in the ideas tab, a soft MEASURED preference in the generation prompt,
+  `[shape]` tags on every exemplar, and `IdeaRecord.shape` stamped at creation. The old
+  "Winning shapes" row is relabeled "Batch shapes (model-picked)" so measured never blurs
+  with model-declared.
+- **topPostId finally consumed**: "📈 Biggest one-day gainer this week" in the ideas header —
+  honest per-day-delta semantics (never "top post this week"), silent on cache miss.
+- **👁 views on the source proof** when X reported them (display only — the scoring blend was
+  challenge-rejected pending a views baseline).
+- **slopFree dimension** in the Layer-B ideas judge — X computes an explicit slop score, so the
+  eval now measures it (the live pre-ship screen stays gated on this eval's evidence).
+- **Targets: ↩ engaged back ×N on the standing line** — the measured reply-back count from the
+  notifications join, surfaced where you pick who to invest in (display-only, visit-dependent
+  caveat in the docs).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

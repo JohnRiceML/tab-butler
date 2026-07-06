@@ -6,7 +6,7 @@ import { activityCells, chain, pickCallout } from "../lib/activity";
 import { profileCheck, type ProfileState } from "../lib/profile-check";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
-import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
+import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
@@ -1671,9 +1671,10 @@ type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas" | "targets"; // top-level dock mode: reply spots vs post ideas vs big-account targeting
 let dockView: DockView = "replies";
-interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; } // the real over-performing post we remixed
+interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; views?: number; } // the real over-performing post we remixed
 interface IdeaRecord {
   id: string; text: string; source: string; pattern: string; why: string;
+  shape?: Shape; // code-classified at creation — links the model's "pattern" to the measured shape table
   band?: Band; basis?: string; sortScore?: number; // honest virality (band cites the source's real rank)
   virality?: number;                               // legacy: old persisted records render via a fallback
   src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
@@ -2123,6 +2124,15 @@ function closePlay(then?: () => void): void {
 function togglePlay(): void { if (paused) return; dockPlayOpen ? closePlay() : openPlay(); }
 
 /* ---------- post ideas (remix what's overperforming in your niche) ---------- */
+
+const SHAPE_LABEL: Record<Shape, string> = { oneLiner: "one-liner", list: "list", numberLead: "number-led", contrarian: "contrarian", story: "story", question: "question", other: "mixed" };
+/** The user's MEASURED best shape (settled own posts, one metric, min-N) — null when silent. */
+function measuredShapeLine(): { line: string; n: number; metric: string } | null {
+  const sp = shapePerformance(ownStats ?? [], Date.now());
+  const top = sp?.shapes[0];
+  if (!sp || !top || top.rel < 1.3) return null; // only speak when a shape clearly leads
+  return { line: `their ${SHAPE_LABEL[top.shape]}-shaped posts earn ${top.rel.toFixed(1)}× their median ${sp.metric === "views" ? "views" : "engagement"} (n=${top.n}).`, n: top.n, metric: sp.metric };
+}
 
 /** The best PATTERNS to remix: recent original niche posts that punch above their
  *  weight — follower-normalized engagement against a SIZE-TIERED expected rate (idea-quality.ts
@@ -2607,6 +2617,7 @@ async function generateIdeas() {
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers, shape: t.shape })),
       ownPosts,
       followers: myFollowers || undefined,
+      shapeLine: measuredShapeLine()?.line,
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
@@ -2629,7 +2640,8 @@ async function generateIdeas() {
       const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w, winners.length, sourceStrong); // poolSize → thin-pool haircut; sourceStrong → Strong needs a real breakout
       return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why,
         band, basis, sortScore: sort,
-        src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts } : undefined,
+        shape: classifyShape(d.text),
+        src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts, views: w.views } : undefined,
         status: "working", createdAt: now, lastEditedAt: now };
     });
     // Drop a fresh idea that duplicates one of YOUR recent posts, an earlier sibling, OR a working idea
@@ -2722,7 +2734,7 @@ function sourceBlock(idea: IdeaRecord): HTMLElement {
     const q = document.createElement("div"); q.className = "idea-quote";
     const qt = document.createElement("div"); qt.className = "idea-qtext"; qt.textContent = idea.src.text; q.append(qt);
     const f = document.createElement("div"); f.className = "idea-qfoot";
-    const eng = document.createElement("span"); eng.textContent = `❤ ${fmtCount(idea.src.likes) || 0} · 🔁 ${fmtCount(idea.src.reposts) || 0} on this one`;
+    const eng = document.createElement("span"); eng.textContent = `❤ ${fmtCount(idea.src.likes) || 0} · 🔁 ${fmtCount(idea.src.reposts) || 0}${idea.src.views != null ? ` · 👁 ${fmtCount(idea.src.views)}` : ""} on this one`;
     const link = document.createElement("a"); link.className = "idea-qlink"; link.textContent = "Open post ↗";
     link.href = `https://x.com/${idea.src.handle}/status/${idea.src.id}`; link.target = "_blank"; link.rel = "noopener";
     f.append(eng, link); q.append(f); wrap.append(q);
@@ -2862,12 +2874,13 @@ function targetStanding(handle: string, agg: ReturnType<typeof aggregateAccounts
   const h = handle.toLowerCase();
   const a = Object.entries(agg.accounts).find(([k]) => k.toLowerCase() === h)?.[1];
   if (!a || a.replies === 0) return { text: "no replies here yet", cls: "tg-muted" };
+  const back = a.backs ? ` · ↩ engaged back ×${a.backs}` : ""; // measured from your notifications (visit-dependent)
   if (a.score != null) {
-    if (a.score > agg.muObs * 1.1) return { text: `✓ your replies here beat your average (${a.replies})`, cls: "tg-good" };
-    if (a.score < agg.muObs * 0.9) return { text: `your replies here trail your average (${a.replies})`, cls: "tg-muted" };
-    return { text: `your replies here are about average (${a.replies})`, cls: "tg-muted" };
+    if (a.score > agg.muObs * 1.1) return { text: `✓ your replies here beat your average (${a.replies})${back}`, cls: "tg-good" };
+    if (a.score < agg.muObs * 0.9) return { text: `your replies here trail your average (${a.replies})${back}`, cls: "tg-muted" };
+    return { text: `your replies here are about average (${a.replies})${back}`, cls: "tg-muted" };
   }
-  return { text: `${a.replies} ${a.replies === 1 ? "reply" : "replies"} · still learning (${a.nOut}/4 measured)`, cls: "tg-muted" };
+  return { text: `${a.replies} ${a.replies === 1 ? "reply" : "replies"}${back} · still learning (${a.nOut}/4 measured)`, cls: "tg-muted" };
 }
 
 async function addTargetByHandle(raw: string): Promise<void> {
@@ -3154,9 +3167,32 @@ function buildIdeas(): HTMLElement {
   const sub = document.createElement("div"); sub.className = "ideasub";
   sub.textContent = "Remixes your niche's winning patterns into your voice — you review and post." + (myFollowers > 0 ? ` · tuned to ~${fmtCount(myFollowers)} followers` : "");
   head.append(sub);
-  // Row 3 — winning shapes (optional).
+  // Row 3 — the batch's shapes (MODEL-picked patterns; distinct from the measured line below).
   const pats = Array.from(new Set(working.map((i) => i.pattern).filter(Boolean))).slice(0, 3);
-  if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.append(document.createTextNode("Winning shapes: ")); const b = document.createElement("b"); b.textContent = pats.join(" · "); tr.append(b); head.append(tr); }
+  if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.append(document.createTextNode("Batch shapes (model-picked): ")); const b = document.createElement("b"); b.textContent = pats.join(" · "); tr.append(b); head.append(tr); }
+  // Row 4 — the MEASURED shape signal (settled own posts, one metric, min-N; silent below the gates).
+  const msl = measuredShapeLine();
+  if (msl) {
+    const tr = document.createElement("div"); tr.className = "idea-trend";
+    tr.textContent = `📐 Measured: ${msl.line.split("their ").join("your ")}`;
+    tr.title = `From your own settled posts (>48h old, X-reported ${msl.metric}), shape median vs your overall median, n=${msl.n}. Correlation, not causation — the generator gets this as a soft preference, never a rule.`;
+    head.append(tr);
+  }
+  // Row 5 — biggest one-day gainer this week (topPostId was computed daily and consumed by nothing).
+  {
+    let bestDay: { views: number; id: string } | undefined;
+    const cut = dayKey(Date.now() - 7 * 24 * HOUR_MS);
+    for (const [k, sn] of Object.entries(learn.snaps)) {
+      if (k >= cut && sn.hadViews && sn.topPostId && (bestDay == null || sn.views > bestDay.views)) bestDay = { views: sn.views, id: sn.topPostId };
+    }
+    const post = bestDay ? (ownStats ?? []).find((pp) => pp.id === bestDay!.id) : undefined;
+    if (bestDay && post && bestDay.views > 0) {
+      const tr = document.createElement("div"); tr.className = "idea-trend";
+      tr.textContent = `📈 Biggest one-day gainer this week: “${post.text.slice(0, 56)}${post.text.length > 56 ? "…" : ""}” +${fmtCount(bestDay.views)} views`;
+      tr.title = "Measured: the post that drove your largest single-day view growth in the last 7 days (X-reported, daily scan). A one-day delta, not a weekly total.";
+      head.append(tr);
+    }
+  }
   wrap.append(head);
 
   const body = document.createElement("div"); body.className = "dl";
