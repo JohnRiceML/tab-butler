@@ -121,6 +121,7 @@ interface ViewData {
   xDefaultProduct: string;
   twttrKey: string;
   xMyHandle: string;
+  xPremium: string;
   twttrMeter: { requests: number; bytes: number } | null;
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
   safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
@@ -166,6 +167,7 @@ const MOCK: ViewData = {
   xDefaultProduct: "",
   twttrKey: "",
   xMyHandle: "",
+  xPremium: "",
   twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
   replyStats: { today: 7, week: 35, total: 142, days: [
     { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
@@ -214,7 +216,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_REPLY_LOG_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
   const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string }[] } | undefined;
@@ -249,6 +251,7 @@ async function getData(): Promise<ViewData> {
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
+    xPremium: (store[CONFIG.X_PREMIUM_KEY] as string) || "",
     twttrMeter,
     replyStats,
     safety,
@@ -482,6 +485,16 @@ function render(d: ViewData): string {
         <button class="btn" data-action="learn-voice" style="padding:7px 12px;white-space:nowrap">Learn my voice</button>
       </div>
       <div class="dim" style="font-size:10.5px;margin-top:6px">Reads your recent replies (needs the RapidAPI key above) and fills the voice box below. Also sizes the “in reach” tag on the dock.</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <span class="dim" style="font-size:11px;white-space:nowrap">X Premium tier</span>
+        <select id="xpremium" style="flex:1;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px 8px;font-family:inherit;font-size:12px;outline:none">
+          <option value="" ${d.xPremium === "" ? "selected" : ""}>(not set)</option>
+          <option value="free" ${d.xPremium === "free" ? "selected" : ""}>Free</option>
+          <option value="premium" ${d.xPremium === "premium" ? "selected" : ""}>Premium</option>
+          <option value="premium+" ${d.xPremium === "premium+" ? "selected" : ""}>Premium+</option>
+        </select>
+      </div>
+      <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. External data shows tier is the largest reach covariate, so Goobi factors it into its coaching copy only.</div>
     </div>
     <div class="li" style="display:block">
       <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
@@ -760,10 +773,11 @@ async function dispatch(el: HTMLElement) {
         const defProduct = (document.getElementById("xdefproduct") as HTMLSelectElement | null)?.value ?? "";
         const typedKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
         const myHandle = ((document.getElementById("xmyhandle") as HTMLInputElement | null)?.value ?? "").trim().replace(/^@+/, "");
+        const premium = (document.getElementById("xpremium") as HTMLSelectElement | null)?.value ?? "";
         const prev = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.TWTTR_KEY_KEY]);
         const prevHandle = ((prev[CONFIG.X_MY_HANDLE_KEY] as string) || "").toLowerCase();
         const storedKey = (prev[CONFIG.TWTTR_KEY_KEY] as string) || "";
-        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle };
+        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle, [CONFIG.X_PREMIUM_KEY]: premium };
         if (typedKey) set[CONFIG.TWTTR_KEY_KEY] = typedKey; // the key field isn't pre-filled, so only overwrite when a new one is typed
         if (!myHandle || myHandle.toLowerCase() !== prevHandle) set[CONFIG.X_MY_FOLLOWERS_KEY] = 0; // drop a stale follower base for a new/cleared handle
         await chrome.storage.local.set(set);

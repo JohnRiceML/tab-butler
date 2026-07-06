@@ -57,6 +57,7 @@ export function pickCallout(ctx: {
   chainDays: number;
   repliesToday: number;
   postsThisWeek: number;
+  freeTier?: boolean; // true only when the user has SET their tier to free (unset = unknown = silence)
 }): Callout {
   if (ctx.easeoff) return {
     text: "Ease off — past ~30 replies/hr reads as automation, and those penalties stick to the account. Goobi paused scanning for new spots (⟳ Rescan overrides).",
@@ -81,6 +82,11 @@ export function pickCallout(ctx: {
   if (ctx.postsThisWeek === 0) return {
     text: "Mix in an original this week — replies earn the reach, your posts convert the profile clicks into follows.",
     why: "The reply → profile-visit → follow funnel: ~70/30 replies-to-posts is the standard growth mix; the profile is the conversion surface.",
+    kind: "prior",
+  };
+  if (ctx.freeTier) return {
+    text: "You're on the free tier — an 18.8M-post study measured ~10× median reach for Premium accounts. External data, worth weighing.",
+    why: "Buffer's 2025 study (18.8M posts, 71K accounts): free-account median engagement fell to ~0 while Premium tiers held; self-selection not fully controlled — a measured external correlation, not a promise.",
     kind: "prior",
   };
   return {

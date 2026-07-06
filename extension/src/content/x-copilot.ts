@@ -3,6 +3,7 @@ import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
+import { profileCheck, type ProfileState } from "../lib/profile-check";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
@@ -47,6 +48,8 @@ let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when p
 
 /** Twttr (X-data API) enrichment, all read-only + best-effort. */
 let xNiche = "";              // the niche query "Find spots" searches X for
+let premiumTier = "";         // "", "free", "premium", "premium+" — an honest covariate, never a score input
+let profileState: ProfileState | undefined; // own-profile harvest (pinned id + bio length), $0
 let myFollowers = 0;          // the user's own follower count, for the reach sweet-spot
 let twttrUnconfigured = false; // once the SW reports no key/host, stop trying until settings change
 
@@ -317,12 +320,37 @@ function requestScan() {
   requestAnimationFrame(() => { scanPending = false; scan(); });
 }
 
+/** Harvest the profile CONVERSION surface from the user's own profile page ($0, DOM-only):
+ *  the pinned post's status id + the bio length. Guards against false claims — only harvests
+ *  when the profile header has rendered AND the timeline shows enough articles that a missing
+ *  "Pinned" label genuinely means no pinned post (never claims "no pin" off a half-loaded page). */
+let profileHarvestAt = 0;
+function harvestOwnProfile(): void {
+  if (Date.now() - profileHarvestAt < 30_000) return; // settle window — the route re-scans constantly
+  if (!document.querySelector('[data-testid="UserName"]')) return; // header not rendered yet
+  const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]');
+  if (articles.length < 3) return; // timeline not loaded enough to trust a missing Pinned label
+  profileHarvestAt = Date.now();
+  let pinnedId: string | undefined;
+  for (const el of articles) {
+    const sc = el.querySelector('[data-testid="socialContext"]');
+    if (sc && /pinned/i.test(sc.textContent || "")) { pinnedId = statusInfo(el)?.id; break; }
+  }
+  const bio = document.querySelector('[data-testid="UserDescription"]');
+  const bioLen = (bio?.textContent || "").trim().length; // X omits the element entirely for an empty bio
+  profileState = { pinnedId, bioLen, at: Date.now() };
+  safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
+}
+
 /** Manual-scan override window: an explicit ⟳ Rescan lets one pass run even at ease-off. */
 let manualScanUntil = 0;
 function scan() {
   if (!enabled || paused) return;
   // On the notifications route, harvest who engaged with ME instead of scoring posts to reply to.
   if (location.pathname.startsWith("/notifications")) { scanNotifications(); return; }
+  // On the user's OWN profile, harvest the conversion surface (pinned post + bio) at $0. No return —
+  // the normal scan continues (own posts are skipped by the self check anyway).
+  if (selfHandle && location.pathname.toLowerCase() === "/" + selfHandle) harvestOwnProfile();
   // Ease-off = STOP analyzing too. Past the pace line the ambient scan pauses (no new queueing,
   // no Haiku spend) — surfacing more reply spots while the user should be cooling down is the
   // opposite of the honest mirror. Manual actions still work: ⟳ Rescan opens a short window,
@@ -2406,6 +2434,15 @@ function renderInsightPanel(d: HTMLElement): void {
         body.append(li);
       }
     }
+    // Profile check — the conversion surface (replies earn the click; the PROFILE converts it to a
+    // follow). Measured facts only: pinned-vs-your-best + bio presence. Silent without a harvest —
+    // it fills in the first time the user visits their own profile with Goobi on.
+    for (const f of profileCheck(profileState, ownStats ?? []).slice(0, 2)) {
+      const li = document.createElement("div"); li.className = "ins-trend";
+      li.textContent = (f.level === "act" ? "\u2192 " : "\u2713 ") + f.text;
+      li.title = f.why;
+      body.append(li);
+    }
     const wk = weeklyViewGrowth();
     if (wk.views > 0) { const t = document.createElement("div"); t.className = "ins-trend"; t.textContent = `Your posts: +${fmtCount(wk.views)} views ${wk.days >= 7 ? "this week" : `last ${wk.days}d`}`; t.title = "X-reported view growth on your own posts, summed from the daily scan."; body.append(t); }
 
@@ -3286,7 +3323,7 @@ function renderDock() {
       chainEl.title = `Consecutive days with a Goobi reply or a shipped post (best in this window: ${ch.best}). Measured activity. X has no literal streak bonus — consistency pays through repeat engagement (affinity) and account reputation, which is exactly what a gap decays.`;
       row.append(dots, chainEl);
       mom.append(row);
-      const co = pickCallout({ easeoff: stt.level === "easeoff", trend: accountTrend(learn.snaps, Date.now())?.state ?? null, chainDays: ch.current, repliesToday: repliesToday(), postsThisWeek });
+      const co = pickCallout({ easeoff: stt.level === "easeoff", trend: accountTrend(learn.snaps, Date.now())?.state ?? null, chainDays: ch.current, repliesToday: repliesToday(), postsThisWeek, freeTier: premiumTier === "free" });
       const coEl = document.createElement("div"); coEl.className = "mom-cue";
       coEl.textContent = (co.kind === "measured" ? "✓ " : "✦ ") + co.text;
       coEl.title = co.why + (co.kind === "measured" ? " — measured on your own data." : " — an algo prior (directional; the live ranker is undisclosed).");
@@ -3405,6 +3442,8 @@ async function boot() {
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
   xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
+  premiumTier = ((await getLocal(CONFIG.X_PREMIUM_KEY)) as string) || "";
+  profileState = (await getLocal(CONFIG.X_PROFILE_KEY)) as ProfileState | undefined;
   myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
   const storedLog = await getLocal(CONFIG.X_REPLY_LOG_KEY);
   if (storedLog && typeof storedLog === "object") {
@@ -3457,6 +3496,7 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_PREMIUM_KEY]) premiumTier = (changes[CONFIG.X_PREMIUM_KEY].newValue as string) || "";
     if (changes[CONFIG.X_NICHE_KEY]) {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
       heavyHitters = new Map(); heavyTried = false; // niche-derived pool no longer applies; auto-search re-fires for the new niche (persisted copy is niche-stamped, so it can't bleed back)

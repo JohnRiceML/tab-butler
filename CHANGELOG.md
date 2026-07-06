@@ -404,6 +404,17 @@ pause-resume and ✦ Find-spots buttons (the pill became a div — nested button
 HTML — with stopPropagation so the controls act without expanding the dock). Pause/search no
 longer require opening the full panel; ✦ disables while paused or mid-search.
 
+**The profile coach + Premium as an honest covariate (2026-07-05)** — the funnel's last mile:
+replies earn the profile CLICK, but the PROFILE converts it into the follow, and no feature
+touched that surface. Now: visiting your own profile harvests the conversion surface at $0
+(pinned post id + bio length, DOM-only, guarded against half-loaded pages — it never claims
+"no pinned post" off an unrendered timeline), and new pure `profile-check.ts` (+10 tests, the
+14th gate suite) renders measured findings in the insights panel: "your pinned post ranks #4
+of your last 15 by views — your #1 isn't pinned" / empty-or-thin bio. Silent without data.
+Plus an **X Premium tier** setting (never a score input): free-tier users get one labeled
+external-study callout (~10× median reach, Buffer 18.8M posts, self-selection caveat named,
+priority BELOW every actionable lever); unset stays silent — unknown ≠ free.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

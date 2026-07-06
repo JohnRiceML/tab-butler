@@ -40,6 +40,8 @@ export const CONFIG = {
   X_TARGETS_KEY: "xTargets", // "Target accounts" mode: large in-reach niche accounts to comment on early, device-local
   X_AUTHOR_REACH_KEY: "xAuthorReach", // persisted author-reach cache (PUBLIC data: followers/following/bio per handle) — compounds target-selection coverage across sessions
   X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted heavy-hitter engagement rates, stamped with the niche that produced them
+  X_PROFILE_KEY: "xProfile", // own-profile harvest (pinned post id + bio length) — the profile coach's $0 input
+  X_PREMIUM_KEY: "xPremium", // the user's X Premium tier ("", "premium", "premium+") — an honest covariate, NEVER a score input
 } as const;
 
 /**
