@@ -446,6 +446,14 @@ the expert brief called for:
   fit-validity gate (n/12), engaged-back credits, harvest ages (notifications / own-posts /
   profile-coach), coverage-cache sizes — each with the action that feeds it.
 
+**docs/INTEL.md — the x-algorithm diff-watch (2026-07-05)** — the last item from the mission's
+verified map: an EVENT-driven watch on xai-org/x-algorithm (the promised 4-week cadence isn't
+holding, so no monthly ritual — subscribe to the commits feed, run the checklist when a drop
+lands). The checklist names the four withheld things that matter most (the params weight
+module, the grox prompt templates, conversation-serving code, un-redacted thresholds) and
+routes each finding to the exact file it would change. Closes the verified map: every
+challenge-approved item that could ship without the owner's keys has now shipped.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

@@ -2,7 +2,7 @@
 
 The canonical map of the Goobi extension. Update this when code moves.
 
-> **Want to know how a FEATURE works (not just where it lives)?** → the **[flow docs center](flows/README.md)**. One doc per user-facing flow (reply spots, post ideas, targets, momentum, the learning + reciprocity panels, account safety, the X-data API, voice/profile, Goobi) — each is the end-to-end pipeline + the honesty limits + the gotchas. SYSTEM.md (this file) is the file map; `flows/` is the how-it-works map.
+> **Want to know how a FEATURE works (not just where it lives)?** → the **[flow docs center](flows/README.md)**. For the standing x-algorithm intelligence watch (the open-sourced ranker repo + the drop checklist), see **[INTEL.md](INTEL.md)**. One doc per user-facing flow (reply spots, post ideas, targets, momentum, the learning + reciprocity panels, account safety, the X-data API, voice/profile, Goobi) — each is the end-to-end pipeline + the honesty limits + the gotchas. SYSTEM.md (this file) is the file map; `flows/` is the how-it-works map.
 
 > **Two products in one tree.** Goobi began as **Tab Butler** (a local-first tab
 > manager) and pivoted to an **X/Twitter reply copilot** with a pet mascot. Both
