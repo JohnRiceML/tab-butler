@@ -1196,6 +1196,11 @@ const DOCK_CSS = `
 .lav + .lav { margin-left:-9px; }
 .lavinit { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#fff; }
 .lmore { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#cbb89c; background:#2a2118; }
+.lctl { display:inline-flex; align-items:center; gap:4px; margin-left:9px; flex:0 0 auto; }
+.lbtn { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%;
+        background:#2a2118; color:#cbb89c; border:.5px solid rgba(214,154,92,.25); cursor:pointer; font:600 10px -apple-system,system-ui,sans-serif; padding:0; }
+.lbtn:hover { border-color:rgba(214,154,92,.55); color:#f3ead9; }
+.lbtn:disabled { opacity:.45; cursor:default; }
 .d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
      background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
@@ -3154,7 +3159,7 @@ function renderDock() {
   const n = opps.size;
   if (!dockOpen) {
     const { mood, line, sub } = goobiStatus();
-    const l = document.createElement("button"); l.className = "l";
+    const l = document.createElement("div"); l.className = "l"; l.setAttribute("role", "button"); // div, not button — the pill hosts nested control buttons
     l.title = `${line} — open Goobi`;
     l.onclick = () => {
       dockOpen = true;
@@ -3175,6 +3180,17 @@ function renderDock() {
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
     if (n) { const avs = launcherAvatars(); if (avs) l.append(avs); } // overlapping faces of who to reply to
+    // Minimized controls: pause/resume + manual search, without expanding the dock.
+    const ctl = document.createElement("span"); ctl.className = "lctl";
+    const pb = document.createElement("button"); pb.className = "lbtn";
+    pb.textContent = paused ? "▶" : "⏸";
+    pb.title = paused ? "Resume — start finding reply spots again" : "Pause — no scanning, surfacing, or API calls";
+    pb.onclick = (e) => { e.stopPropagation(); setPaused(!paused); };
+    const sb = document.createElement("button"); sb.className = "lbtn"; sb.textContent = "✦";
+    sb.disabled = paused || findingSpots;
+    sb.title = paused ? "Paused — resume to search" : findingSpots ? "Searching…" : "Find spots — search X for fresh posts in your niche";
+    sb.onclick = (e) => { e.stopPropagation(); void findSpots(); };
+    ctl.append(pb, sb); l.append(ctl);
     root.appendChild(l);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;

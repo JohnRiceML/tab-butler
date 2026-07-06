@@ -399,6 +399,11 @@ while the user should cool down contradicted the honest mirror. Manual intent st
 ⟳ Rescan opens a 2-minute override window, Find spots is unaffected — and the ease-off callout
 says plainly: "Goobi paused scanning for new spots (⟳ Rescan overrides)."
 
+**Minimized-pill controls (2026-07-05)** — the collapsed launcher pill now carries ⏸/▶
+pause-resume and ✦ Find-spots buttons (the pill became a div — nested buttons are invalid
+HTML — with stopPropagation so the controls act without expanding the dock). Pause/search no
+longer require opening the full panel; ✦ disables while paused or mid-search.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
