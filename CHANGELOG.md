@@ -384,6 +384,15 @@ report, all challenge-verified first:
   and stage 2 (own-reply exemplars + measured-angle line) is explicitly gated on it.
 +10 learn-stats tests (48), +7 draft-context (13th suite in the gate).
 
+**Coverage caches persist (2026-07-05)** — `heavyHitters` + `authorReach` were session-only,
+so target-selection coverage reset on every navigation and the ~350KB Top-search re-ran each
+session. Now both persist (implementing the governor's own stated v2): `authorReach` (public
+author data) under the followers-class 24h TTL, `heavyHitters` niche-stamped under a 7d TTL —
+TTL authority lives in `twttr-policy.ts` (+2 tests). Persists MERGE into the stored copy so the
+long-session memory bound can't wipe compounding history; entries past TTL are pruned on
+load/write, never rendered; a niche change flushes the heavy pool (niche-stamped, can't bleed
+back). NEGATIVE net API cost.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

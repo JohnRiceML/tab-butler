@@ -7,6 +7,7 @@ import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDe
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
+import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
@@ -505,7 +506,7 @@ async function findSpots() {
       seen.set(t.id, { score: s.score, reason, category, products });
       if (s.score >= THRESHOLD) {
         opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, postedAt: t.postedAt, likes: t.likes, replies: t.replies, avatar: t.avatar, name: t.name, followers: t.followers, source: "search" });
-        if (t.author && t.followers != null) authorReach.set(t.author.toLowerCase(), { followers: t.followers, at: Date.now() }); // search already told us the author's reach
+        if (t.author && t.followers != null) { authorReach.set(t.author.toLowerCase(), { followers: t.followers, at: Date.now() }); schedulePersistReach(); } // search already told us the author's reach
         added++;
       }
     }
@@ -1510,6 +1511,7 @@ function pumpReach(): void {
         else authorReach.set(key, { failed: true, at: Date.now() });
       })
       .catch(() => authorReach.set(key, { failed: true, at: Date.now() }))
+      .then(() => schedulePersistReach())
       .finally(() => { reachInFlight--; renderDock(); pumpReach(); });
   }
 }
@@ -2871,7 +2873,42 @@ async function draftTargetReply(handle: string): Promise<void> {
 }
 
 /* ---- Heavy hitters: actively find big, HIGH-ENGAGEMENT in-niche accounts (a Top search) ---- */
-let heavyHitters = new Map<string, { followers: number; engRate: number; n: number }>(); // handle(lower) → size + MEAN engagement-rate over their Top posts
+/** Cross-session persistence for the two coverage caches — implements the governor's stated v2.
+ *  MERGE-into-stored (never overwrite: the long-session memory bound clears the in-memory maps,
+ *  and a plain write would wipe the compounding history), prune past-TTL on both load and write,
+ *  cap sizes. authorReach is PUBLIC author data (no owner stamp); heavyHitters is derived from
+ *  the user's niche QUERY, so it's stamped with the niche and flushed when the niche changes. */
+const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 200;
+type ReachEntry = { followers?: number; following?: number; bio?: string; at: number };
+async function persistReachCaches(): Promise<void> {
+  const now = Date.now();
+  // authorReach: merge fresh, real entries (pending/failed are session-only states, never persisted)
+  const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, ReachEntry> | undefined;
+  const mergedR: Record<string, ReachEntry> = {};
+  for (const [k, v] of Object.entries(storedR ?? {})) if (v && now - v.at < AUTHOR_REACH_TTL_MS) mergedR[k] = v;
+  for (const [k, v] of authorReach) if (!v.pending && !v.failed && now - v.at < AUTHOR_REACH_TTL_MS) mergedR[k] = { followers: v.followers, following: v.following, bio: v.bio, at: v.at };
+  const rKeys = Object.keys(mergedR);
+  if (rKeys.length > REACH_PERSIST_MAX) for (const k of rKeys.sort((a, b) => mergedR[a].at - mergedR[b].at).slice(0, rKeys.length - REACH_PERSIST_MAX)) delete mergedR[k];
+  safeSet({ [CONFIG.X_AUTHOR_REACH_KEY]: mergedR });
+  // heavyHitters: same merge, stamped with the niche that produced it
+  const niche = xNiche.trim();
+  if (niche) {
+    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as { niche?: string; entries?: Record<string, { followers: number; engRate: number; n: number; at?: number }> } | undefined;
+    const mergedH: Record<string, { followers: number; engRate: number; n: number; at?: number }> = {};
+    if (storedH?.niche === niche) for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
+    for (const [k, v] of heavyHitters) if (v.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
+    const hKeys = Object.keys(mergedH);
+    if (hKeys.length > HEAVY_PERSIST_MAX) for (const k of hKeys.sort((a, b) => (mergedH[a].at ?? 0) - (mergedH[b].at ?? 0)).slice(0, hKeys.length - HEAVY_PERSIST_MAX)) delete mergedH[k];
+    safeSet({ [CONFIG.X_HEAVY_HITTERS_KEY]: { niche, entries: mergedH } });
+  }
+}
+let persistReachTimer: number | undefined;
+function schedulePersistReach(): void {
+  if (persistReachTimer) clearTimeout(persistReachTimer);
+  persistReachTimer = setTimeout(() => { persistReachTimer = undefined; void persistReachCaches(); }, 2000) as unknown as number;
+}
+
+let heavyHitters = new Map<string, { followers: number; engRate: number; n: number; at?: number }>(); // handle(lower) → size + MEAN engagement-rate over their Top posts (+ TTL stamp)
 let heavyLoading = false;
 let heavyTried = false; // auto-discover once per session on entering Targets
 /** The Top posts in your niche are written by the accounts whose content LANDS. One `search-v3
@@ -2900,10 +2937,11 @@ async function findHeavyHitters(): Promise<void> {
       const k = t.author.toLowerCase();
       const prev = next.get(k);
       // MEAN over the author's Top posts, not a single max — one viral fluke shouldn't crown an account
-      next.set(k, prev ? { followers: t.followers, engRate: (prev.engRate * prev.n + rate) / (prev.n + 1), n: prev.n + 1 } : { followers: t.followers, engRate: rate, n: 1 });
+      next.set(k, prev ? { followers: t.followers, engRate: (prev.engRate * prev.n + rate) / (prev.n + 1), n: prev.n + 1, at: Date.now() } : { followers: t.followers, engRate: rate, n: 1, at: Date.now() });
       authorReach.set(k, { ...(authorReach.get(k) ?? { at: Date.now() }), followers: t.followers }); // enrich the reach cache so they enter the candidate pool
     }
     heavyHitters = next;
+    schedulePersistReach();
   } finally { heavyLoading = false; renderDock(); }
 }
 
@@ -3375,6 +3413,15 @@ async function boot() {
   const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
   if (storedLearn?.handle) learn = storedLearn;
   hydrateInbound(await getLocal(CONFIG.X_SUPPORTERS_KEY)); // who engages with me (reciprocity)
+  { // cross-session coverage caches (public author data + niche-stamped heavy hitters), TTL-pruned on load
+    const now = Date.now();
+    const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, { followers?: number; following?: number; bio?: string; at: number }> | undefined;
+    for (const [k, v] of Object.entries(storedR ?? {})) if (v?.at && now - v.at < AUTHOR_REACH_TTL_MS && !authorReach.has(k)) authorReach.set(k, v);
+    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as { niche?: string; entries?: Record<string, { followers: number; engRate: number; n: number; at?: number }> } | undefined;
+    if (storedH?.niche && storedH.niche === xNiche.trim()) {
+      for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS && !heavyHitters.has(k)) heavyHitters.set(k, v);
+    }
+  }
   const ownHandle = await myHandle();
   const storedTargets = await getLocal(CONFIG.X_TARGETS_KEY) as TargetStore | undefined; // big-account target list
   if (storedTargets && Array.isArray(storedTargets.targets) && (!storedTargets.handle || !ownHandle || storedTargets.handle === ownHandle)) targetStore = { ...storedTargets, handle: ownHandle || storedTargets.handle };
@@ -3386,7 +3433,10 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_NICHE_KEY]) xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_NICHE_KEY]) {
+      xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
+      heavyHitters = new Map(); heavyTried = false; // niche-derived pool no longer applies; auto-search re-fires for the new niche (persisted copy is niche-stamped, so it can't bleed back)
+    }
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan

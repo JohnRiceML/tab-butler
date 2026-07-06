@@ -57,5 +57,10 @@ eq(monthKeyOf(Date.parse("2026-06-22T10:00:00Z")), "2026-06", "monthKey June");
 eq(monthKeyOf(Date.parse("2026-12-31T23:59:59Z")), "2026-12", "monthKey Dec");
 ok(monthKeyOf(Date.parse("2026-06-30T23:59:59Z")) !== monthKeyOf(Date.parse("2026-07-01T00:00:00Z")), "month rolls at boundary");
 
+
+/* ---- persistence TTL authority (the caches prune on these; declared HERE, single source) ---- */
+ok(mod.AUTHOR_REACH_TTL_MS === TWTTR_CLASS.followers.ttl, "author-reach persistence reuses the followers-class TTL (no forked authority)");
+ok(mod.HEAVY_HITTER_TTL_MS === 7 * 24 * 3_600_000, "heavy-hitter engagement rates persist for a week (character drifts slowly)");
+
 console.log(fail === 0 ? `\n✓ twttr policy: ${pass} assertions passed` : `\n✗ twttr policy: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -43,6 +43,12 @@ export const TWTTR_BUDGET = {
 
 /** Map a request path to its cost class. Order matters: the more specific
  *  timeline/followers prefixes are checked before the bare "user" prefix. */
+/** Persistence TTLs for the cross-session caches (single TTL authority lives HERE, not in the
+ *  content script): author reach reuses the followers-class TTL; heavy-hitter engagement
+ *  character drifts slowly, so a week. Entries past TTL are pruned on load/persist, never shown. */
+export const AUTHOR_REACH_TTL_MS = TWTTR_CLASS.followers.ttl; // 24h
+export const HEAVY_HITTER_TTL_MS = 7 * 24 * 3_600_000;
+
 export function classForPath(path: string): TwttrClass {
   const p = path.replace(/^\//, "").toLowerCase();
   if (p.startsWith("user-tweets") || p.startsWith("user-replies") || p.startsWith("user-media")) return "timeline";

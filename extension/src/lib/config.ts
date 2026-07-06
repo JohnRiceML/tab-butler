@@ -38,6 +38,8 @@ export const CONFIG = {
   X_LEARN_STATS_KEY: "xLearnStats", // engagement learning loop: own-post trend snaps + cached rest_id + daily-scan gates (per-account aggregates are derived live from the reply log)
   X_SUPPORTERS_KEY: "xSupporters", // reciprocity engine: who engages with ME (reply/mention events harvested from the notifications page DOM), device-local
   X_TARGETS_KEY: "xTargets", // "Target accounts" mode: large in-reach niche accounts to comment on early, device-local
+  X_AUTHOR_REACH_KEY: "xAuthorReach", // persisted author-reach cache (PUBLIC data: followers/following/bio per handle) — compounds target-selection coverage across sessions
+  X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted heavy-hitter engagement rates, stamped with the niche that produced them
 } as const;
 
 /**
