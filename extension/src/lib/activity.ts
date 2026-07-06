@@ -85,8 +85,8 @@ export function pickCallout(ctx: {
     kind: "prior",
   };
   if (ctx.freeTier) return {
-    text: "You're on the free tier — an 18.8M-post study measured ~10× median reach for Premium accounts. External data, worth weighing.",
-    why: "Buffer's 2025 study (18.8M posts, 71K accounts): free-account median engagement fell to ~0 while Premium tiers held; self-selection not fully controlled — a measured external correlation, not a promise.",
+    text: "You're on the free tier — an 18.8M-post study measured ~10× median IMPRESSIONS for Premium accounts. External data, worth weighing.",
+    why: "Buffer's 2025 study (18.8M posts, 71K accounts): free accounts median <100 impressions/post vs ~600 (Premium) and >1,550 (Premium+); engagement RATES across paid tiers were nearly flat, and self-selection isn't fully controlled — a measured external correlation, not a promise.",
     kind: "prior",
   };
   return {

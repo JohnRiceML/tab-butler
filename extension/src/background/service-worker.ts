@@ -43,6 +43,7 @@ async function seedFromLocalFile(): Promise<void> {
     ["voice", K.X_VOICE_KEY],
     ["defaultAngle", K.X_DEFAULT_ANGLE_KEY],
     ["defaultProduct", K.X_DEFAULT_PRODUCT_KEY],
+    ["premium", K.X_PREMIUM_KEY],
   ];
   const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY]);
   const set: Record<string, unknown> = {};

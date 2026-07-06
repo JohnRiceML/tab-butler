@@ -440,7 +440,9 @@ the expert brief called for:
   client-side; the tooltip says the causality is not claimed).
 - **Supporters' dormant reachBoost activated**: inbound engagers' follower counts backfill
   from the reach cache at harvest, so the whale-vs-peer weighting finally varies instead of
-  sitting at the fallback constant.
+  sitting at the fallback constant. *(Correction: this claim shipped without its code — a
+  patch-tooling failure dropped the edit silently; the adversarial review caught the
+  docs-vs-code break and the backfill actually landed in the follow-up commit.)*
 - **Signal health card** (popup): the honest min-N gates make panels legitimately QUIET, which
   looked identical to broken. Now inspectable — measure-pass freshness, outcomes vs the
   fit-validity gate (n/12), engaged-back credits, harvest ages (notifications / own-posts /
@@ -460,6 +462,22 @@ gating the ambient target poller (does twitter241 honor batched `from:a OR from:
 parser so "works" means works-with-our-code; per-handle controls distinguish OR-broken from
 quiet accounts; prints an explicit OR-HONORED / OR-BROKEN / INCONCLUSIVE verdict with the
 matching build path for each. No-ops without --live + a key.
+
+**Review fixes for the post-Tier-1 span (2026-07-05)** — an adversarial pass over the seven
+gate-only commits found 2 MAJORs + 6 minors, all fixed:
+- **M1 (integrity):** the reachBoost backfill was CLAIMED in 627ffe6 but never landed (a patch
+  abort dropped the edit silently). Now actually wired at the scanNotifications harvest site,
+  and the original CHANGELOG entry carries a correction note.
+- **M2 (honest-mirror):** on a non-English X UI the missing "Pinned" label produced a false
+  "No pinned post" claim. New `pinKnown` gate — a missing label is only evidence on an English
+  UI; a FOUND pin is trusted in any locale; non-English UIs stay silent on pin claims (+3
+  profile-check tests, 13).
+- Minors: the funnel line says "engaged with you" (all inbound) — deliberately distinct from
+  the join's stricter "engaged back"; the pill regained keyboard access (tabIndex + Enter/
+  Space); profileCheck now enforces one-metric-per-ranking (views only when every post has
+  them); tiny accounts (<3 posts) get bio coaching even though pin detection stays gated; the
+  Premium callout copy is coherent (impressions framing, rates-flat caveat); the seed file
+  learns the premium field; the two-tab persist race is documented as accepted.
 
 ## Next phase
 

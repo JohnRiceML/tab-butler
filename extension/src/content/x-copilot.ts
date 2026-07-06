@@ -329,16 +329,28 @@ function harvestOwnProfile(): void {
   if (Date.now() - profileHarvestAt < 30_000) return; // settle window — the route re-scans constantly
   if (!document.querySelector('[data-testid="UserName"]')) return; // header not rendered yet
   const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]');
-  if (articles.length < 3) return; // timeline not loaded enough to trust a missing Pinned label
+  if (articles.length < 3) {
+    // Timeline too thin to trust pin detection (tiny account / still loading) — but the bio lives
+    // in the already-rendered header, so harvest THAT and leave the pin fields untouched.
+    const bioEl = document.querySelector('[data-testid="UserDescription"]');
+    profileState = { ...(profileState ?? { at: 0 }), bioLen: (bioEl?.textContent || "").trim().length, at: Date.now() };
+    safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
+    profileHarvestAt = Date.now();
+    return;
+  }
   profileHarvestAt = Date.now();
   let pinnedId: string | undefined;
   for (const el of articles) {
     const sc = el.querySelector('[data-testid="socialContext"]');
     if (sc && /pinned/i.test(sc.textContent || "")) { pinnedId = statusInfo(el)?.id; break; }
   }
+  // A MISSING "Pinned" label is only trustworthy on an English UI — on "Épinglé"/"固定された"
+  // the regex never matches and a false "no pinned post" claim would break the honest mirror.
+  // A FOUND pin is trustworthy in any case (the regex matched).
+  const pinKnown = pinnedId != null || (document.documentElement.lang || "").toLowerCase().startsWith("en");
   const bio = document.querySelector('[data-testid="UserDescription"]');
   const bioLen = (bio?.textContent || "").trim().length; // X omits the element entirely for an empty bio
-  profileState = { pinnedId, bioLen, at: Date.now() };
+  profileState = { ...(profileState ?? { at: 0 }), pinnedId, pinKnown, bioLen, at: Date.now() };
   safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
 }
 
@@ -2373,7 +2385,7 @@ function scanNotifications(): void {
     if (self && info.author.toLowerCase() === self) return; // not my own posts
     const key = info.id; // dedup on the globally-unique status id — a reply that also @-mentions you renders on BOTH tabs; count it once
     if (inboundKeys.has(key)) return;
-    pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), key });
+    pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), key, followers: authorReach.get(info.author.toLowerCase())?.followers }); // follower backfill from the reach cache — activates supporters' reachBoost (else it sits at the FALLBACK constant)
     added++;
   });
   if (added) { schedulePersistInbound(); if (dockOpen) renderDock(); } // debounced write; only repaint when the dock is open
@@ -2440,7 +2452,7 @@ function renderInsightPanel(d: HTMLElement): void {
         const withF = Object.values(learn.snaps).filter((sn) => sn.followers != null && sn.day >= cutF).sort((a, b) => (a.day < b.day ? -1 : 1));
         if (withF.length >= 2 && withF[0].day !== withF[withF.length - 1].day) fDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
         const t2 = document.createElement("div"); t2.className = "ins-trend";
-        t2.textContent = `🔀 14d: ${sent14} ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged back` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : "");
+        t2.textContent = `🔀 14d: ${sent14} ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged with you` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : ""); // "engaged with you" (all inbound), deliberately NOT the join's stricter "engaged back"
         t2.title = "Measured totals that co-occurred over the last 14 days — correlation, NOT attribution: profile clicks aren't visible to us and follows can come from anywhere. The arc is the growth mechanism (reply → profile visit → follow); the numbers are real, the causality is not claimed. Engaged-back is matched from your notifications (visit-dependent, undercounts if you don't visit).";
         body.append(t2);
       }
@@ -2962,6 +2974,8 @@ async function draftTargetReply(handle: string): Promise<void> {
 const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 200;
 type ReachEntry = { followers?: number; following?: number; bio?: string; at: number };
 async function persistReachCaches(): Promise<void> {
+  // Two-tab note: this read-modify-write can drop the OTHER tab's increments (both merge from the
+  // same stored snapshot; last writer wins). Accepted — every entry is a TTL'd, refetchable cache.
   const now = Date.now();
   // authorReach: merge fresh, real entries (pending/failed are session-only states, never persisted)
   const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, ReachEntry> | undefined;
@@ -3251,6 +3265,8 @@ function renderDock() {
   if (!dockOpen) {
     const { mood, line, sub } = goobiStatus();
     const l = document.createElement("div"); l.className = "l"; l.setAttribute("role", "button"); // div, not button — the pill hosts nested control buttons
+    l.tabIndex = 0; // keep keyboard access (it was a <button> before the nested controls)
+    l.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); l.click(); } };
     l.title = `${line} — open Goobi`;
     l.onclick = () => {
       dockOpen = true;
@@ -3551,6 +3567,7 @@ async function boot() {
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_PREMIUM_KEY]) premiumTier = (changes[CONFIG.X_PREMIUM_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_PROFILE_KEY]) profileState = changes[CONFIG.X_PROFILE_KEY].newValue as ProfileState | undefined;
     if (changes[CONFIG.X_NICHE_KEY]) {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
       heavyHitters = new Map(); heavyTried = false; // niche-derived pool no longer applies; auto-search re-fires for the new niche (persisted copy is niche-stamped, so it can't bleed back)

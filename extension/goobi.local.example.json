@@ -9,6 +9,7 @@
   "products": [
     { "name": "", "url": "https://yourproduct.com", "blurb": "one-liner: what it does, who it's for" }
   ],
+  "premium": "",
   "defaultAngle": "",
   "defaultProduct": ""
 }

@@ -23,10 +23,25 @@ const stats = [
 // silence without a harvest — never guesses
 ok(m.profileCheck(undefined, stats).length === 0, "no profile harvest → no findings (silence, not guesses)");
 
-// no pinned post → act, citing the measured top
+// no pinned post (label absence trusted: English UI) → act, citing the measured top
 {
-  const f = m.profileCheck({ at: 1, pinnedId: undefined, bioLen: 80 }, stats);
-  ok(f.some((x) => x.level === "act" && x.text.includes("No pinned post") && x.text.includes("5.0K")), "no pinned → act with the measured top post");
+  const f = m.profileCheck({ at: 1, pinnedId: undefined, pinKnown: true, bioLen: 80 }, stats);
+  ok(f.some((x) => x.level === "act" && x.text.includes("No pinned post") && x.text.includes("5.0K")), "no pinned (pinKnown) → act with the measured top post");
+}
+
+// locale guard: a missing pin label on a non-English UI is NOT evidence — silence on pins, bio still fires
+{
+  const f = m.profileCheck({ at: 1, pinnedId: undefined, pinKnown: false, bioLen: 0 }, stats);
+  ok(!f.some((x) => x.text.toLowerCase().includes("pinned")), "pinKnown=false → no pin claims (Épinglé ≠ no pin)");
+  ok(f.some((x) => x.text.includes("bio is empty")), "…but the bio finding still fires");
+}
+
+// one-metric discipline: any post missing views → the WHOLE ranking uses engagement, labeled
+{
+  const mixed = [{ id: "a", views: 5000, likes: 10 }, { id: "b", likes: 400, reposts: 20 }, { id: "c", likes: 100 }, { id: "d", likes: 30 }];
+  // "a" has huge views but tiny ENG — under one-metric discipline it ranks LAST (#4), proving views never leak into a mixed ranking
+  const f = m.profileCheck({ at: 1, pinnedId: "a", pinKnown: true, bioLen: 80 }, mixed);
+  ok(f.some((x) => x.text.includes("by engagement")), "mixed views coverage → engagement ranking for ALL, never mixed scales");
 }
 
 // pinned is a mid performer → act with the honest rank
@@ -58,7 +73,7 @@ ok(!m.profileCheck({ at: 1, pinnedId: "a", bioLen: 90 }, stats).some((x) => x.te
 // views-absent fallback ranks on engagement
 {
   const engStats = [{ id: "a", likes: 50, reposts: 5 }, { id: "b", likes: 20 }, { id: "c", likes: 5 }];
-  const f = m.profileCheck({ at: 1 }, engStats);
+  const f = m.profileCheck({ at: 1, pinKnown: true }, engStats);
   ok(f.some((x) => x.text.includes("No pinned post") && x.text.includes("eng")), "no views → falls back to engagement, labeled");
 }
 

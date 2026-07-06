@@ -12,29 +12,33 @@
  */
 
 export interface OwnPostStat { id: string; text?: string; views?: number; likes?: number; reposts?: number }
-export interface ProfileState { pinnedId?: string; bioLen?: number; at: number }
+export interface ProfileState { pinnedId?: string; pinKnown?: boolean /* a MISSING pin label is only trustworthy on an English UI — false → stay silent on pin claims */; bioLen?: number; at: number }
 export interface ProfileFinding { level: "act" | "good"; text: string; why: string }
 
 const fmt = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K` : `${(n / 1_000_000).toFixed(1)}M`);
 
-/** Rankable outcome for a post: X-reported views when present, else likes+reposts. */
-const outcome = (p: OwnPostStat): number => p.views ?? ((p.likes ?? 0) + (p.reposts ?? 0));
-
 /** The measured profile findings. `state` comes from the own-profile DOM harvest (undefined =
  *  never visited own profile → say nothing about pinning/bio); `ownStats` from the cached
- *  from:<handle> pull. Needs ≥3 posts with a rankable outcome before it ranks anything. */
+ *  from:<handle> pull. Needs ≥3 posts with a rankable outcome before it ranks anything.
+ *  ONE metric per ranking (views only when every rankable post has them, else engagement) —
+ *  never mixed scales in a single sort. */
 export function profileCheck(state: ProfileState | undefined, ownStats: OwnPostStat[]): ProfileFinding[] {
   const findings: ProfileFinding[] = [];
   if (!state) return findings; // no harvest yet — silence, not guesses
-  const ranked = ownStats.filter((p) => p.id && outcome(p) > 0).sort((a, b) => outcome(b) - outcome(a));
+  const candidates = ownStats.filter((p) => p.id);
+  const useViews = candidates.length > 0 && candidates.every((p) => p.views != null && p.views > 0);
+  const outcome = (p: OwnPostStat): number => (useViews ? (p.views ?? 0) : (p.likes ?? 0) + (p.reposts ?? 0));
+  const ranked = candidates.filter((p) => outcome(p) > 0).sort((a, b) => outcome(b) - outcome(a));
 
-  // Pinned post vs your measured best
+  // Pinned post vs your measured best — the NEGATIVE claim ("no pin") additionally requires
+  // pinKnown (a missing pin label is only trustworthy on an English UI; honest-mirror).
   if (ranked.length >= 3) {
     const top = ranked[0];
     if (!state.pinnedId) {
+      if (!state.pinKnown) return finishBio(state, findings); // can't trust the absence → silence on pins
       findings.push({
         level: "act",
-        text: `No pinned post — your top recent post (${fmt(outcome(top))} ${top.views != null ? "views" : "eng"}) is going unpinned.`,
+        text: `No pinned post — your top recent post (${fmt(outcome(top))} ${useViews ? "views" : "eng"}) is going unpinned.`,
         why: "The profile is where a reply's profile-click converts into a follow; the pinned post is its headline. Measured from your own recent posts.",
       });
     } else {
@@ -42,7 +46,7 @@ export function profileCheck(state: ProfileState | undefined, ownStats: OwnPostS
       if (idx > 2) {
         findings.push({
           level: "act",
-          text: `Your pinned post ranks #${idx + 1} of your last ${ranked.length} by ${ranked[0].views != null ? "views" : "engagement"} — your #1 (${fmt(outcome(ranked[0]))}) isn't pinned.`,
+          text: `Your pinned post ranks #${idx + 1} of your last ${ranked.length} by ${useViews ? "views" : "engagement"} — your #1 (${fmt(outcome(ranked[0]))}) isn't pinned.`,
           why: "Measured: X-reported results on your own recent posts. A stranger's first read should be your proven best.",
         });
       } else if (idx >= 0) {
@@ -52,7 +56,11 @@ export function profileCheck(state: ProfileState | undefined, ownStats: OwnPostS
     }
   }
 
-  // Bio presence (harvested length only — content judgment is the user's)
+  return finishBio(state, findings);
+}
+
+/** Bio presence (harvested length only — content judgment is the user's). */
+function finishBio(state: ProfileState, findings: ProfileFinding[]): ProfileFinding[] {
   if (state.bioLen != null) {
     if (state.bioLen === 0) {
       findings.push({ level: "act", text: "Your bio is empty — it's the first thing a profile click reads.", why: "Harvested from your own profile page. Say who you help / what you build; the follow decision happens here." });
