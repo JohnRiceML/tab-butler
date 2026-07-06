@@ -63,8 +63,16 @@ console.log(`Testing OR batching across: ${handles.map((h) => "@" + h).join(", "
 const batchedQ = handles.map((h) => `from:${h}`).join(" OR ");
 const batch = await search(batchedQ, 20);
 if (!batch.ok) {
-  console.log(`Batched query FAILED outright (HTTP ${batch.status}): ${batch.body}`);
-  console.log(`\nVERDICT: OR-BROKEN — wire the poller on the per-handle path + the 12-min response cache.`);
+  // An auth/subscription failure says NOTHING about OR syntax — never turn it into a build verdict.
+  if (batch.status === 401 || batch.status === 403 || /not subscribed|invalid api key/i.test(batch.body || "")) {
+    console.log(`Auth failed (HTTP ${batch.status}): ${batch.body}`);
+    console.log(`\nVERDICT: KEY ERROR — that wasn't a real test. Use YOUR x-rapidapi-key (the one saved in`);
+    console.log(`Goobi's settings / your goobi.local.json / rapidapi.com → My Apps), and your real tracked handles:`);
+    console.log(`  TWTTR_KEY=<paste-your-actual-key> node scripts/spike-poller-or.mjs --live --handles real1,real2,real3`);
+    process.exit(0);
+  }
+  console.log(`Batched query FAILED (HTTP ${batch.status}): ${batch.body}`);
+  console.log(`\nVERDICT: OR-BROKEN (the batched form errors while auth works) — wire the poller on the per-handle path + the 12-min response cache.`);
   process.exit(0);
 }
 const bAuthors = byAuthor(batch.tweets);
