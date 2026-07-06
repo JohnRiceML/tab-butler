@@ -47,7 +47,7 @@ export interface LearnReply {
   followers?: number;
   norm?: string;        // normalized reply text (for match-back)
   snippet?: string;
-  outcome?: { at: number; likes?: number; replies?: number };
+  outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; authorReplied?: boolean };
 }
 export interface OwnStat { id: string; views?: number; likes?: number; reposts?: number; replies?: number; }
 export interface PostMetrics { views: number; likes: number; reposts: number; replies: number; }
@@ -55,6 +55,7 @@ export interface DailyDelta { posts: number; views: number; likes: number; repos
 export interface AccountAgg {
   handle: string;
   replies: number;      // attributed reply count (display)
+  backs: number;        // MEASURED engaged-back events (authorReplied, from the notifications join)
   nEff: number;         // recency-weighted sample size
   invest: number;       // Tier-1 shrunken mean reply-quality
   followers?: number;
@@ -93,6 +94,10 @@ export interface AggResult { accounts: Record<string, AccountAgg>; muInvest: num
 
 /** Recompute every account's aggregates from the immutable reply log (idempotent — no
  *  accumulator to corrupt). Recency-weighted, shrunk to the global mean, min-N gated. */
+/** A join-only outcome (authorReplied, no numbers) is NOT a measured engagement result — fit
+ *  consumers must require real counts or "author engaged back" scores as the worst outcome. */
+const hasMeasuredCounts = (o?: { likes?: number; replies?: number }): boolean => o != null && (o.likes != null || o.replies != null);
+
 export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
   const byAuthor = new Map<string, LearnReply[]>();
   let unattributed = 0, attributed = 0;
@@ -107,24 +112,25 @@ export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
     if (!r.author) continue;
     const w = recencyW((now - r.at) / DAY_MS);
     gw += w; gwv += w * (r.score ?? NEUTRAL_SCORE);
-    if (r.outcome) { const fit = ((r.outcome.likes ?? 0) + W_REPLY * (r.outcome.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
+    if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
   }
   const muInvest = gw > 0 ? gwv / gw : NEUTRAL_SCORE;
   const muObs = gwf > 0 ? gwo / gwf : 0;
 
   const accounts: Record<string, AccountAgg> = {};
   for (const [handle, reps] of byAuthor) {
-    let sw = 0, swv = 0, swfit = 0, swo = 0, nOut = 0, lastAt = 0, followers: number | undefined, fAt = -1;
+    let sw = 0, swv = 0, swfit = 0, swo = 0, nOut = 0, backs = 0, lastAt = 0, followers: number | undefined, fAt = -1;
     for (const r of reps) {
+      if (r.outcome?.authorReplied) backs++;
       const w = recencyW((now - r.at) / DAY_MS);
       sw += w; swv += w * (r.score ?? NEUTRAL_SCORE);
       if (r.at > lastAt) lastAt = r.at;
       if (r.followers != null && r.at >= fAt) { followers = r.followers; fAt = r.at; }
-      if (r.outcome) { const fit = ((r.outcome.likes ?? 0) + W_REPLY * (r.outcome.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
+      if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
     }
     const invest = (K * muInvest + sw * (swv / sw)) / (K + sw);
     const obs = swo > 0 ? (K * muObs + swo * (swfit / swo)) / (K + swo) : undefined;
-    accounts[handle] = { handle, replies: reps.length, nEff: sw, invest, followers, nOut, score: nOut >= N_MIN_OUT ? obs : undefined, lastAt };
+    accounts[handle] = { handle, replies: reps.length, backs, nEff: sw, invest, followers, nOut, score: nOut >= N_MIN_OUT ? obs : undefined, lastAt };
   }
   return { accounts, muInvest, muObs, attributed, unattributed };
 }
@@ -180,8 +186,8 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
   let inter = 0; for (const w of a) if (b.has(w)) inter++;
   return inter / (a.size + b.size - inter);
 }
-export interface FetchedReply { text: string; at?: number; likes?: number; replies?: number; }
-export interface OutcomeMatch { index: number; likes: number; replies: number; }
+export interface FetchedReply { text: string; at?: number; likes?: number; replies?: number; views?: number; reposts?: number; id?: string /* the reply's own tweet id — enables comments-on-your-reply ground truth later */; }
+export interface OutcomeMatch { index: number; likes: number; replies: number; views?: number; reposts?: number; replyId?: string; }
 /** For each fetched reply, find the single best-matching stored reply (by text Jaccard,
  *  within a time window, with a unique winner). Returns outcomes to write, keyed by index
  *  into `sent`. Ambiguous matches are dropped, never guessed. */
@@ -201,7 +207,7 @@ export function matchOutcomes(fetched: FetchedReply[], sent: LearnReply[]): Outc
     }
     if (best >= 0 && bestSim >= MATCH_SIM && bestSim - second >= 0.15) { // unique-winner margin — wide enough that two similar replies to DIFFERENT accounts don't cross-attribute
       used.add(best);
-      out.push({ index: best, likes: f.likes ?? 0, replies: f.replies ?? 0 });
+      out.push({ index: best, likes: f.likes ?? 0, replies: f.replies ?? 0, views: f.views, reposts: f.reposts, replyId: f.id });
     }
   }
   return out;
@@ -310,6 +316,7 @@ export interface FeatureLearn {
   ageGradient?: number;         // fresh (<15m) fit / stale (>=1h) fit — only when both sides clear the gate
   freshN?: number; staleN?: number;
   fitCorr?: number;             // Spearman(stage-1 fit, outcome) — runs the audit's "is fit real?" test continuously
+  fitCorrViews?: number;        // same test against X-reported reply VIEWS (distribution, not applause) — the 2026 ranker serves views first; compare with fitCorr BEFORE ever making views the primary metric
 }
 
 const AGE_BUCKETS: Array<{ label: string; maxMs: number }> = [
@@ -341,13 +348,13 @@ function spearman(pairs: Array<[number, number]>): number {
 }
 
 export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
-  const out: Array<{ fit: number; w: number; angle?: string; ageMs?: number; score?: number }> = [];
+  const out: Array<{ fit: number; w: number; angle?: string; ageMs?: number; score?: number; views?: number }> = [];
   let gwo = 0, gwf = 0;
   for (const r of sent) {
-    if (!r.outcome) continue;
+    if (!hasMeasuredCounts(r.outcome)) continue; // join-only outcomes (authorReplied, no counts) never enter fit
     const w = recencyW((now - r.at) / DAY_MS);
-    const fit = ((r.outcome.likes ?? 0) + W_REPLY * (r.outcome.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
-    out.push({ fit, w, angle: r.angle, ageMs: r.ageMs, score: r.score });
+    const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
+    out.push({ fit, w, angle: r.angle, ageMs: r.ageMs, score: r.score, views: r.outcome!.views });
     gwo += w * fit; gwf += w;
   }
   const mu = gwf > 0 ? gwo / gwf : 0;
@@ -385,5 +392,43 @@ export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
   // does the stage-1 fit score actually predict outcomes? (the assumptions-audit A4 test, live)
   const pairs = out.filter((o) => o.score != null).map((o) => [o.score as number, o.fit] as [number, number]);
   if (pairs.length >= FIT_CORR_MIN_N) res.fitCorr = spearman(pairs);
+  const vPairs = out.filter((o) => o.score != null && o.views != null).map((o) => [o.score as number, o.views as number] as [number, number]);
+  if (vPairs.length >= FIT_CORR_MIN_N) res.fitCorrViews = spearman(vPairs);
   return res;
 }
+
+/* ---------- the $0 author-reply-back join (notifications harvest × sent-reply log) ---------- */
+// Author-engages-your-reply is the highest-ordered action in every evidence class (2023 weights
+// 75 vs 13.5; X's official #1 in-thread ordering factor; the 2026 Grok reply grade). The
+// notifications page already harvests every inbound reply at $0 — this joins it to the sent log.
+// HONESTY: the join is handle+time (the notifications DOM gives no thread id), so an inbound reply
+// to your ORIGINAL post can false-match a recent reply to the same person. Guards: one event
+// consumes at most one record, the most-recent eligible record wins, the window is tight (72h),
+// and ALL display copy says "engaged you back", never "replied to your reply".
+export const BACK_WINDOW_MS = 72 * 3_600_000;
+export interface InboundEvent { at: number; handle: string; kind: string }
+export function fillAuthorReplied(inbound: InboundEvent[], sent: LearnReply[]): number {
+  let marked = 0;
+  const taken = new Set<number>();
+  const byTime = [...inbound].filter((e) => e.kind === "reply" && e.handle).sort((a, b) => a.at - b.at);
+  for (const ev of byTime) {
+    const h = ev.handle.toLowerCase();
+    let best = -1, bestAt = -1;
+    for (let i = 0; i < sent.length; i++) {
+      if (taken.has(i)) continue;
+      const r = sent[i];
+      if (!r.author || r.author.toLowerCase() !== h) continue;
+      const dt = ev.at - r.at;
+      if (dt <= 0 || dt > BACK_WINDOW_MS) continue;
+      if (r.outcome?.authorReplied) continue; // already credited by an earlier event
+      if (r.at > bestAt) { bestAt = r.at; best = i; }
+    }
+    if (best < 0) continue;
+    taken.add(best);
+    const r = sent[best];
+    r.outcome = { ...(r.outcome ?? { at: ev.at }), authorReplied: true };
+    marked++;
+  }
+  return marked;
+}
+

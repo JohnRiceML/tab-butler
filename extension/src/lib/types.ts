@@ -56,7 +56,7 @@ export type Message =
   | { type: "UNDO_LAST" }
   | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
   | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string }[] }
-  | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string; steer?: string }
+  | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string; steer?: string; reason?: string; category?: string; authorLine?: string }
   | { type: "GET_FAVICONS"; hosts: string[] }
   | { type: "TWTTR_GET"; path: string; query?: Record<string, string>; intent?: boolean }
   | { type: "GET_TWTTR_METER" }

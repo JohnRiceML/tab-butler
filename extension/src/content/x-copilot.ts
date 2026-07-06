@@ -3,7 +3,7 @@ import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
@@ -106,7 +106,7 @@ function productContext(product?: ProductItem): string | undefined {
 const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; }
 const opps = new Map<string, Opp>();
 let dockOpen = false;
 let dockFilter = "";
@@ -342,6 +342,8 @@ function scan() {
         const live = engagement(el);
         if (live.likes != null) o.likes = live.likes;
         if (live.replies != null) o.replies = live.replies;
+        if (live.views != null) o.views = live.views;
+        if (live.reposts != null) o.reposts = live.reposts;
         badge(el, o.reason, o.category, effectiveScore(o)); // surfaced (auto-scored or manually added)
       }
       else addButton(el); // scored but didn't make the cut → offer a manual "+ Add"
@@ -404,7 +406,7 @@ async function flush() {
       if (opps.delete(b.id)) changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
     } else if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, avatar: stat.avatar, name: stat.name, verified: stat.verified });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
@@ -715,7 +717,8 @@ interface SentRecord {
   norm?: string;         // normalized reply text (match + dedup)
   snippet?: string;      // first 80 chars of the reply (match via /user-replies)
   avatar?: string;       // the author's profile picture (so the playground treat wears their face)
-  outcome?: { at: number; likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean };
+  target?: { views?: number; likes?: number; replies?: number }; // the POST's engagement state at reply time — learn "fast-rising vs quiet" per user (cannot be backfilled, so log now)
+  outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; tweetId?: string; authorReplied?: boolean; frozen?: boolean };
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
 let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
@@ -958,6 +961,7 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
     norm: normalizeReply(text) || undefined,
     snippet: text.slice(0, 80),
     avatar: opp?.avatar,
+    target: opp && (opp.views != null || opp.likes != null || opp.replies != null) ? { views: opp.views, likes: opp.likes, replies: opp.replies } : undefined,
   };
   replyLog.sent.push(rec);
   if (rec.postId) commentedIds.add(rec.postId); // mark this post as commented → "✓" badge in the feed
@@ -1056,7 +1060,14 @@ async function draftFor(req: DraftReq) {
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, ...ui });
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer });
+  // Ground the drafter in what we already know about this opp (specificity = ranked variable).
+  const dOpp = oppId ? opps.get(oppId) : undefined;
+  const authorLine = dOpp ? [
+    `@${dOpp.author}`,
+    knownFollowers(dOpp) != null ? `~${fmtCount(knownFollowers(dOpp))} followers` : "",
+    builderTierFor(dOpp) === 2 ? "a two-way peer in the user's niche" : builderTierFor(dOpp) === 1 ? "a builder/community person" : "",
+  ].filter(Boolean).join(" · ") : undefined;
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, authorLine });
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -2213,13 +2224,13 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
   if (!rres?.ok) return; // budget/HTTP error — retry next day
   const fetched: FetchedReply[] = parseTimelineTweets(rres.data)
     .filter((t) => t.isReply && t.text)
-    .map((t) => ({ text: t.text, at: t.postedAt, likes: t.likes, replies: t.replies }));
+    .map((t) => ({ text: t.text, at: t.postedAt, likes: t.likes, replies: t.replies, views: t.views, reposts: t.reposts, id: t.id })); // views/reposts/id ride the same paid response — views = distribution (the thing the ranker actually decides), id enables future ground-truth fetches
   const now = Date.now();
   let wrote = 0;
   for (const mt of matchOutcomes(fetched, replyLog.sent)) {
     const rec = replyLog.sent[mt.index];
     if (!rec || rec.outcome?.frozen) continue; // frozen = settled, never re-touch
-    rec.outcome = { at: now, likes: mt.likes, replies: mt.replies, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS };
+    rec.outcome = { ...rec.outcome, at: now, likes: mt.likes, replies: mt.replies, views: mt.views ?? rec.outcome?.views, reposts: mt.reposts ?? rec.outcome?.reposts, tweetId: mt.replyId ?? rec.outcome?.tweetId, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS }; // spread keeps authorReplied; ?? keeps yesterday's measured views when a payload shape omits them
     wrote++;
   }
   if (fetched.length) learn.restId = restId; // cache the resolved id ONLY when it proved it works (returned replies) — a bad/transient resolve re-resolves next day instead of freezing
@@ -2234,7 +2245,10 @@ async function maybeRunDailyLearn(): Promise<void> {
   if (!handle) return;
   if (learn.handle !== handle) learn = freshLearn(handle); // handle switch → reset the trend
   const today = dayKey(Date.now());
-  if (learn.scanDay === today && learn.measureDay === today) return; // both done for the day
+  // The engaged-back join runs on EVERY dock open (pure, idempotent, $0) — new notification
+  // events since the morning pass still credit same-day; the day-gate below only guards fetches.
+  if (fillAuthorReplied(inbound, replyLog.sent) > 0) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+  if (learn.scanDay === today && learn.measureDay === today) return; // both FETCH passes done for the day
   learnBusy = true;
   try {
     // (A) own-post view-growth trend — CONSUME the momentum cache only. refreshOwnStats (fired
@@ -2401,8 +2415,8 @@ function renderInsightPanel(d: HTMLElement): void {
         mid.append(top);
         const meta = document.createElement("div"); meta.className = "ins-meta";
         const days = Math.max(0, Math.round((now - r.lastAt) / (24 * HOUR_MS)));
-        meta.textContent = `${r.replies} ${r.replies === 1 ? "reply" : "replies"} · last ${days}d` + (r.followers ? ` · ${fmtCount(r.followers)} followers` : "");
-        meta.title = "Replies you inserted through Goobi" + (r.followers ? "; their follower count when you replied — not a reach estimate." : ".");
+        meta.textContent = `${r.replies} ${r.replies === 1 ? "reply" : "replies"} · last ${days}d` + (r.backs ? ` · ↩ engaged back ×${r.backs}` : "") + (r.followers ? ` · ${fmtCount(r.followers)} followers` : "");
+        meta.title = "Replies you inserted through Goobi" + (r.backs ? `; "engaged back" = they replied to you within 72h of your reply (matched from your notifications — visit-dependent, may undercount, and can include replies to your own posts).` : "") + (r.followers ? "; their follower count when you replied — not a reach estimate." : ".");
         mid.append(meta);
         const bar = document.createElement("div"); bar.className = "ins-bar"; const fill = document.createElement("div"); fill.className = "ins-fill"; fill.style.width = Math.round(r.share * 100) + "%"; bar.append(fill); mid.append(bar);
         row.append(mid);

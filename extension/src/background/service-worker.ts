@@ -3,6 +3,7 @@ import { archiveAndClose, undoLast } from "../lib/archive";
 import { advise, classify, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter } from "../lib/twttr-governor";
+import { buildDraftContext } from "../lib/draft-context";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -303,7 +304,12 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
           const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
           // The content script resolves the relevant product(s) and sends them; fall back to the legacy single-product string.
           const product = msg.product ?? (((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "");
-          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer) });
+          // Stage-1 draft context (niche + scorer rationale + author line): specificity is a ranked
+          // variable in the 2026 pipeline (LLM reply grading + slop score), and these strings are
+          // already known — user-message only, X_DRAFT_SYSTEM stays byte-stable.
+          const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
+          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, authorLine: msg.authorLine });
+          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, extra) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }

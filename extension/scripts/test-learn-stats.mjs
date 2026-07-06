@@ -100,6 +100,60 @@ const DAY = 86_400_000;
   ok(m.matchOutcomes([{ text: "nothing in common whatsoever", at: NOW }], sent).length === 0, "match: a non-match is dropped, never guessed");
 }
 
+/* ---- outcome upgrade: views/reposts/id ride the match; fitCorrViews tracks distribution ---- */
+{
+  const fetched = [{ text: "ship daily measure what sticks today", at: NOW, likes: 5, replies: 1, views: 900, reposts: 2, id: "t123" }];
+  const sent = [{ norm: "ship daily measure what sticks today", at: NOW }];
+  const m1 = m.matchOutcomes(fetched, sent);
+  ok(m1.length === 1 && m1[0].views === 900 && m1[0].reposts === 2 && m1[0].replyId === "t123", "match threads views/reposts/replyId from the same paid response");
+  const MIN = 60_000;
+  const corr = Array.from({ length: 14 }, (_, i) => ({
+    at: NOW - ((i % 5) + 1) * 86_400_000, author: "a", angle: "value", ageMs: 5 * MIN, followers: 1000, score: i / 14,
+    outcome: { at: NOW, likes: 2, replies: 0, views: i * 400 },
+  }));
+  const fl = m.learnFeatures(corr, NOW);
+  ok(fl.fitCorrViews > 0.8, "fitCorrViews measures fit-vs-DISTRIBUTION when views are tracked");
+  const noViews = corr.map((r) => ({ ...r, outcome: { ...r.outcome, views: undefined } }));
+  ok(m.learnFeatures(noViews, NOW).fitCorrViews === undefined, "no views tracked → fitCorrViews stays silent");
+}
+
+/* ---- fillAuthorReplied: the $0 engaged-back join (handle + 72h, honest guards) ---- */
+{
+  const HR = 3_600_000;
+  const mk = (author, at, extra = {}) => ({ at, author, ...extra });
+  // basic: inbound reply from H 2h after our reply to H → credited
+  let sent = [mk("alice", NOW - 2 * HR)];
+  ok(m.fillAuthorReplied([{ at: NOW, handle: "Alice", kind: "reply" }], sent) === 1 && sent[0].outcome.authorReplied === true, "engaged-back credited (case-insensitive handle, inside 72h)");
+  // window: 80h later → no credit
+  sent = [mk("bob", NOW - 80 * HR)];
+  ok(m.fillAuthorReplied([{ at: NOW, handle: "bob", kind: "reply" }], sent) === 0, "outside the 72h window → no claim");
+  // direction: their reply BEFORE ours → no credit
+  sent = [mk("cara", NOW + 1 * HR)];
+  ok(m.fillAuthorReplied([{ at: NOW, handle: "cara", kind: "reply" }], sent) === 0, "an inbound event before our reply never counts");
+  // one event consumes ONE record, most recent wins
+  sent = [mk("dan", NOW - 50 * HR), mk("dan", NOW - 2 * HR)];
+  ok(m.fillAuthorReplied([{ at: NOW, handle: "dan", kind: "reply" }], sent) === 1 && sent[1].outcome.authorReplied === true && !sent[0].outcome, "one event credits only the most recent eligible reply");
+  // kind filter: mentions don't count as engaged-back
+  sent = [mk("eve", NOW - 2 * HR)];
+  ok(m.fillAuthorReplied([{ at: NOW, handle: "eve", kind: "mention" }], sent) === 0, "a mention is not an engaged-back reply");
+  // idempotent: a second event doesn't double-credit the same record
+  sent = [mk("fay", NOW - 3 * HR)];
+  m.fillAuthorReplied([{ at: NOW - 2 * HR, handle: "fay", kind: "reply" }], sent);
+  ok(m.fillAuthorReplied([{ at: NOW - 1 * HR, handle: "fay", kind: "reply" }], sent) === 0, "already-credited records aren't re-marked");
+  // aggregateAccounts surfaces the measured count
+  const reps = [mk("gil", NOW - 2 * HR, { outcome: { at: NOW, likes: 1, replies: 0, authorReplied: true } }), mk("gil", NOW - 5 * HR)];
+  const agg = m.aggregateAccounts(reps, NOW);
+  ok(agg.accounts["gil"].backs === 1, "aggregate carries the measured engaged-back count per account");
+  // HONESTY GUARD: a join-only outcome (authorReplied, no counts) must count as a "back" but NEVER
+  // enter fit as a phantom zero-engagement measured result.
+  const joinOnly = [];
+  for (let i = 0; i < 6; i++) joinOnly.push(mk("hank", NOW - (i + 1) * 24 * HR, { angle: "ask", ageMs: 5 * 60_000, score: 0.7, outcome: { at: NOW, authorReplied: true } }));
+  const aggJ = m.aggregateAccounts(joinOnly, NOW);
+  ok(aggJ.accounts["hank"].backs === 6 && aggJ.accounts["hank"].nOut === 0 && aggJ.accounts["hank"].score === undefined, "join-only outcomes count backs but never nOut / a measured score");
+  const flJ = m.learnFeatures(joinOnly, NOW);
+  ok(flJ.nOut === 0 && flJ.angles.length === 0 && flJ.fitCorr === undefined, "join-only outcomes never enter learnFeatures' fit slices or correlations");
+}
+
 /* ---- learnFeatures: WHAT works (angles, timing, fit-validity) — the self-tuning half ---- */
 {
   const MIN = 60_000;

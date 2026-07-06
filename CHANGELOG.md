@@ -365,6 +365,25 @@ stage-1 fit, author reach) and gets its real engagement measured daily; new pure
 Same honesty machinery as the account learner; zero new API calls. Also fixed the stale
 "outcome is NOT YET IMPLEMENTED" SentRecord comment (the measure pass has written it for weeks).
 
+**Tier 1 of the algo-leverage mission (2026-07-05)** — three moves from the open-source-algo
+report, all challenge-verified first:
+- **Outcome data upgrade ($0):** the daily measure pass keeps the views/reposts/tweet-id already
+  in the paid response (views = distribution, the thing the 2026 ranker actually decides);
+  `SentRecord.target` logs the post's engagement state at reply time; `learnFeatures` gains
+  `fitCorrViews` (compare with `fitCorr` before any primary-metric flip). Old records untouched.
+- **The engaged-back join ($0, the moat metric):** `fillAuthorReplied` joins the notifications
+  harvest to the sent-reply log (handle + 72h, one event → one record, most-recent wins) and
+  writes the never-written `authorReplied` slot; `aggregateAccounts` carries a measured `backs`
+  count and the insights row shows "↩ engaged back ×N" — copy says "engaged back", never
+  "replied to your reply" (no thread id available; the tooltip states the join's limits).
+- **The drafter learns context + gets an eval:** new pure `draft-context.ts` assembles a
+  grounding block (niche + scorer reason/category + honest author line) into the DRAFT user
+  message — X_DRAFT_SYSTEM stays byte-stable. New `eval-draft-reply-live.mjs` (opt-in Layer B)
+  drafts every fixture bare-vs-enriched and judges both on a 0-3 rubric anchored to the LLM
+  reply-grading mechanism in X's published pipeline — so the enrichment is a measured delta,
+  and stage 2 (own-reply exemplars + measured-angle line) is explicitly gated on it.
++10 learn-stats tests (48), +7 draft-context (13th suite in the gate).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
