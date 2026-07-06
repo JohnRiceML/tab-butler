@@ -393,6 +393,12 @@ long-session memory bound can't wipe compounding history; entries past TTL are p
 load/write, never rendered; a niche change flushes the heavy pool (niche-stamped, can't bleed
 back). NEGATIVE net API cost.
 
+**Ease-off now pauses analysis too (2026-07-05)** — past the ~30 replies/hr line the ambient
+scan stops queueing and scoring posts entirely (no Haiku spend): surfacing MORE reply spots
+while the user should cool down contradicted the honest mirror. Manual intent still works —
+⟳ Rescan opens a 2-minute override window, Find spots is unaffected — and the ease-off callout
+says plainly: "Goobi paused scanning for new spots (⟳ Rescan overrides)."
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

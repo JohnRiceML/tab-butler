@@ -317,10 +317,17 @@ function requestScan() {
   requestAnimationFrame(() => { scanPending = false; scan(); });
 }
 
+/** Manual-scan override window: an explicit ⟳ Rescan lets one pass run even at ease-off. */
+let manualScanUntil = 0;
 function scan() {
   if (!enabled || paused) return;
   // On the notifications route, harvest who engaged with ME instead of scoring posts to reply to.
   if (location.pathname.startsWith("/notifications")) { scanNotifications(); return; }
+  // Ease-off = STOP analyzing too. Past the pace line the ambient scan pauses (no new queueing,
+  // no Haiku spend) — surfacing more reply spots while the user should be cooling down is the
+  // opposite of the honest mirror. Manual actions still work: ⟳ Rescan opens a short window,
+  // and Find spots doesn't route through here at all. The pace chip/momentum strip show why.
+  if (reputationStatus(repliesLastHour()).level === "easeoff" && Date.now() > manualScanUntil) return;
   if (scoreCalls >= MAX_SCORE_CALLS) {
     if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
     return;
@@ -447,6 +454,7 @@ function rescan() {
   if (paused) return; // a paused copilot doesn't scan, even on an explicit rescan
   scoreCalls = 0;        // user explicitly asked for more — reset the guard
   scanCapNotified = false;
+  manualScanUntil = Date.now() + 2 * 60_000; // an explicit ask overrides the ease-off scan pause for one short window
   seen.clear();          // re-evaluate the visible feed from scratch
   queue.length = 0;      // drop anything half-queued
   for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
