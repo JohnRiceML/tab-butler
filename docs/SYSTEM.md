@@ -22,6 +22,7 @@ for t in twttr policy hygiene pacing community momentum learn-stats supporters t
 node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-live.mjs --live   # Layer B: live generate→Haiku-judge quality eval (opt-in, ~$0.20/run; no-op without --live)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-draft-reply-live.mjs --live   # Layer B for the reply DRAFTER: bare-vs-enriched context delta, judge anchored to X's 0-3 reply grading (opt-in, ~$0.25/run)
+# TWTTR_KEY=... node scripts/spike-poller-or.mjs --live --handles a,b,c   # one-off spike: does the provider honor batched OR-from: searches? (gates the ambient target poller; ~1.4MB)
 ```
 
 - **Sources** are `.ts`/`.html` under `extension/src/{background,content,popup,lib}`.

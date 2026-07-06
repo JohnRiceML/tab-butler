@@ -454,6 +454,13 @@ module, the grox prompt templates, conversation-serving code, un-redacted thresh
 routes each finding to the exact file it would change. Closes the verified map: every
 challenge-approved item that could ship without the owner's keys has now shipped.
 
+**Poller spike script (2026-07-05)** — `scripts/spike-poller-or.mjs`: the one open question
+gating the ambient target poller (does twitter241 honor batched `from:a OR from:b` searches —
+~5× cheaper than per-handle) is now a one-command test on the owner's key. Uses the REAL
+parser so "works" means works-with-our-code; per-handle controls distinguish OR-broken from
+quiet accounts; prints an explicit OR-HONORED / OR-BROKEN / INCONCLUSIVE verdict with the
+matching build path for each. No-ops without --live + a key.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose
