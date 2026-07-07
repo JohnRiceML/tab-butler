@@ -1215,6 +1215,7 @@ function toast(msg: string) {
   const d = document.createElement("div");
   Object.assign(d.style, { background: "#1d1812", color: "#f3ead9", border: "0.5px solid rgba(214,154,92,.18)", borderRadius: "10px", padding: "10px 14px", font: "12.5px -apple-system, system-ui, sans-serif", maxWidth: "320px", boxShadow: "0 12px 40px rgba(0,0,0,.5)" } as Partial<CSSStyleDeclaration>);
   d.textContent = msg;
+  d.setAttribute("role", "status"); d.setAttribute("aria-live", "polite"); // announce transient toasts to screen readers
   root.appendChild(d);
   document.documentElement.appendChild(host);
   setTimeout(() => host.remove(), 6000);
@@ -1223,6 +1224,11 @@ function toast(msg: string) {
 /* ---------- opportunities dock (always-on, ranked top posts) ---------- */
 
 const DOCK_CSS = `
+/* Keyboard a11y: one consistent, always-visible focus ring across every interactive element
+   (some inputs set outline:none for aesthetics — :focus-visible restores keyboard visibility). */
+:focus-visible { outline: 2px solid rgba(232,154,60,.75); outline-offset: 1px; border-radius: 4px; }
+/* Vestibular a11y: honor the OS-level reduced-motion preference for all CSS motion. */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 .l { display:flex; align-items:center; gap:9px; background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.3); border-radius:14px;
      cursor:pointer; text-align:left; font:600 12px -apple-system,system-ui,sans-serif; padding:7px 14px 7px 9px;
      box-shadow:0 8px 28px rgba(0,0,0,.45); }
@@ -1230,7 +1236,7 @@ const DOCK_CSS = `
 .lgoobi { display:inline-flex; flex:0 0 auto; }
 .ltext { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
 .ll1 { font-weight:600; color:#f3ead9; }
-.ll2 { font-size:10.5px; font-weight:500; color:#8c7d68; margin-top:1px; }
+.ll2 { font-size:10.5px; font-weight:500; color:#96876f; margin-top:1px; } /* #96876f: 5.03:1 on the pill bg — the old #8c7d68 was 4.40:1, under AA */
 .lavs { display:inline-flex; align-items:center; margin-left:10px; flex:0 0 auto; }
 .lav { width:22px; height:22px; border-radius:50%; object-fit:cover; border:1.5px solid #1d1812; box-sizing:border-box; background:#221c15; }
 .lav + .lav { margin-left:-9px; }
@@ -1265,6 +1271,7 @@ const DOCK_CSS = `
 .ins-car { font-size:10px; color:#8c7d68; width:10px; text-align:center; }
 .ins-body { padding:2px 14px 12px; }
 .ins-trend { font-size:11px; color:#6fcf7f; margin:2px 0 8px; font-weight:500; }
+.ins-fact { font-size:11px; color:#8c7d68; margin:2px 0 6px; } /* neutral insight line — green means POSITIVE, not "any insight" */
 .ins-learn { font-size:11px; color:#8c7d68; line-height:1.4; padding:4px 0; }
 .ins-row { display:flex; align-items:center; gap:9px; padding:6px 0; }
 .ins-av { width:24px; height:24px; border-radius:50%; flex:0 0 auto; object-fit:cover; background:rgba(214,154,92,.15); }
@@ -2430,6 +2437,7 @@ function renderInsightPanel(d: HTMLElement): void {
     const at = accountTrend(learn.snaps, now);
     if (at) {
       const t = document.createElement("div"); t.className = "ins-trend";
+      t.style.color = at.state === "picking-up" ? "#6fcf7f" : at.state === "cooling" ? "#d6604a" : "#8c7d68"; // color = state; a cooling trend must never render in positive green
       const icon = at.state === "picking-up" ? "\u{1F4C8} " : at.state === "cooling" ? "\u{1F4C9} " : "\u2192 ";
       const label = at.state === "picking-up" ? "Picking up" : at.state === "cooling" ? "Cooling" : "Steady";
       const unit = at.metric === "views" ? "views" : "eng";
@@ -2451,7 +2459,7 @@ function renderInsightPanel(d: HTMLElement): void {
         let fDelta: number | undefined;
         const withF = Object.values(learn.snaps).filter((sn) => sn.followers != null && sn.day >= cutF).sort((a, b) => (a.day < b.day ? -1 : 1));
         if (withF.length >= 2 && withF[0].day !== withF[withF.length - 1].day) fDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
-        const t2 = document.createElement("div"); t2.className = "ins-trend";
+        const t2 = document.createElement("div"); t2.className = "ins-fact";
         t2.textContent = `🔀 14d: ${sent14} ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged with you` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : ""); // "engaged with you" (all inbound), deliberately NOT the join's stricter "engaged back"
         t2.title = "Measured totals that co-occurred over the last 14 days — correlation, NOT attribution: profile clicks aren't visible to us and follows can come from anywhere. The arc is the growth mechanism (reply → profile visit → follow); the numbers are real, the causality is not claimed. Engaged-back is matched from your notifications (visit-dependent, undercounts if you don't visit).";
         body.append(t2);
@@ -2469,7 +2477,7 @@ function renderInsightPanel(d: HTMLElement): void {
         bits.push([`\u23F1 Replies to <15m-old posts earn ~${fl.ageGradient.toFixed(1)}\u00D7 your 1h+ ones (n=${fl.freshN} vs ${fl.staleN})`, "The timing lever measured on YOUR replies \u2014 the same early-window mechanism the ranker rewards."]);
       }
       for (const [txt, why] of bits) {
-        const li = document.createElement("div"); li.className = "ins-trend"; li.textContent = txt;
+        const li = document.createElement("div"); li.className = "ins-fact"; li.textContent = txt;
         li.title = why + (fl.fitCorr != null ? ` (fit\u2194outcome \u03C1=${fl.fitCorr.toFixed(2)}, n=${fl.nOut})` : "");
         body.append(li);
       }
@@ -2478,7 +2486,7 @@ function renderInsightPanel(d: HTMLElement): void {
     // follow). Measured facts only: pinned-vs-your-best + bio presence. Silent without a harvest —
     // it fills in the first time the user visits their own profile with Goobi on.
     for (const f of profileCheck(profileState, ownStats ?? []).slice(0, 2)) {
-      const li = document.createElement("div"); li.className = "ins-trend";
+      const li = document.createElement("div"); li.className = f.level === "good" ? "ins-trend" : "ins-fact"; // green only for the ✓
       li.textContent = (f.level === "act" ? "\u2192 " : "\u2713 ") + f.text;
       li.title = f.why;
       body.append(li);
@@ -3329,8 +3337,10 @@ function renderDock() {
     const pb = document.createElement("button"); pb.className = "lbtn";
     pb.textContent = paused ? "▶" : "⏸";
     pb.title = paused ? "Resume — start finding reply spots again" : "Pause — no scanning, surfacing, or API calls";
+    pb.setAttribute("aria-label", paused ? "Resume the copilot" : "Pause the copilot"); // icon glyphs read poorly in screen readers
     pb.onclick = (e) => { e.stopPropagation(); setPaused(!paused); };
     const sb = document.createElement("button"); sb.className = "lbtn"; sb.textContent = "✦";
+    sb.setAttribute("aria-label", "Find reply spots in your niche");
     sb.disabled = paused || findingSpots;
     sb.title = paused ? "Paused — resume to search" : findingSpots ? "Searching…" : "Find spots — search X for fresh posts in your niche";
     sb.onclick = (e) => { e.stopPropagation(); void findSpots(); };
@@ -3369,10 +3379,10 @@ function renderDock() {
     re.onclick = () => rescan();
     acts.append(re);
   }
-  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear";
+  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear"; kb.setAttribute("aria-label", "More actions");
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
   acts.append(kb);
-  const x = document.createElement("button"); x.className = "iconb"; x.textContent = "–"; x.title = "Minimize"; // collapses to the launcher pill — it minimizes, it doesn't close
+  const x = document.createElement("button"); x.className = "iconb"; x.textContent = "–"; x.title = "Minimize"; x.setAttribute("aria-label", "Minimize the dock"); // collapses to the launcher pill — it minimizes, it doesn't close
   x.onclick = () => { kebabOpen = false; if (dockPlayOpen) resetPlay(); dockOpen = false; renderDock(); };
   acts.append(x);
   h.append(dhl, acts);
@@ -3417,7 +3427,7 @@ function renderDock() {
       let postsThisWeek = 0; for (const c of cells.slice(-7)) postsThisWeek += c.posts;
       const shades = ["rgba(214,154,92,.15)", "rgba(232,154,60,.4)", "rgba(232,154,60,.7)", "#e89a3c"];
       const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:7px";
-      const dots = document.createElement("div"); dots.style.cssText = "display:flex;gap:3px;align-items:center";
+      const dots = document.createElement("div"); dots.style.cssText = "display:flex;gap:3px;align-items:center"; dots.setAttribute("aria-hidden", "true"); // decorative — the chain label + per-dot titles carry the data
       cells.forEach((c, i) => {
         const dot = document.createElement("span");
         dot.style.cssText = `width:7px;height:7px;border-radius:2px;background:${shades[c.intensity]}` + (i === cells.length - 1 ? ";box-shadow:0 0 0 1px rgba(232,154,60,.5)" : "");

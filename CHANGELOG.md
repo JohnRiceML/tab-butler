@@ -528,6 +528,22 @@ ran for the first time (3 runs, judge drift ≤1 each):
   rewrite call at 2× cost; or judge harshness — Haiku's slop read isn't ground truth either).
   Next iteration should A/B those, measured, before believing any of them.
 
+**UX/a11y expert pass (2026-07-06)** — the objectively-verifiable fixes (contrast math,
+keyboard paths, screen-reader semantics), plus a hierarchy bug of our own making:
+- **Green now means positive, not "any insight."** `.ins-trend` was hardcoded green and five
+  different insight lines had piled into it — a COOLING trend rendered in celebratory green.
+  The trend line is now colored by state (green/red/muted); the funnel, what's-working, and
+  profile "act" lines moved to a neutral `.ins-fact`; only ✓ findings stay green.
+- **Contrast**: the pill's muted subtitle was 4.40:1 (under AA 4.5) — bumped to #96876f
+  (5.03:1). All other pairs audited and passing (primary text 15.8:1).
+- **Keyboard**: one consistent `:focus-visible` ring across the dock shadow DOM AND the popup
+  (several inputs had `outline:none` aesthetics that killed keyboard visibility).
+- **Screen readers**: aria-labels on every icon-only control (pill ⏸/▶ + ✦, minimize, kebab);
+  toasts announce via `role=status aria-live=polite`; the decorative activity dots are
+  `aria-hidden` (the chain label + titles carry the data).
+- **Motion**: `prefers-reduced-motion` now disables all CSS transitions/animations in both
+  surfaces.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

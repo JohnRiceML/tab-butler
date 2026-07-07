@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Goobi</title>
     <style>
+      /* Keyboard a11y: a consistent, always-visible focus ring (some inputs remove outlines). */
+      :focus-visible { outline: 2px solid rgba(232,154,60,.75); outline-offset: 1px; border-radius: 4px; }
+      /* Vestibular a11y: honor reduced-motion for all CSS motion. */
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
       :root {
         --bg: #14110d;
         --card: #1d1812;
