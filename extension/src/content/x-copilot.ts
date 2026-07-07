@@ -7,7 +7,7 @@ import { profileCheck, type ProfileState } from "../lib/profile-check";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, type TargetStore } from "../lib/targets";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
@@ -2939,19 +2939,42 @@ async function ensureTargetOwner(): Promise<void> {
 }
 
 /** Pull the target's freshest ORIGINAL post (reuses the proven from:<handle> search). */
-async function findTargetPost(handle: string): Promise<void> {
+async function findTargetPost(handle: string, ambient = false): Promise<void> {
   if (targetBusy.has(handle)) return;
   targetBusy.add(handle); renderDock();
   try {
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: true });
+    // Ambient polls carry intent:false so conserve mode silently pauses them (the governor's
+    // degrade ladder is the budget guard); an explicit user click stays intent:true.
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: !ambient });
     if (res?.ok) {
       const newest = parseTimelineTweets(res.data)
         .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))[0];
       targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes } : { id: "", text: "", author: handle });
-      targetDrafts.delete(handle);
+      if (!ambient) targetDrafts.delete(handle); // an explicit refresh invalidates the old draft; an ambient poll never touches the user's draft
+      // TTL bookkeeping on the PERSISTED target — this is what makes remounts/second tabs free
+      // (selectPollBatch skips anything polled within TARGET_POLL_TTL_MS).
+      const tg = targetStore.targets.find((t) => t.handle.toLowerCase() === handle.toLowerCase());
+      if (tg) { tg.lastPolledAt = Date.now(); if (newest?.id) tg.lastFreshPostId = newest.id; persistTargets(); }
     }
   } finally { targetBusy.delete(handle); renderDock(); }
+}
+
+/** The ambient target poller (spike-verified 2026-07: the provider does NOT honor batched
+ *  "from:a OR from:b" searches — one author's tweets come back — so this is the per-handle path).
+ *  selectPollBatch enforces the budget invariant: ≤POLLS_PER_OPEN per kick, 12-min per-target TTL
+ *  persisted on the target itself. Skips entirely when paused/locked/unconfigured; ambient calls
+ *  degrade to silence in conserve mode via intent:false. */
+let pollKickAt = 0;
+async function pollTargets(): Promise<void> {
+  if (paused || twttrUnconfigured || !targetStore.targets.length) return;
+  if (reputationStatus(repliesLastHour()).level === "easeoff") return; // cooling down — don't dangle fresh targets
+  if (Date.now() - pollKickAt < 60_000) return; // render-loop guard; the real gate is the per-target TTL
+  pollKickAt = Date.now();
+  for (const tg of selectPollBatch(targetStore.targets, Date.now())) {
+    if (invalidated) return;
+    await findTargetPost(tg.handle, true); // sequential — the governor's token bucket stays smooth
+  }
 }
 
 async function draftTargetReply(handle: string): Promise<void> {
@@ -3111,7 +3134,16 @@ function buildTargets(): HTMLElement {
     e.textContent = suggestions.length ? "Track a suggestion above, or add an account up to ~25× your size by @handle." : "Add a target by @handle, or tap 🔥 Find heavy hitters to pull the big, high-engagement accounts in your niche.";
     body.append(e);
   }
-  for (const tg of targetStore.targets) {
+  if (!locked) void pollTargets(); // ambient freshness — ≤5 budgeted polls, per-target 12-min TTL, conserve-mode-aware
+  // Live posts float to the top: the whole point is catching the early window without clicking.
+  const trackedSorted = [...targetStore.targets].sort((a, b) => {
+    const pa = targetPosts.get(a.handle), pb = targetPosts.get(b.handle);
+    const la = pa?.postedAt && freshnessLabel(pa.postedAt, Date.now())?.live ? 1 : 0;
+    const lb = pb?.postedAt && freshnessLabel(pb.postedAt, Date.now())?.live ? 1 : 0;
+    if (la !== lb) return lb - la;
+    return (pb?.postedAt ?? 0) - (pa?.postedAt ?? 0);
+  });
+  for (const tg of trackedSorted) {
     const c = document.createElement("div"); c.className = "tg-card";
     const top = document.createElement("div"); top.className = "tg-top";
     top.append(avatarChip(tg.handle, lastSeenFor(tg.handle)));

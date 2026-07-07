@@ -479,6 +479,20 @@ gate-only commits found 2 MAJORs + 6 minors, all fixed:
   Premium callout copy is coherent (impressions framing, rates-flat caveat); the seed file
   learns the premium field; the two-tab persist race is documented as accepted.
 
+**The ambient target poller ships + both live gates ran (2026-07-06)** — the owner's keys
+turned the two open questions into evidence:
+- **Spike verdict: OR-BROKEN.** twitter241 ignores batched `from:a OR from:b` (returned one
+  author; per-handle controls proved the others active). The poller therefore ships on the
+  per-handle path: `pollTargets()` on the Targets view → `selectPollBatch` (≤5/kick, 12-min
+  per-target TTL persisted on the target — remounts never re-pay) → ambient `findTargetPost`
+  with `intent:false` (conserve mode silently pauses it; ease-off skips it entirely). Live
+  posts float to the top of the tracked list. The last deferred build item is live.
+- **Draft-eval verdict: stage 2 SHELVED.** Bare drafts already ceiling the judge (3.00 on
+  grade/slop/value, judge drift 0); enriched context showed no gain and a −0.2 voiceMatch dip.
+  Per the pre-registered gate, stage-2 context (exemplars + measured-angle) does not ship;
+  stage 1 stays (no measured cost, code-anchored rationale). Eval note: the 0-3 scale
+  saturates — harder fixtures / a wider scale before any re-test.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

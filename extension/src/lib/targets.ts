@@ -94,8 +94,9 @@ export function earlyLabel(replies: number | undefined, postedAt: number | undef
   return null;
 }
 
-// Poll-batch primitive for a future ambient fresh-post poller — the ≤N/open + TTL invariant,
-// tested now so the eventual poller can't blow the budget (one full list ≤ POLLS_PER_OPEN calls).
+// Poll-batch invariant for the ambient fresh-post poller (LIVE as of 2026-07, per-handle path —
+// a spike proved the provider ignores batched "OR from:" queries): ≤N polls per kick, 12-min
+// per-target TTL persisted on the target itself, so remounts/second tabs never re-pay.
 export const POLLS_PER_OPEN = 5;
 export const TARGET_POLL_TTL_MS = 12 * 60_000;
 export function selectPollBatch(targets: Target[], now: number, max = POLLS_PER_OPEN): Target[] {
