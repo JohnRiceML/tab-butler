@@ -49,5 +49,30 @@ eq(at8, at25, "volume saturates past the daily target (more != higher)");
 ok(computeMomentum({ ...idle, repliesToday: 2, replyStreak: 1, minsSinceLast: 5 }).state === "warming", "light + live -> warming");
 ok(computeMomentum({ repliesToday: 5, postedToday: 1, replyStreak: 2, minsSinceLast: 40, repLevel: "healthy" }).state === "cooling", "had momentum but idle -> cooling");
 
+// ---- daily-shape coach: the BALANCE of the day, safety-deferent ----
+const { dailyShape } = mod;
+ok(dailyShape({ repliesToday: 8, postedToday: 2, repLevel: "easeoff" }) === null, "ease-off -> daily coach stays silent (safety copy owns it)");
+ok(dailyShape({ repliesToday: 0, postedToday: 0, repLevel: "healthy" }).kind === "warmup", "quiet day -> warm-up nudge");
+{
+  const s = dailyShape({ repliesToday: 14, postedToday: 0, repLevel: "healthy" });
+  ok(s.kind === "balance" && /mix in one original/i.test(s.text), "lots of replies, no post -> nudge an original");
+}
+{
+  const s = dailyShape({ repliesToday: 2, postedToday: 1, repLevel: "healthy" });
+  ok(s.kind === "balance" && /bigger threads/i.test(s.text), "posted but few replies -> nudge bigger threads");
+}
+ok(dailyShape({ repliesToday: 12, postedToday: 1, repLevel: "healthy" }).text.includes("Balanced day"), "replies + a post -> balanced-day affirmation");
+{
+  const s = dailyShape({ repliesToday: 5, postedToday: 4, repLevel: "healthy" });
+  ok(s.kind === "spacing" && /space them/i.test(s.text), "4 posts -> spacing nudge (author-diversity decay)");
+}
+// safety-deference: at caution it NEVER pushes more replies — only redirects to a post
+ok(dailyShape({ repliesToday: 3, postedToday: 1, repLevel: "caution" }) === null, "caution + mid-warmup -> silence, never 'do more replies'");
+{
+  const s = dailyShape({ repliesToday: 15, postedToday: 0, repLevel: "caution" });
+  ok(s && /switch to an original/i.test(s.text) && !/bigger threads/i.test(s.text), "caution + many replies -> redirect to a post, not more replies");
+}
+ok(dailyShape({ repliesToday: 4, postedToday: 0, repLevel: "healthy" }) === null, "mid-warmup with nothing distinctive -> silence (meter cue covers it)");
+
 console.log(fail === 0 ? `\n✓ momentum: ${pass} assertions passed` : `\n✗ momentum: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

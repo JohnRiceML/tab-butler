@@ -77,5 +77,39 @@ ok(!m.profileCheck({ at: 1, pinnedId: "a", bioLen: 90 }, stats).some((x) => x.te
   ok(f.some((x) => x.text.includes("No pinned post") && x.text.includes("eng")), "no views → falls back to engagement, labeled");
 }
 
+// ---- profile v2: bio formula scan ----
+ok(m.analyzeBio("Building an AI tool for founders. 12K MRR.").hasRole, "analyzeBio detects a role verb");
+ok(m.analyzeBio("Building an AI tool for founders. 12K MRR.").hasAudience, "analyzeBio detects an audience");
+ok(m.analyzeBio("Building an AI tool for founders. 12K MRR.").hasProof, "analyzeBio detects a numeric proof");
+ok(!m.analyzeBio("just vibes and thoughts").hasProof, "analyzeBio: no number/metric → no proof");
+ok(m.analyzeBio("shipped 3 apps").hasProof && m.analyzeBio("$5k ARR").hasProof, "proof fires on shipped-count and $ metrics");
+
+// healthy bio missing proof → act (highest-leverage add), name/banner independent
+{
+  const f = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: false }, stats);
+  ok(f.some((x) => x.level === "act" && /no concrete proof/i.test(x.text)), "healthy bio without proof → act");
+}
+// full formula → a good affirmation
+{
+  const f = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: true }, stats);
+  ok(f.some((x) => x.level === "good" && /what you do, who it's for, and proof/i.test(x.text)), "full what/who/proof bio → good ✓");
+}
+// empty bio is the whole message — proof/name/banner nags suppressed
+{
+  const f = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 0, bioHasProof: false, nameDescriptive: false, hasBanner: false }, stats);
+  ok(f.filter((x) => /bio|banner|display name/i.test(x.text)).length === 1 && f.some((x) => x.text.includes("bio is empty")), "empty bio suppresses the other profile nags (one priority message)");
+}
+// name + banner quick wins fire only when harvested false, and only with a healthy bio
+{
+  const f = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: true, nameDescriptive: false, hasBanner: false }, stats);
+  ok(f.some((x) => /display name is just your handle/i.test(x.text)), "name-not-descriptive → act");
+  ok(f.some((x) => /No banner image/i.test(x.text)), "no banner → act");
+}
+// unset v2 fields → no v2 findings (backward compatible, honest-mirror)
+{
+  const f = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 90 }, stats);
+  ok(!f.some((x) => /proof|banner|display name/i.test(x.text)), "v2 fields unset → silence (never nag on data we didn't harvest)");
+}
+
 console.log(fail === 0 ? `\n✓ profile-check: ${pass} assertions passed` : `\n✗ profile-check: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

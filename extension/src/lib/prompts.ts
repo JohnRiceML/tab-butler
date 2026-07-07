@@ -166,6 +166,10 @@ Do NOT output an overall 0-100 score. Do NOT spread these apart; score each hook
 
 Reread each final post one more time. REWRITE any that contains: an em/en dash or hyphenated compound; the "it's not just X, it's Y" construction (in ANY wording); a list of exactly three; polished symmetric phrasing the user's own posts don't use; or a post that survives the swap test (another account's name fits) — including against the SOURCE authors. A batch where any of these slip through is a failed batch, however good the ideas.
 
+=== BANGER SCREEN (X's real gate — run it on each final post) ===
+
+X now runs every original post through a model that scores it for SLOP and QUALITY before deciding how far to distribute it: templated, generic, or AI-shaped posts are held back from reach no matter how clean the hook. So make the last pass ONE question per post: could ONLY this user — who did the actual work — have written this exact post? If a generic account in the niche could have posted it, a slop detector reads it the same way and it will not travel. Fix it by adding what only the doer knows (a specific number, a named tool, a real moment, the concrete detail), not by adding more polish. Rewrite it or replace it.
+
 === OUTPUT ===
 
 For each of the 5 ideas return:

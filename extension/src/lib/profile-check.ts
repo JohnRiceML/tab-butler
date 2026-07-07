@@ -12,8 +12,31 @@
  */
 
 export interface OwnPostStat { id: string; text?: string; views?: number; likes?: number; reposts?: number }
-export interface ProfileState { pinnedId?: string; pinKnown?: boolean /* a MISSING pin label is only trustworthy on an English UI — false → stay silent on pin claims */; bioLen?: number; at: number }
+export interface ProfileState {
+  pinnedId?: string;
+  pinKnown?: boolean /* a MISSING pin label is only trustworthy on an English UI — false → stay silent on pin claims */;
+  bioLen?: number;
+  // Profile-v2 conversion checks — booleans only (analyzeBio runs at harvest so the bio TEXT is
+  // never stored; presence heuristics, not quality judgments). Unset → say nothing (honest-mirror).
+  bioHasRole?: boolean;      // bio names what you do (founder/building/writes/…)
+  bioHasAudience?: boolean;  // bio names who it's for (for founders / helps devs / …)
+  bioHasProof?: boolean;     // bio carries a concrete number/metric (followers, $, shipped, →)
+  nameDescriptive?: boolean; // display name carries a descriptor, not just the @handle
+  hasBanner?: boolean;       // a profile banner image is set
+  at: number;
+}
 export interface ProfileFinding { level: "act" | "good"; text: string; why: string }
+
+/** Presence heuristics for the bio "what you do / who it's for / proof" formula. Pure so it's
+ *  unit-tested; x-copilot runs it on the harvested bio text and stores ONLY the booleans (the text
+ *  stays on the page). Deliberately generous — a false "has proof" is safer than nagging a good bio. */
+export function analyzeBio(text: string): { hasRole: boolean; hasAudience: boolean; hasProof: boolean } {
+  const t = (text || "").toLowerCase();
+  const hasRole = /\b(found(?:er|ing)|co-?founder|ceo|cto|building|builder|build|maker|indie|creator|writer|writes|engineer|developer|dev|designer|coach|consultant|investor|advisor|host|author|making|teaching|i (?:help|build|write|teach|ship|make))\b/.test(t);
+  const hasAudience = /\bfor [a-z]+|help(?:ing)? [a-z]+|teach(?:ing)? [a-z]+|\b(founders|developers|devs|makers|creators|marketers|designers|startups|teams|writers|coaches|engineers|solopreneurs)\b/.test(t);
+  const hasProof = /\d/.test(t) || /[$€£%]|→|\b(mrr|arr|users?|customers?|subscribers?|followers?|shipped|launched|raised|acquired|exits?|bootstrapp?ed)\b/.test(t);
+  return { hasRole, hasAudience, hasProof };
+}
 
 const fmt = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K` : `${(n / 1_000_000).toFixed(1)}M`);
 
@@ -59,14 +82,32 @@ export function profileCheck(state: ProfileState | undefined, ownStats: OwnPostS
   return finishBio(state, findings);
 }
 
-/** Bio presence (harvested length only — content judgment is the user's). */
+/** Bio + name + banner — the rest of the conversion surface. Empty/thin bio is the whole message
+ *  (fix that first); a healthy bio then gets the "what/who/proof" formula scan; name + banner are
+ *  independent quick wins. All presence-level, each labeled as a scan, not a quality judgment. */
 function finishBio(state: ProfileState, findings: ProfileFinding[]): ProfileFinding[] {
   if (state.bioLen != null) {
     if (state.bioLen === 0) {
       findings.push({ level: "act", text: "Your bio is empty — it's the first thing a profile click reads.", why: "Harvested from your own profile page. Say who you help / what you build; the follow decision happens here." });
-    } else if (state.bioLen < 20) {
-      findings.push({ level: "act", text: `Your bio is ${state.bioLen} characters — likely too thin to convert a curious stranger.`, why: "Harvested from your own profile page. One concrete line about who you help / what you build beats a fragment." });
+      return findings; // empty bio is the priority — don't pile on
     }
+    if (state.bioLen < 20) {
+      findings.push({ level: "act", text: `Your bio is ${state.bioLen} characters — likely too thin to convert a curious stranger.`, why: "Harvested from your own profile page. One concrete line about who you help / what you build beats a fragment." });
+      return findings;
+    }
+    // healthy length — scan the what/who/PROOF formula (proof is the highest-leverage missing piece)
+    if (state.bioHasProof === false) {
+      findings.push({ level: "act", text: "Your bio has no concrete proof — a number (followers, $, shipped X) is what tips a skeptical visitor into a follow.", why: "A quick scan of your bio, not a judgment. profile_click → follow is a first-class ranked action; proof is what converts the click." });
+    } else if (state.bioHasRole && state.bioHasAudience && state.bioHasProof) {
+      findings.push({ level: "good", text: "Bio covers what you do, who it's for, and proof ✓", why: "A quick scan of your bio for the standard convert-a-stranger formula." });
+    }
+  }
+  // name + banner — independent of the bio, only when we actually harvested them (undefined = silent)
+  if (state.nameDescriptive === false) {
+    findings.push({ level: "act", text: "Your display name is just your handle — add a short descriptor (e.g. \"Jo · building X\"). It's searchable and it frames every reply.", why: "Harvested from your profile. The name shows on every reply you leave — it's free real estate at the top of the funnel." });
+  }
+  if (state.hasBanner === false) {
+    findings.push({ level: "act", text: "No banner image — it's the biggest empty space on the profile a click lands on.", why: "Harvested from your profile. A banner with your product/result is proof-at-a-glance on the conversion surface." });
   }
   return findings;
 }

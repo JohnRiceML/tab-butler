@@ -71,3 +71,34 @@ export function computeMomentum(input: MomentumInput): Momentum {
 
   return { score, state, ...COPY[state] };
 }
+
+/* ---------- daily-shape coach: the BALANCE of the day, not the volume ----------------------------
+ * The momentum meter scores today's effort and saturates. This is the complementary read: are you
+ * hitting the healthy SHAPE of a growth day — replies (which earn reach) balanced with an original
+ * or two (which convert the profile clicks into follows), the posts SPACED (the ranker's author-
+ * diversity decay suppresses back-to-back posts from one author in a single feed load). The reply
+ * band is the practitioner consensus for a growth-mode day; posting is 1-3, spaced.
+ *
+ * SAFETY-DEFERENT by construction: at ease-off it says nothing (the safety copy owns the message),
+ * and at caution it NEVER nudges more replies — only "switch to a post". It can't push unsafe volume. */
+export const DAILY_REPLY_BAND = { lo: 10, hi: 30 }; // quality replies for a growth-mode day (consensus)
+export const DAILY_POST_BAND = { lo: 1, hi: 3 };    // 1-3 originals, spaced — bursts self-cannibalize
+
+export interface DailyShape { text: string; kind: "warmup" | "balance" | "spacing" }
+export function dailyShape(input: { repliesToday: number; postedToday: number; repLevel: RepLevel }): DailyShape | null {
+  const { repliesToday, postedToday, repLevel } = input;
+  if (repLevel === "easeoff") return null; // safety copy owns the message — never cheer over it
+  if (postedToday > DAILY_POST_BAND.hi) return { kind: "spacing", text: `${postedToday} posts today — space them a few hours apart. The ranker decays back-to-back posts from one author in a single feed load.` };
+  if (repLevel === "caution") {
+    // near the line — the only safe redirect is AWAY from more replies, toward a post
+    return repliesToday >= DAILY_REPLY_BAND.lo && postedToday === 0
+      ? { kind: "balance", text: "You've replied plenty today — switch to an original. Replies earn the reach; the post converts it into follows." }
+      : null;
+  }
+  // healthy pace from here — safe to encourage the balanced shape
+  if (repliesToday === 0 && postedToday === 0) return { kind: "warmup", text: "Quiet so far — a few replies on bigger threads is the fastest warm-up." };
+  if (repliesToday >= DAILY_REPLY_BAND.lo && postedToday === 0) return { kind: "balance", text: `${repliesToday} replies today — strong. Mix in one original: replies earn the reach, your post converts the profile clicks into follows.` };
+  if (postedToday >= DAILY_POST_BAND.lo && repliesToday < DAILY_REPLY_BAND.lo) return { kind: "balance", text: `Posted today ✓ — now spend time in bigger threads (${repliesToday}/${DAILY_REPLY_BAND.lo}+ replies). That's where new people meet you.` };
+  if (repliesToday >= DAILY_REPLY_BAND.lo && postedToday >= DAILY_POST_BAND.lo) return { kind: "balance", text: "Balanced day — replies plus an original, spaced. This is the shape that compounds." };
+  return null; // mid-warm-up with nothing distinctive to add — the meter's own cue covers it
+}

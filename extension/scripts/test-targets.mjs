@@ -63,6 +63,22 @@ ok(m.earlyLabel(45, NOW - 300 * MIN, NOW)?.level === "crowded", "crowded applies
 ok(m.earlyLabel(12, NOW - 4 * MIN, NOW) === null, "mid pile-up (between thresholds) says nothing");
 ok(m.earlyLabel(undefined, NOW - 4 * MIN, NOW) === null, "unknown reply count → no claim (honest-mirror)");
 
+// ---- reply-surface realism: graded (low_blast_radius) vs relationship-only ----
+ok(m.gradedSurface(50000) === "graded", "a 50k root clears the reply-grader threshold → graded (OON reach possible)");
+ok(m.gradedSurface(200) === "relationship", "a 200-follower root is relationship-only (reply ~invisible to For You)");
+ok(m.gradedSurface(1500) === "unknown", "the borderline band is genuinely uncertain (threshold redacted) → no claim");
+ok(m.gradedSurface(undefined) === "unknown", "unknown root size → unknown (honest-mirror)");
+ok(m.surfaceLabel("graded")?.includes("travel past") && m.surfaceLabel("relationship")?.includes("relationship"), "surface labels are honest one-liners");
+ok(m.surfaceLabel("unknown") === null, "no label for unknown/borderline — say nothing");
+ok(m.surfaceMult("relationship") === 0.85 && m.surfaceMult("graded") === 1 && m.surfaceMult("unknown") === 1, "relationship spots get a mild reach demotion; never zeroed");
+
+// ---- dedup-slot odds: one reply per conversation reaches For You ----
+ok(m.slotOdds(0) === 1 && m.slotOdds(m.EARLY_MAX_REPLIES) === 1, "an empty/near-empty thread is a wide-open slot");
+ok(m.slotOdds(15) === 0.7, "a contested thread (6..29 replies) — reduced odds");
+ok(m.slotOdds(50) === 0.45 && m.slotOdds(500) === 0.3, "a crowded thread's slot is likely/effectively taken");
+ok(m.slotOdds(undefined) === 1, "unknown reply count → neutral (never penalize for missing data)");
+ok(m.slotOdds(3) >= m.slotOdds(15) && m.slotOdds(15) >= m.slotOdds(50), "odds are monotonic in crowding");
+
 // ---- poll-batch invariant: <=N per open, oldest-polled first, TTL-skipped ----
 {
   const targets = [

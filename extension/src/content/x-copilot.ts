@@ -1,13 +1,14 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
-import { computeMomentum } from "../lib/momentum";
+import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
-import { profileCheck, type ProfileState } from "../lib/profile-check";
+import { profileCheck, analyzeBio, type ProfileState } from "../lib/profile-check";
 import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, gradedSurface, surfaceLabel, surfaceMult, slotOdds, type TargetStore } from "../lib/targets";
+import { rankThreads, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
@@ -328,12 +329,31 @@ let profileHarvestAt = 0;
 function harvestOwnProfile(): void {
   if (Date.now() - profileHarvestAt < 30_000) return; // settle window — the route re-scans constantly
   if (!document.querySelector('[data-testid="UserName"]')) return; // header not rendered yet
+
+  // Conversion-surface signals from the already-rendered header (available even for a thin timeline).
+  // analyzeBio runs HERE so only the booleans are stored — the bio text never leaves the page.
+  const bioEl = document.querySelector('[data-testid="UserDescription"]');
+  const bioText = (bioEl?.textContent || "").trim(); // X omits the element entirely for an empty bio
+  const ba = bioText ? analyzeBio(bioText) : undefined;
+  let nameDescriptive: boolean | undefined;
+  const unText = document.querySelector('[data-testid="UserName"]')?.textContent || "";
+  if (unText && selfHandle) {
+    const hi = unText.indexOf("@" + selfHandle);
+    const namePart = (hi >= 0 ? unText.slice(0, hi) : unText).trim(); // the display name sits before the @handle
+    const norm = (s: string) => s.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    const hasSep = /[·|—–]/.test(namePart) || namePart.split(/\s+/).filter(Boolean).length >= 2; // a real name / descriptor
+    nameDescriptive = namePart.length > 0 && (hasSep || norm(namePart) !== norm(selfHandle));
+  }
+  // Banner: X links a set banner to /header_photo and serves it from /profile_banners/; an unset
+  // banner is a plain colored div with neither. (A rare miss → a mild, low-harm nag.)
+  const hasBanner = !!document.querySelector('a[href$="/header_photo"]') || !!document.querySelector('img[src*="profile_banners"]');
+  const extras = { bioLen: bioText.length, bioHasRole: ba?.hasRole, bioHasAudience: ba?.hasAudience, bioHasProof: ba?.hasProof, nameDescriptive, hasBanner };
+
   const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]');
   if (articles.length < 3) {
-    // Timeline too thin to trust pin detection (tiny account / still loading) — but the bio lives
-    // in the already-rendered header, so harvest THAT and leave the pin fields untouched.
-    const bioEl = document.querySelector('[data-testid="UserDescription"]');
-    profileState = { ...(profileState ?? { at: 0 }), bioLen: (bioEl?.textContent || "").trim().length, at: Date.now() };
+    // Timeline too thin to trust pin detection (tiny account / still loading) — leave the pin fields
+    // untouched, but the header signals above are valid regardless.
+    profileState = { ...(profileState ?? { at: 0 }), ...extras, at: Date.now() };
     safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
     profileHarvestAt = Date.now();
     return;
@@ -348,9 +368,7 @@ function harvestOwnProfile(): void {
   // the regex never matches and a false "no pinned post" claim would break the honest mirror.
   // A FOUND pin is trustworthy in any case (the regex matched).
   const pinKnown = pinnedId != null || (document.documentElement.lang || "").toLowerCase().startsWith("en");
-  const bio = document.querySelector('[data-testid="UserDescription"]');
-  const bioLen = (bio?.textContent || "").trim().length; // X omits the element entirely for an empty bio
-  profileState = { ...(profileState ?? { at: 0 }), pinnedId, pinKnown, bioLen, at: Date.now() };
+  profileState = { ...(profileState ?? { at: 0 }), ...extras, pinnedId, pinKnown, at: Date.now() };
   safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
 }
 
@@ -1650,13 +1668,16 @@ function builderTierFor(o: Opp): 0 | 1 | 2 {
 
 function effectiveScore(o: Opp): number {
   const reach = reachFactor(o); // real follower count when known (Twttr), else the on-page likes proxy
-  let buried = 1;
-  if (o.likes && o.replies) {
-    const ratio = o.replies / (o.likes + 1); // many replies per like = pile-on you get lost in
-    buried = ratio > 1.5 ? 0.7 : ratio > 0.7 ? 0.85 : 1;
-  } else if (o.replies && o.replies > 300) buried = 0.8;
   const fresh = freshnessFactor(o.postedAt);
-  let s = o.score * fresh * reach * buried;
+  // Dedup-slot winnability: only ONE reply per conversation is served in For You
+  // (dedup_conversation_filter), so a crowded thread's slot is effectively taken. This replaces the
+  // old likes/replies pile-on proxy with the mechanism it was approximating. Unknown count → neutral.
+  const slot = slotOdds(o.replies);
+  // low_blast_radius: below the reply-grader's root-follower threshold a reply earns ~no out-of-network
+  // reach — a MILD growth demotion for a relationship-only thread (still fine for the relationship;
+  // niche peers are re-floored below). Neutral when the root's size is unknown (honest-mirror).
+  const surface = surfaceMult(gradedSurface(knownFollowers(o)));
+  let s = o.score * fresh * reach * slot * surface;
   // Community lift: a peer/builder in your space is worth replying to even when the
   // POST isn't on your niche topic — engaging peers compounds your community. Lift
   // them; and floor a FRESH niche-peer so a low topic-fit score can't bury them.
@@ -1722,6 +1743,7 @@ let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 let insightOpen = false; // the "who you show up with" learning panel (collapsed by default)
 let supportersOpen = false; // the "who shows up for you" reciprocity panel (collapsed by default)
+let threadsOpen = true; // the "tend your threads" action queue — open by default (it's a to-do, not an insight)
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -1908,6 +1930,14 @@ function renderList(list: HTMLElement) {
     const age = fmtAge(o.postedAt);
     if (age) meta.append(document.createTextNode((o.category ? " · " : "") + age));
     if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
+    // Reply-surface realism (grounded in the open-source ranker) — one muted, HONEST caution chip:
+    // a relationship-only thread (root below the reply-grader threshold) won't reach strangers; a
+    // crowded thread's single For-You slot (conversation dedup) is likely already taken. Good threads
+    // get no chip (absence = fine), so the row only speaks up when there's a real caveat.
+    const surf = gradedSurface(knownFollowers(o));
+    const mkCaution = (txt: string, tip: string) => { const sc = document.createElement("span"); sc.className = "chip"; sc.style.background = "rgba(140,125,104,.16)"; sc.style.color = "#a89a82"; sc.textContent = txt; sc.title = tip; meta.append(sc); };
+    if (surf === "relationship") mkCaution("small thread", surfaceLabel(surf)!);
+    else if (o.replies != null && slotOdds(o.replies) <= 0.45) mkCaution("slot ~taken", `${o.replies} replies already — only one reply per thread reaches For You (conversation dedup), so this slot is likely taken. Still fine for the relationship, low for new reach.`);
     main.append(meta);
 
     // Post text.
@@ -1927,7 +1957,7 @@ function renderList(list: HTMLElement) {
     const rcol = document.createElement("div"); rcol.className = "rcol";
     const es = effectiveScore(o); const v = scoreVerdict(es);
     const rf = document.createElement("div"); rf.className = "rf";
-    const inf = document.createElement("span"); inf.className = "inf"; inf.textContent = "ⓘ"; inf.title = "Reply fit: how worth replying to right now — content fit + freshness + reach, minus reply-pileup and engagement bait.";
+    const inf = document.createElement("span"); inf.className = "inf"; inf.textContent = "ⓘ"; inf.title = "Reply fit: how worth replying to right now — content fit × freshness × reach × your odds of winning the thread's single For-You slot (conversation dedup), with a mild cut for relationship-only threads that can't reach strangers.";
     rf.append(document.createTextNode("Reply fit "), inf); rcol.append(rf);
     const pct = document.createElement("div"); pct.className = "pct"; pct.textContent = `${Math.round(es * 100)}%`; pct.style.color = v.color; rcol.append(pct);
     const vd = document.createElement("div"); vd.className = "vd"; vd.style.color = v.color;
@@ -2392,7 +2422,7 @@ function scanNotifications(): void {
     if (self && info.author.toLowerCase() === self) return; // not my own posts
     const key = info.id; // dedup on the globally-unique status id — a reply that also @-mentions you renders on BOTH tabs; count it once
     if (inboundKeys.has(key)) return;
-    pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), key, followers: authorReach.get(info.author.toLowerCase())?.followers }); // follower backfill from the reach cache — activates supporters' reachBoost (else it sits at the FALLBACK constant)
+    pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), text: outerText(el).slice(0, 240) || undefined, key, followers: authorReach.get(info.author.toLowerCase())?.followers }); // follower backfill from the reach cache — activates supporters' reachBoost (else it sits at the FALLBACK constant); text snippet powers "tend your threads"
     added++;
   });
   if (added) { schedulePersistInbound(); if (dockOpen) renderDock(); } // debounced write; only repaint when the dock is open
@@ -2416,6 +2446,65 @@ function avatarChip(handle: string, url?: string): HTMLElement {
 /** "Who you show up with" — a collapsed dock section ranking the accounts you engage with by
  *  reply INVESTMENT (always), upgraded with REAL measured engagement (✓) as outcomes settle.
  *  Honest by construction: shrunk small samples, gated thin rows, no causation/reach claims. */
+/** "Tend your threads" — the highest-value surface Goobi didn't cover: the people who replied to /
+ *  mentioned you (from the notifications harvest, $0), ranked freshest-first into a to-tend queue.
+ *  Answering a reply on your own thread is the top-ordered growth action (author-engaged replies
+ *  grade highest; keeping a conversation alive is what dedup_conversation_filter promotes). Honest:
+ *  we can't see which of your posts each is on, "tended" is a lossy guess, opens the thread so you
+ *  reply in your own words. It's an ACTION list, so it hides itself when there's nothing to tend. */
+function renderThreadsPanel(d: HTMLElement): void {
+  const now = Date.now();
+  const { rows, total, untended } = rankThreads(inbound as InboundLite[], replyLog.sent, now);
+  if (total === 0) return; // nothing recent to tend → no empty panel (unlike the learning panels)
+
+  const wrap = document.createElement("div"); wrap.className = "insight";
+  const head = document.createElement("div"); head.className = "ins-head";
+  head.onclick = () => { threadsOpen = !threadsOpen; renderDock(); };
+  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Tend your threads";
+  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = threadsOpen ? "▾" : "▸";
+  const cnt = document.createElement("div"); cnt.className = "ins-cnt"; cnt.textContent = untended ? `${untended} to tend` : "all tended";
+  if (untended) cnt.style.color = "#e89a3c";
+  head.append(ttl, cnt, car); wrap.append(head);
+
+  if (threadsOpen) {
+    const body = document.createElement("div"); body.className = "ins-body";
+    const lead = document.createElement("div"); lead.className = "ins-fact";
+    lead.textContent = "Answering a reply on your own thread is the top-ranked growth move — you keep it alive (the branch the ranker promotes) and author-engaged replies grade highest.";
+    lead.title = "Grounded in the open-source ranker: author-engaged replies are the highest-ordered action, and dedup_conversation_filter promotes the liveliest single branch of a conversation.";
+    body.append(lead);
+    for (const r of rows) {
+      const row = document.createElement("div"); row.className = "ins-row";
+      const av = avatarChip(r.handle, r.avatar); av.style.cursor = "pointer"; av.title = `Open @${r.handle}`;
+      av.onclick = () => window.open(`https://x.com/${r.handle}`, "_blank", "noopener");
+      row.append(av);
+      const mid = document.createElement("div"); mid.className = "ins-mid";
+      const top = document.createElement("div"); top.className = "ins-top";
+      const h = document.createElement("span"); h.className = "ins-h"; h.textContent = "@" + r.handle; top.append(h);
+      if (r.fresh === "live") { const b = document.createElement("span"); b.className = "ins-badge"; b.textContent = "● live"; b.style.color = "#6fcf7f"; b.title = "still in the thread's live window — answering now compounds most"; top.append(b); }
+      if (r.tended) { const b = document.createElement("span"); b.className = "ins-thin"; b.textContent = "likely tended"; b.title = "You sent a Goobi reply to them after they engaged you — a lossy handle+time guess (could be a different post), not a confirmed answer."; top.append(b); }
+      mid.append(top);
+      const meta = document.createElement("div"); meta.className = "ins-meta";
+      const snip = r.text ? `"${r.text.length > 90 ? r.text.slice(0, 90) + "…" : r.text}" · ` : "";
+      meta.textContent = snip + r.ageLabel;
+      meta.title = "Their reply/mention, captured from your notifications (stays on your device).";
+      mid.append(meta);
+      row.append(mid);
+      const act = document.createElement("button");
+      act.textContent = "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
+      act.title = "Open their reply on X so you can respond in-thread (Goobi never posts for you).";
+      act.style.cssText = "flex:none;align-self:center;font:600 11px -apple-system,system-ui,sans-serif;color:#e89a3c;background:rgba(232,154,60,.12);border:1px solid rgba(232,154,60,.35);border-radius:6px;padding:3px 8px;cursor:pointer";
+      act.onclick = () => { if (r.postId) window.open(`https://x.com/${r.handle}/status/${r.postId}`, "_blank", "noopener"); };
+      row.append(act);
+      body.append(row);
+    }
+    const foot = document.createElement("div"); foot.className = "ins-foot";
+    foot.textContent = "People who replied to or mentioned you, freshest first — a live thread is where a reply still travels. We can't see which of your posts each is on, or confirm you've answered (\"tended\" is a lossy guess). Opens the thread so you reply in your own words. From your notifications, device-local.";
+    body.append(foot);
+    wrap.append(body);
+  }
+  d.append(wrap);
+}
+
 function renderInsightPanel(d: HTMLElement): void {
   const now = Date.now();
   const agg = aggregateAccounts(replyLog.sent, now);
@@ -2485,7 +2574,7 @@ function renderInsightPanel(d: HTMLElement): void {
     // Profile check — the conversion surface (replies earn the click; the PROFILE converts it to a
     // follow). Measured facts only: pinned-vs-your-best + bio presence. Silent without a harvest —
     // it fills in the first time the user visits their own profile with Goobi on.
-    for (const f of profileCheck(profileState, ownStats ?? []).slice(0, 2)) {
+    for (const f of profileCheck(profileState, ownStats ?? []).slice(0, 3)) {
       const li = document.createElement("div"); li.className = f.level === "good" ? "ins-trend" : "ins-fact"; // green only for the ✓
       li.textContent = (f.level === "act" ? "\u2192 " : "\u2713 ") + f.text;
       li.title = f.why;
@@ -3408,6 +3497,10 @@ function renderDock() {
     top.append(bar, lbl);
     const cue = document.createElement("div"); cue.className = "mom-cue"; cue.textContent = m.cue;
     mom.append(top, cue);
+    // Daily-shape coach: the BALANCE of the day (replies + a spaced original), not raw volume.
+    // Safety-deferent — silent at ease-off, never nudges more replies at caution.
+    const ds = dailyShape({ repliesToday: repliesToday(), postedToday: postedToday(), repLevel: stt.level });
+    if (ds) { const dl = document.createElement("div"); dl.className = "mom-cue"; dl.textContent = "◆ " + ds.text; dl.title = "The healthy shape of a growth day — replies earn reach, a spaced original converts the profile clicks into follows. The ranker decays back-to-back posts, so space them."; mom.append(dl); }
     // Real X-reported views today — a neutral FACT (never colored/celebrated), only when we have the data.
     if (ownStats !== undefined) {
       const v = ownViewsToday();
@@ -3449,6 +3542,8 @@ function renderDock() {
     d.append(mom);
   }
 
+  // Tend your threads — the action queue (answer your repliers) sits above the read-only insights.
+  renderThreadsPanel(d);
   // Relationships: "Who you show up with" (you→them) + "Who shows up for you" (them→you).
   renderInsightPanel(d);
   renderSupportersPanel(d);

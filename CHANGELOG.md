@@ -544,6 +544,43 @@ keyboard paths, screen-reader semantics), plus a hierarchy bug of our own making
 - **Motion**: `prefers-reduced-motion` now disables all CSS transitions/animations in both
   surfaces.
 
+**Algo-alignment arc (2026-07-07)** — a research pass (two agents: expert-practitioner survey +
+a direct grep of `xai-org/x-algorithm`) mapped what the open-source 2026 ranker *confirms in
+code* against what Goobi covered, then closed the six clearest gaps. Every mechanic below cites a
+real code fact; nothing rests on the recycled-2023 weight tables vendors still sell.
+- **Tend your threads** (new surface, the biggest uncovered lever) — an action queue of the people
+  who replied to / mentioned you, freshest-first, one-click to the thread. Answering your own
+  repliers is the highest-ordered growth action (author-engaged replies grade highest;
+  `dedup_conversation_filter` promotes the liveliest branch). Built on the existing notifications
+  harvest (added a text snippet); pure ranking in `threads.ts` (`rankThreads`, 16 assertions).
+  Honest: no parent-thread id (can't group by your post), "tended" is a lossy handle+time guess.
+  See [docs/flows/tend-threads.md](docs/flows/tend-threads.md).
+- **Reply-surface realism** in `effectiveScore` (`targets.ts`) — two code-confirmed mechanics fold
+  in: `slotOdds` (conversation dedup → one reply per thread reaches For You, so a crowded thread's
+  slot is priced as likely-taken; replaces the old likes/replies pile-on proxy) and `gradedSurface`
+  (the `low_blast_radius` reply-grader gate → a relationship-only thread gets a mild GROWTH demotion
+  and an honest "small thread" chip). Thresholds are conservative PRIORS (X's numbers are redacted),
+  so the value is in the label, and the multiplier is gentle.
+- **Daily-cadence coach** (`momentum.ts` `dailyShape`) — the healthy BALANCE of a day (10–30 quality
+  replies + 1–3 *spaced* originals; bursts self-cannibalize via author-diversity decay), not raw
+  volume. Safety-deferent: silent at ease-off, never nudges more replies at caution.
+- **Profile coach v2** (`profile-check.ts`) — profile_click→follow_author are first-class ranked
+  actions, so the coach now scans the bio's what/who/**proof** formula, the name descriptor, and
+  banner presence. `analyzeBio` runs at harvest and stores ONLY booleans — the bio text never
+  leaves the page.
+- **Banger-screen self-check** in `POST_IDEAS_SYSTEM` — X runs every original post through a model
+  that assigns a `slop_score` + `quality_score` (pass ≥0.4) before wide distribution
+  (`banger_initial_screen.py`). The final pass now points at that real referee with one specificity
+  question ("could only THIS user, who did the work, have written this?"), pushing toward first-
+  person detail rather than more banned-phrase rules. **Eval-gated** (`eval-post-ideas-live.mjs`,
+  single run vs the recorded baseline): slopFree **1.40 → 1.60**, voiceMatch 1.60 → 1.80,
+  sourceHonesty 1.80 → 2.40, nothing regressed (swap-test 13→14/25 = one idea, within judge noise),
+  re-score drift 0. Modest + within the known ~1.4–1.6 floor caveat, but positive-or-neutral across
+  the board on a code-grounded change → shipped.
+- Gate: `tsc` + `build` clean; all 15 pure-lib suites green (targets now 40, +`test-threads` 16,
+  momentum 24, profile-check 24, prompts 16); Layer-A ideas eval 47. `effectiveScore`, the harvest,
+  and the panels are integration code (verified by build + type; needs a reload to see live).
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

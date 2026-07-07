@@ -94,6 +94,54 @@ export function earlyLabel(replies: number | undefined, postedAt: number | undef
   return null;
 }
 
+// ---- Reply-surface realism (grounded in the open-sourced 2026 ranker) --------------------------
+// Two code-confirmed mechanics that change WHERE a reply is worth spending, beyond raw reach:
+//   1. low_blast_radius gate — the Grok reply-grader (the 0-3 grade that earns OUT-OF-NETWORK
+//      distribution) only runs when the thread root/target author clears a follower threshold;
+//      below it, replies route to a spam screen and get ~no For You reach. (grox/tasks/task_filters
+//      TaskReplyRankingFilter; the exact threshold is REDACTED in the release.)
+//   2. dedup_conversation_filter — only ONE candidate per conversation is served in For You, so
+//      your odds of being that one reply fall as the thread fills up.
+// Both are surfaced HONESTLY: the numbers are conservative PRIORS (the real thresholds are withheld),
+// so the value is in the LABEL (spend the great reply where it can actually travel), and the score
+// nudge is mild — never a hard zero off a guessed cutoff.
+
+export type Surface = "graded" | "relationship" | "unknown";
+// Conservative prior for where the reply-grader starts to bind (the code's number is redacted). A reply
+// on a root below this reaches mainly your own followers; above it a strong reply can earn OON reach.
+export const GRADED_MIN_FOLLOWERS = 2500;
+export const RELATIONSHIP_MAX_FOLLOWERS = 800;
+/** Classify the reply surface from the THREAD ROOT/target author's absolute size (the gate is on the
+ *  root, not on you). Unknown size → "unknown" (say nothing — honest-mirror). */
+export function gradedSurface(rootFollowers: number | undefined): Surface {
+  if (rootFollowers == null || rootFollowers <= 0) return "unknown";
+  if (rootFollowers >= GRADED_MIN_FOLLOWERS) return "graded";
+  if (rootFollowers <= RELATIONSHIP_MAX_FOLLOWERS) return "relationship";
+  return "unknown"; // the borderline band is genuinely uncertain (threshold redacted) → no claim
+}
+/** Honest one-liner for the surface, or null when we shouldn't claim (borderline/unknown). */
+export function surfaceLabel(s: Surface): string | null {
+  if (s === "graded") return "big thread — a strong reply can travel past their followers";
+  if (s === "relationship") return "small thread — great for the relationship, but strangers won't see it";
+  return null;
+}
+/** Mild effectiveScore nudge: relationship-only threads are reach-limited, so they rank a touch
+ *  lower for GROWTH (not for relationship-building) — never zeroed, the threshold is a prior. */
+export function surfaceMult(s: Surface): number {
+  return s === "relationship" ? 0.85 : 1;
+}
+
+/** Your odds of winning the conversation's single For You slot (dedup keeps one reply per thread):
+ *  falls as the thread fills. Continuous 0..1, keyed to the same early/crowded thresholds as
+ *  earlyLabel. Unknown reply count → neutral 1.0 (never penalize for data we don't have). */
+export function slotOdds(replies: number | undefined): number {
+  if (replies == null) return 1;              // unknown → neutral (honest-mirror)
+  if (replies <= EARLY_MAX_REPLIES) return 1; // ≤5 — wide open, you can be THE reply
+  if (replies < CROWDED_MIN_REPLIES) return 0.7; // 6..29 — contested
+  if (replies < 100) return 0.45;             // 30..99 — the slot is likely taken
+  return 0.3;                                  // 100+ — effectively closed
+}
+
 // Poll-batch invariant for the ambient fresh-post poller (LIVE as of 2026-07, per-handle path —
 // a spike proved the provider ignores batched "OR from:" queries): ≤N polls per kick, 12-min
 // per-target TTL persisted on the target itself, so remounts/second tabs never re-pay.

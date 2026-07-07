@@ -30,7 +30,7 @@ export type EngagedKind = "reply" | "mention" | "repost" | "like";
 const SCORED: Record<EngagedKind, boolean> = { reply: true, mention: true, repost: false, like: false };
 const SUPPORT_W: Record<EngagedKind, number> = { reply: 2.0, mention: 2.0, repost: 0, like: 0 };
 
-export interface EngagedRecord { at: number; handle: string; kind: EngagedKind; postId?: string; followers?: number; avatar?: string; name?: string; key: string; }
+export interface EngagedRecord { at: number; handle: string; kind: EngagedKind; postId?: string; followers?: number; avatar?: string; name?: string; text?: string /* the reply/mention snippet — powers the "tend your threads" queue; optional so pre-existing records stay valid */; key: string; }
 export interface SupporterAgg { handle: string; support: number; nSup: number; events: number; replies: number; mentions: number; likes: number; reposts: number; followers?: number; avatar?: string; name?: string; lastAt: number; }
 export interface SupportResult { supporters: Record<string, SupporterAgg>; muSup: number; totalScored: number; }
 export type Rel = "mutual" | "fan" | "one-way-you" | "acquaintance";
