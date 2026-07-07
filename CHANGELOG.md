@@ -510,6 +510,24 @@ real API with the real parsers. First run's findings:
 - lang fields are absent from search payloads (0%) — the heuristic isEnglish fallback carries
   it, as designed.
 
+**Ideas generator: the first measured quality iteration (2026-07-06)** — the Layer-B live eval
+ran for the first time (3 runs, judge drift ≤1 each):
+- **Baseline was sobering**: antiGeneric 1.80, voiceMatch 1.60, slopFree 1.40 (0-3),
+  swap-test failures 13/25 — the judge caught banned constructions appearing anyway,
+  over-polished voice vs blunt users, "LLM-spice" contrarian templates on cold starts, and
+  recognizable source echoes.
+- **Shipped (measured +):** a source-ECHO kill (the swap test now runs against source authors
+  too — sourceHonesty 1.80 → 2.20), a BLUNTNESS voice rule, a cold-start rule (no real person
+  visible → no contrarian-template energy), and a FINAL SWEEP pass before output. All locked
+  as prompt invariants (test-prompts 15).
+- **Tried and REVERTED on evidence:** temperature 0.7 scored worse across the board (more
+  conservative = more generic) — the default sampling stays; the plumbing remains for future
+  measured use.
+- **Honest residual:** slopFree/voiceMatch sit at a ~1.4-1.6 floor that prompt wording didn't
+  move — candidate paths recorded (a stronger generation model at ~5× cost; a second-pass
+  rewrite call at 2× cost; or judge harshness — Haiku's slop read isn't ground truth either).
+  Next iteration should A/B those, measured, before believing any of them.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

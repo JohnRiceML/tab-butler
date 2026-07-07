@@ -39,7 +39,7 @@ function tabsToText(tabs: TabInput[]): string {
 }
 
 /** Direct Anthropic call (BYO-key). Returns parsed JSON, or throws. */
-async function rawCall(key: string, model: string, system: string, userContent: string, maxTokens: number): Promise<string> {
+async function rawCall(key: string, model: string, system: string, userContent: string, maxTokens: number, temperature?: number): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -48,7 +48,7 @@ async function rawCall(key: string, model: string, system: string, userContent: 
       "anthropic-dangerous-direct-browser-access": "true",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature != null ? { temperature } : {}) }),
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}`);
   const data = await res.json();
@@ -59,8 +59,8 @@ async function rawCall(key: string, model: string, system: string, userContent: 
 }
 
 /** For structured (JSON) responses — scoring, grouping, recall, advice. */
-async function callDirect<T>(key: string, model: string, system: string, userContent: string, maxTokens = 4096): Promise<T> {
-  const text = await rawCall(key, model, system, userContent, maxTokens);
+async function callDirect<T>(key: string, model: string, system: string, userContent: string, maxTokens = 4096, temperature?: number): Promise<T> {
+  const text = await rawCall(key, model, system, userContent, maxTokens, temperature);
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("bad-output");
@@ -230,7 +230,7 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
   const sortedOwn = [...ownPosts].sort((a, b) => ((b.likes ?? 0) + (b.reposts ?? 0)) - ((a.likes ?? 0) + (a.reposts ?? 0)));
   const ownBlock = sortedOwn.length
     ? `\n\nThe user's OWN recent posts (your PRIMARY voice + structure anchor; do NOT duplicate these topics, angles, takes, or examples — extend their themes from a new angle):\n${sortedOwn.slice(0, 15).map((p, i) => `${i + 1}. ${i < 3 ? "(this landed for you) " : ""}${p.text.replace(/\s+/g, " ").slice(0, 280)}`).join("\n")}`
-    : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only and be extra careful not to write generic niche advice.)";
+    : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only. COLD-START RULE: with no real person visible, contrarian / myth-bust / say-the-quiet-part shapes read as an LLM's idea of spicy — prefer plain, concrete, understated observations and questions; earn edge only from specifics you can actually ground.)";
   const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
   const shp = shapeLine?.trim() ? `\n\nMEASURED shape signal for this user (X-reported, settled posts only): ${shapeLine.trim()} When two seeds are equally strong, prefer that shape for 1-2 of the 5 — never force it onto a weak seed.` : "";
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
@@ -239,6 +239,8 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     POST_IDEAS_SYSTEM,
     `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}${shp}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
     2200,
+    // temperature deliberately UNSET: a measured A/B (2026-07) showed 0.7 scored WORSE across the
+    // board on the live judge (more conservative = more generic) — the default sampling wins.
   );
   return (raw.ideas || [])
     .slice(0, 6)

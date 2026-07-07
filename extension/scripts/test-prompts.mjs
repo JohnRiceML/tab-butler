@@ -26,6 +26,9 @@ ok(/judge ONLY line 1/.test(P), "post-ideas keeps 'hookStrength judges ONLY line
 ok(/PROVEN ANGLE/.test(P), "post-ideas keeps the PROVEN ANGLE (own-winners) steer");
 ok(/insider specificity/.test(P) && /ANY EXPERTISE NICHE/.test(P), "post-ideas playbook is vertical-agnostic (insider specificity for any niche, not builder-only)");
 ok(/throttle/i.test(P) && /dunk/i.test(P), "post-ideas encodes the 2026 ranker tone gate (constructive amplified, combative throttled)");
+ok(/FINAL SWEEP/.test(P), "post-ideas keeps the final anti-slop sweep (eval-measured: banned constructions were slipping through without it)");
+ok(/ECHOES A SOURCE/.test(P), "post-ideas keeps the source-echo kill (eval-measured: 4/5 ideas were recognizable source remixes)");
+ok(/BLUNTNESS RULE/.test(P), "post-ideas keeps the bluntness voice rule (eval-measured: drafts over-polished vs terse users)");
 
 // ---- X_DRAFT_SYSTEM: reply-draft invariants ----
 const D = m.X_DRAFT_SYSTEM;

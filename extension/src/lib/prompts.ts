@@ -86,6 +86,7 @@ You are given:
 2. THE USER'S OWN POSTS: the voice you match and the bar you clear. (a) DON'T REPEAT: never reuse a topic, angle, opinion, example, or phrasing they already posted; if a draft restates something here even in new words, kill it. (b) EXTEND: build on the beliefs and themes visible here from a NEW angle, a next step, a sharper or opposing take, a concrete example they have not used. Mirror how they actually open a post, their line length, punctuation, capitalization, and fragments. (c) PROVEN ANGLE (your HIGHEST-signal input): the posts flagged "(this landed for you)" are what THIS user's own audience actually rewarded — what has worked for this specific person beats what works in the niche generally. Study those winners' hook type, structure, angle, and topic, and write AT LEAST 2 of the 5 ideas in that SAME proven shape applied to a fresh point (a new example, a next step, a sharper take) — same kind of opener and rhythm that already won, never the same content. If no own-posts are flagged, fall back to the source patterns.
 
 3. VOICE BLURB + NICHE: these are replies; they tell you vocabulary, slang, warmth, lowercase, swearing. They do NOT tell you how to structure a post.
+   BLUNTNESS RULE: if the user's voice or posts are terse, lowercase, or blunt, your drafts must be AT LEAST as terse — cut adjectives, cut symmetric constructions, no polished parallel phrasing. For that user, polish is a VOICE ERROR, not quality.
 
 4. FOLLOWER TIER: aim the post at the user's actual reach. A sub-1k account wins with raw, specific, in-the-weeds posts a niche peer feels seen by (depth over breadth). A larger account can carry a broader, more quotable claim. Never write a "10k thought-leader" post for a 200-follower account; it reads hollow.
 
@@ -97,6 +98,7 @@ PASS 2, CRITIQUE each seed harshly, PASS or CUT (one short reason each, in your 
 - KILL IF GENERIC: run the swap test, put another account's name on it; if it still fits, CUT. Platitudes ("consistency is key", "ship fast", "talk to your users", "just start"): CUT.
 - KILL IF IT RESTATES THE USER: echoes a topic, take, or example already in their own posts: CUT.
 - KILL IF IT LIFTS A SOURCE: reuses a source's specific claim, number, or example rather than its shape: CUT.
+- KILL IF IT ECHOES A SOURCE: run the swap test against each SOURCE author too — if the source author could post your idea as a restatement of THEIR post, it's an echo wearing a costume, not a remix: CUT.
 - KILL IF WEAK HOOK: line 1 has no number, stake, arguable claim, or named tension; or buries the point in line 2: CUT.
 - KILL IF AI-TELL: uses any banned construction below: CUT.
 - KILL IF IT DUNKS: a contrarian or quiet-part take that lands as a sneer, a pile-on, or a cheap dunk instead of a sharp-but-constructive point — X's 2026 ranker reads tone directly and throttles combative or purely negative posts regardless of engagement: CUT.
@@ -159,6 +161,10 @@ For "source", echo the over-performing account's handle EXACTLY as written in th
 - 1: readable but safe; the promise is mild or familiar.
 - 0: generic throat-clearing, a windup, a hook that oversells, or an AI-tell opener.
 Do NOT output an overall 0-100 score. Do NOT spread these apart; score each hook honestly, ties are fine and expected. The system combines your hookStrength with the borrowed source's REAL measured rank in the user's niche to produce the user-facing band, so an inflated hook score will be visibly contradicted by a weak source.
+
+=== FINAL SWEEP (do this LAST, on your final 5 — non-negotiable) ===
+
+Reread each final post one more time. REWRITE any that contains: an em/en dash or hyphenated compound; the "it's not just X, it's Y" construction (in ANY wording); a list of exactly three; polished symmetric phrasing the user's own posts don't use; or a post that survives the swap test (another account's name fits) — including against the SOURCE authors. A batch where any of these slip through is a failed batch, however good the ideas.
 
 === OUTPUT ===
 
