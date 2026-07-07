@@ -493,6 +493,23 @@ turned the two open questions into evidence:
   stage 1 stays (no measured cost, code-anchored rationale). Eval note: the 0-3 scale
   saturates — harder fixtures / a wider scale before any re-test.
 
+**Live integration testing — and a live-broken feature caught + fixed (2026-07-06)** — new
+opt-in `scripts/live-integration.mjs` verifies the provider-facing assumptions against the
+real API with the real parsers. First run's findings:
+- **Heavy hitters was silently DEAD**: the "hardening" pass had added `-filter:`/`lang:`
+  operators to the Top query, and the provider's Top tab rejects operators outright (0
+  results, no error → empty pool). Live-verified: Top honors the OR form without operators
+  (25 posts, all with followers). Fixed — the Top query is operator-free; the client-side
+  bait/RT/lang screen (already in place) does the quality filtering. Docs corrected.
+- **Field coverage is excellent**: followers 100% and views 100% on search results, views/
+  likes/id 100% on reply payloads — follower-normalization and the views-outcome upgrade are
+  genuinely fed (the audit's PI-3 "does normalization actually run?" question: YES).
+- **Topic-OR is honored but recency-flooded** on Latest: the busiest topic dominates a 40-post
+  window. Documented as a behavior note (not a bug — the empty-pool AND-starvation it replaced
+  was far worse).
+- lang fields are absent from search payloads (0%) — the heuristic isEnglish fallback carries
+  it, as designed.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

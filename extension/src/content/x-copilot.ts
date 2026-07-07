@@ -3037,7 +3037,12 @@ async function findHeavyHitters(): Promise<void> {
   if (!niche || heavyLoading) return;
   heavyLoading = true; renderDock();
   try {
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: nicheSearchQuery(niche, "lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway") }, intent: true }); // OR-broadened + hardened — Top on a bait-heavy niche (buildinpublic!) skews giveaway/RT otherwise
+    // LIVE-VERIFIED 2026-07: the provider's Top tab REJECTS search operators (-filter:/lang: →
+    // zero results) while honoring the OR-topic form — so the query is operator-FREE and the
+    // quality filtering happens entirely in the client-side screen below (isBait/RT/lang), which
+    // was already in place. (The operator suffix added in the "hardening" pass silently killed
+    // this feature: 0 parsed → empty pool, no error.)
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: nicheSearchQuery(niche) }, intent: true });
     if (!res?.ok) {
       if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to find heavy hitters.");
       else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — heavy-hitter search is paused.");
