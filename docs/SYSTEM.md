@@ -21,6 +21,7 @@ npm run typecheck    # tsc --noEmit   ← the type gate
 for t in twttr policy hygiene pacing community momentum learn-stats supporters targets suggest-targets prompts activity draft-context profile-check threads text-clean; do node scripts/test-$t.mjs; done   # pure-lib unit tests
 node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-live.mjs --live   # Layer B: live generate→Haiku-judge quality eval (opt-in, ~$0.20/run; no-op without --live)
+# ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-2pass.mjs --live   # Layer B: the reject-and-regenerate SECOND-PASS gate (pass-1 vs pass-2; ~$0.30/run)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-draft-reply-live.mjs --live   # Layer B for the reply DRAFTER: bare-vs-enriched context delta, judge anchored to X's 0-3 reply grading (opt-in, ~$0.25/run)
 # TWTTR_KEY=... node scripts/spike-poller-or.mjs --live --handles a,b,c   # one-off spike: does the provider honor batched OR-from: searches? (gates the ambient target poller; ~1.4MB)
 ```

@@ -1,6 +1,6 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, POST_IDEAS_JUDGE_SYSTEM, POST_IDEAS_REGEN_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import { cleanDraft } from "./text-clean";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
@@ -215,19 +215,44 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only. COLD-START RULE: with no real person visible, contrarian / myth-bust / say-the-quiet-part shapes read as an LLM's idea of spicy — prefer plain, concrete, understated observations and questions; earn edge only from specifics you can actually ground.)";
   const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
   const shp = shapeLine?.trim() ? `\n\nMEASURED shape signal for this user (X-reported, settled posts only): ${shapeLine.trim()} When two seeds are equally strong, prefer that shape for 1-2 of the 5 — never force it onto a weak seed.` : "";
+  const userMsg = `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}${shp}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`;
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
     key,
     "claude-sonnet-4-6",
     POST_IDEAS_SYSTEM,
-    `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}${shp}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`,
+    userMsg,
     2200,
     // temperature deliberately UNSET: a measured A/B (2026-07) showed 0.7 scored WORSE across the
     // board on the live judge (more conservative = more generic) — the default sampling wins.
   );
-  return (raw.ideas || [])
+  const ideas = (raw.ideas || [])
     .slice(0, 6)
     .map((d) => ({ text: cleanDraft(d.text || ""), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), critique: (d.critique || "").trim(), hookStrength: Math.max(0, Math.min(3, Math.round(Number(d.hookStrength) || 0))) }))
     .filter((d) => d.text);
+  // SECOND PASS (measured 2026-07: swap-fails 60%→40%, antiGeneric +0.67): a cheap Haiku judge flags
+  // the ideas that fail the swap test, then Sonnet regenerates ONLY those into user-specific posts.
+  return refinePostIdeas(key, ideas, userMsg);
+}
+
+/** The reject-and-regenerate second pass. Judge (Haiku) flags swap-test failures → regen (Sonnet)
+ *  rewrites just those. Best-effort: any error returns the pass-1 ideas, so it never breaks a
+ *  generation. A regenerated idea is an original on a new point, so its source attribution is
+ *  dropped (honest — it bands as an own-theme idea, no false proof post). */
+async function refinePostIdeas(key: string, ideas: PostIdea[], userMsg: string): Promise<PostIdea[]> {
+  if (ideas.length < 2) return ideas;
+  try {
+    const judgeMsg = `${userMsg}\n\nThe ${ideas.length} generated ideas to swap-test:\n${ideas.map((d, i) => `${i + 1}. ${d.text}`).join("\n\n")}`;
+    const verdict = await callDirect<{ swapTestFails?: number[] }>(key, "claude-haiku-4-5", POST_IDEAS_JUDGE_SYSTEM, judgeMsg, 300);
+    const fails = (verdict.swapTestFails || []).filter((n) => Number.isInteger(n) && n >= 1 && n <= ideas.length);
+    if (!fails.length) return ideas;
+    const flagged = fails.map((n) => ideas[n - 1].text);
+    const regenMsg = `${userMsg}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, i) => `${i + 1}. ${t}`).join("\n\n")}`;
+    const re = await callDirect<{ ideas?: { text?: string }[] }>(key, "claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, regenMsg, 1600);
+    const repl = (re.ideas || []).map((d) => cleanDraft(d?.text || "")).filter(Boolean);
+    const out = ideas.slice();
+    fails.forEach((n, k) => { if (repl[k]) out[n - 1] = { ...out[n - 1], text: repl[k], source: "" }; });
+    return out;
+  } catch { return ideas; }
 }
 
 /** Rewrite one post idea per a steer, keeping the same topic + the user's voice. Sonnet, cheap. */

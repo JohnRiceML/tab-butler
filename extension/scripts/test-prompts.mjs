@@ -33,6 +33,9 @@ ok(/BLUNTNESS RULE/.test(P), "post-ideas keeps the bluntness voice rule (eval-me
 ok(/KILL IF MOLD/.test(P) && /negation-reframe/.test(P), "post-ideas keeps the mold-ban (audit-measured: the 'X isn't Y it's Z' reframe drove ~7/20 slop)");
 ok(/KILL IF IT LIFTS THE BEST LINE/.test(P), "post-ideas keeps the best-line anti-lift (audit: the 2 most quotable posts were source costume-lifts)");
 ok(/NO QUOTE-WRAPPING/.test(P), "post-ideas bans emphasis quote-wrapping");
+// second-pass prompts (measured: swap-fails 60%→40%, antiGeneric +0.67)
+ok(/SWAP TEST/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /swapTestFails/.test(m.POST_IDEAS_JUDGE_SYSTEM), "post-ideas JUDGE flags swap-test failures (the second-pass gate)");
+ok(/only THIS user could write/.test(m.POST_IDEAS_REGEN_SYSTEM) && /DIFFERENT point than the sources/.test(m.POST_IDEAS_REGEN_SYSTEM), "post-ideas REGEN rewrites flagged ideas into user-specific posts");
 
 // ---- X_DRAFT_SYSTEM: reply-draft invariants ----
 const D = m.X_DRAFT_SYSTEM;

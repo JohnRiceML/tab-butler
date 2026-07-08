@@ -604,6 +604,19 @@ measured, honest about what moved:
   shelved stage-2 context. Reverted the value paragraph; kept only the no-quote clause. **Finding:
   the comment drafter is already at ceiling and doesn't need "more value" — that only costs voice.**
 
+**Post-ideas structural second pass (2026-07-08)** — the durable lever the quality audit called for,
+now built and measured. `generatePostIdeas` gains a reject-and-regenerate pass (`refinePostIdeas`):
+after the first Sonnet generation, a cheap Haiku judge (`POST_IDEAS_JUDGE_SYSTEM`) flags the ideas
+that fail the swap test, then Sonnet (`POST_IDEAS_REGEN_SYSTEM`) rewrites ONLY those into
+user-specific posts (forced concrete detail, on a different point than the sources). **Measured**
+(`eval-post-ideas-2pass.mjs`, pass-1 → pass-2): swap-fails **9/15 → 6/15** (60%→40%), antiGeneric
+**1.67 → 2.33**, slopFree **2.00 → 2.33** — and John's own niche (AI/build-in-public) hit swap-fails
+0 / slopFree 3 / antiGeneric 3. Details: it's best-effort (any judge/regen error returns the pass-1
+ideas, never breaks generation); a regenerated idea drops its source attribution (it's now an
+original on a new point, so it bands as an own-theme idea, no false proof post); adds ~2 calls
+(Haiku judge + Sonnet regen) per generation. Residual: not monotonic per-batch (judge noise can
+wobble one fixture ±1); a re-judge-and-keep-best guard would cost a 4th call — deferred.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

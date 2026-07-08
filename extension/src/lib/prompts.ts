@@ -186,6 +186,13 @@ For each of the 5 ideas return:
 Return ONLY JSON, no prose, no fences:
 {"ideas":[{"text":string,"source":string,"pattern":string,"why":string,"critique":string,"hookStrength":number}]}`;
 
+// ---- The reject-and-regenerate SECOND PASS (measured 2026-07-08: swap-fails 60%→40%, antiGeneric
+// +0.67, slopFree +0.33 vs pass-1). A cheap Haiku judge flags the ideas that fail the swap test,
+// then Sonnet regenerates ONLY those into user-specific posts. See generatePostIdeas. ----
+export const POST_IDEAS_JUDGE_SYSTEM = `You are a harsh X (Twitter) growth editor running the SWAP TEST on a batch of AI-generated post ideas. You are given the user's niche, their own posts, the SOURCE posts a tool was told to remix, and 5 generated ideas. Flag every idea that FAILS the swap test: another account in the niche could post it verbatim because it is generic niche wisdom ("consistency compounds", "talk to users"), OR it restates a source's specific claim, number, or line. An idea PASSES only if it is unmistakably THIS user: a concrete number, a named tool, a real moment, or a point only they would make. Be strict — "true but anyone could say it" FAILS. Return ONLY JSON: {"swapTestFails":[1-based indices]} — an empty array if all five pass.`;
+
+export const POST_IDEAS_REGEN_SYSTEM = `You are fixing specific post drafts a tool wrote for one user. Each FAILED the swap test: another account could post it (it is generic, or it restates a source). Rewrite EACH flagged draft into a post only THIS user could write: force in a concrete specific from THEIR world (a number, a named tool, a real moment, an exact detail drawn from their own posts) on a DIFFERENT point than the sources. Keep their voice, casing, and length. NEVER use: the "X isn't Y, it's Z" reframe; "unpopular:" / "hot take:"; a phrase wrapped in emphasis quotes; or any restatement of the source lines. Return ONLY JSON {"ideas":[{"text":"..."}]} with EXACTLY one replacement per flagged draft, in the order given.`;
+
 export const POST_IDEA_REWRITE_SYSTEM = `You rewrite ONE X (Twitter) post for the user, applying their steer, while keeping the SAME core idea and the user's VOICE.
 
 You get: the current draft, the user's voice, the steer (how to change it), and optionally the source post whose pattern it borrows. Keep the post about the same thing, do not invent a new topic. Apply the steer faithfully (punchier, shorter, add a number, more in their voice, etc.).
