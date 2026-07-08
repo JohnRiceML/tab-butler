@@ -18,7 +18,7 @@ cd extension
 npm install
 npm run build        # node build.mjs (esbuild) → dist/   (load dist/ as an unpacked extension)
 npm run typecheck    # tsc --noEmit   ← the type gate
-for t in twttr policy hygiene pacing community momentum learn-stats supporters targets suggest-targets prompts activity draft-context profile-check threads; do node scripts/test-$t.mjs; done   # pure-lib unit tests
+for t in twttr policy hygiene pacing community momentum learn-stats supporters targets suggest-targets prompts activity draft-context profile-check threads text-clean; do node scripts/test-$t.mjs; done   # pure-lib unit tests
 node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-live.mjs --live   # Layer B: live generate→Haiku-judge quality eval (opt-in, ~$0.20/run; no-op without --live)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-draft-reply-live.mjs --live   # Layer B for the reply DRAFTER: bare-vs-enriched context delta, judge anchored to X's 0-3 reply grading (opt-in, ~$0.25/run)
@@ -86,7 +86,8 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | File | Role | Test |
 |---|---|---|
 | `claude-client.ts` | All Claude calls: `scorePosts`, `draftReply` (+ `steer`), `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas). BYO-key direct; parked proxy path. | — |
-| `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention). | — |
+| `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention). | `test-prompts` (invariant guard) |
+| `text-clean.ts` | Deterministic draft cleaners under the prompt rules — `stripDashes` (no em/en dash, no hyphenated compounds; links shielded) + `stripEmphasisQuotes` (unwraps scare/emphasis quotes, preserving apostrophes + possessives) + `cleanDraft` (the combined net). Applied by claude-client to BOTH reply drafts and post ideas. | `test-text-clean` |
 | `types.ts` | The message union + shared types. `XScore.category` is a bare `string` — the enum lives only in the prompt + the `catId` runtime guard. | — |
 | `twttr.ts` | Parse RapidAPI (`twitter241`) responses: `parseUser`, `pickDiscoveryTweets`, `pickOwnPosts` (text, idea de-dupe), `pickOwnPostsWithStats` (keeps real `views`/engagement → the momentum views readout). | `test-twttr` |
 | `twttr-governor.ts` | The only thing that calls the provider: budget meter + fetch wrapper. (v2: a storage-backed response cache — `FAIL_TTL` is reserved but unused.) | — |

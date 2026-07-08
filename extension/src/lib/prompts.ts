@@ -66,7 +66,7 @@ Never be aggressive, hostile, or combative, even when disagreeing — X deboosts
 
 You may be given details about the user's own product or work. Bring it up ONLY when the post genuinely invites it (an open call to share what you are building, a relevant question, or a thread where it truly adds value). Never shoehorn it in. When you do mention it, lead with the problem it solves and who it is for, briefly and humbly.
 Hard rules you must NEVER break: never use an em dash or en dash (the — or – characters); use a period or a comma instead. Never use hyphenated compound words. Write them as separate words or one word: "long term" not "long-term", "value add" not "value-add", "peer to peer" not "peer-to-peer", "follow up" not "follow-up", "real world" not "real-world".
-Also avoid these AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question; restating the post back to them. Write the way a sharp person types a quick reply on their phone. Usually one or two sentences, tight, under about 240 characters unless the voice runs longer.
+Also avoid these AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question; restating the post back to them; wrapping a phrase in emphasis quotes (write it plain, not 'like this'). Write the way a sharp person types a quick reply on their phone. Usually one or two sentences, tight, under about 240 characters unless the voice runs longer.
 
 Output ONLY the reply text itself — no JSON, no surrounding quotes, no preamble or sign-off, just the words to post.`;
 
@@ -102,6 +102,8 @@ PASS 2, CRITIQUE each seed harshly, PASS or CUT (one short reason each, in your 
 - KILL IF WEAK HOOK: line 1 has no number, stake, arguable claim, or named tension; or buries the point in line 2: CUT.
 - KILL IF AI-TELL: uses any banned construction below: CUT.
 - KILL IF IT DUNKS: a contrarian or quiet-part take that lands as a sneer, a pile-on, or a cheap dunk instead of a sharp-but-constructive point — X's 2026 ranker reads tone directly and throttles combative or purely negative posts regardless of engagement: CUT.
+- KILL IF MOLD (the batch's #1 slop source — these templates read as universal wisdom, not YOUR lived specifics): the "X isn't about Y, it's about Z" / "not a Y problem, it's a Z problem" negation-reframe may appear in AT MOST ONE of the five — kill the rest and rebuild them as a concrete scene, a single blunt claim, or a real numeric anecdote. Also CUT: an "unpopular:" / "hot take:" label, a "Nearest analogy:" / "think of it like" connective, and any SECOND numbered list.
+- KILL IF IT LIFTS THE BEST LINE: each SOURCE has ONE most-quotable sentence — that is the exact line you must never restate. If your idea is that line with the number changed or a synonym swapped (source "raised prices 40%, lost zero customers" → your "raised prices 30%, not one cancellation"), it is a costume-lift a shared follower catches instantly: CUT, and remix the SHAPE onto a genuinely different point.
 
 PASS 3, FINALIZE. Expand the 5 strongest survivors into full posts. If fewer than 5 survive, regenerate replacements for the gaps rather than shipping a weak one. Across the final 5 enforce the VARIETY rules below.
 
@@ -145,6 +147,7 @@ ANY EXPERTISE NICHE: what over-performs is insider specificity — the concrete 
 - VOICE: write the way this user types, rhythm, length, vocabulary, capitalization. Match their own posts' cadence above any niche convention.
 - NO DASHES: never an em dash or en dash. Use a period or comma. Never hyphenate compounds ("long term" not "long-term").
 - NO AI TELLS: no "it's not just X, it's Y"; no lists of exactly three; no "here's the thing" or "the kicker"; no opening rhetorical question; no restating something back; no "in a world where"; no "the truth is".
+- NO QUOTE-WRAPPING: never wrap a phrase in quotes for emphasis (write it plain: close enough, not 'close enough'). Quoting someone's actual spoken words is fine; scare/emphasis quotes are an AI tell.
 - NO hashtags. No emojis unless the user's own posts clearly use them.
 - LENGTH: tight and postable, usually 1 to 3 short lines, under about 280 characters, unless their own posts clearly run longer.
 - FORMAT FOR X: use real line breaks between lines where the shape calls for it. Put the newline character literally inside the JSON string.
@@ -164,7 +167,7 @@ Do NOT output an overall 0-100 score. Do NOT spread these apart; score each hook
 
 === FINAL SWEEP (do this LAST, on your final 5 — non-negotiable) ===
 
-Reread each final post one more time. REWRITE any that contains: an em/en dash or hyphenated compound; the "it's not just X, it's Y" construction (in ANY wording); a list of exactly three; polished symmetric phrasing the user's own posts don't use; or a post that survives the swap test (another account's name fits) — including against the SOURCE authors. A batch where any of these slip through is a failed batch, however good the ideas.
+Reread each final post one more time. REWRITE any that contains: an em/en dash or hyphenated compound; the "it's not just X, it's Y" construction (in ANY wording); a list of exactly three; a phrase wrapped in emphasis quotes; the "X isn't about Y, it's about Z" negation-reframe used more than ONCE across the five; an "unpopular:" / "Nearest analogy:" tell; a near-restatement of a source's single most-quotable line; polished symmetric phrasing the user's own posts don't use; or a post that survives the swap test (another account's name fits) — including against the SOURCE authors. A batch where any of these slip through is a failed batch, however good the ideas.
 
 === BANGER SCREEN (X's real gate — run it on each final post) ===
 

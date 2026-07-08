@@ -581,6 +581,29 @@ real code fact; nothing rests on the recycled-2023 weight tables vendors still s
   momentum 24, profile-check 24, prompts 16); Layer-A ideas eval 47. `effectiveScore`, the harvest,
   and the panels are integration code (verified by build + type; needs a reload to see live).
 
+**Post/comment quality arc (2026-07-08)** — an adversarial multi-lens audit (5 independent
+lenses + 2 measured live runs) graded the post-ideas system **C-**: strong hooks (~2.9/3), but
+antiGeneric 1.8 / voiceMatch 1.9 / slopFree 1.7 and ~58% of ideas failing the swap test, with two
+converged root causes — one over-used sentence mold and best-line source lifting. Fixes, each
+measured, honest about what moved:
+- **Mold-ban + best-line anti-lift** (`POST_IDEAS_SYSTEM`): cap the "X isn't about Y, it's about Z"
+  negation-reframe at ≤1/batch, ban "unpopular:" / "Nearest analogy:" tells + second listicles, and
+  a specific KILL for restating a source's single most-quotable line (the B1≈@tinyfounder price-lift
+  class). **Measured:** the named tells dropped hard in a fresh dump (negation-reframe 7→2 of 20,
+  "unpopular:"/"Nearest analogy:" 2→0, the price-lift became a genuinely different point), but the
+  coarse Haiku aggregate stayed flat (slopFree 1.8, swap 14/25). So the prompt-side takes the cheap,
+  named wins; the **durable lever is still the structural reject-and-regenerate second pass** the
+  audit called for (not built — it adds a call per generation; offered as the next step).
+- **Kill quote-wrapping of phrases** (both surfaces): new `text-clean.ts` (`stripEmphasisQuotes` +
+  `cleanDraft`, 18 assertions) GUARANTEES emphasis/scare quotes are unwrapped from posts AND replies
+  while preserving apostrophes/possessives/links, plus a prompt rule in both. `stripDashes` moved
+  here from claude-client (its NUL sentinel → a plain-ASCII guard token, same collision-safety).
+- **Reply drafter: measured, then REVERTED.** A first pass added a Grok-0-3 "engage the specific
+  claim" push to `X_DRAFT_SYSTEM`. The before/after live eval showed **voiceMatch 2.80 → 2.60 for
+  zero gain** on grade/valueAdd/slopFree (all already at the 3.0 ceiling) — the same voice-cost that
+  shelved stage-2 context. Reverted the value paragraph; kept only the no-quote clause. **Finding:
+  the comment drafter is already at ceiling and doesn't need "more value" — that only costs voice.**
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

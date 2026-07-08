@@ -1,0 +1,48 @@
+/**
+ * Unit test for the deterministic draft cleaners (text-clean.ts). esbuild → data-URL import.
+ * Run: node scripts/test-text-clean.mjs
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import * as esbuild from "esbuild";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = readFileSync(join(here, "../src/lib/text-clean.ts"), "utf8");
+const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
+const m = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+
+let pass = 0, fail = 0;
+const eq = (a, b, l) => { if (a === b) pass++; else { fail++; console.error(`  FAIL: ${l}\n    got:  ${JSON.stringify(a)}\n    want: ${JSON.stringify(b)}`); } };
+const ok = (c, l) => { if (c) pass++; else { fail++; console.error("  FAIL:", l); } };
+
+// ---- stripDashes ----
+eq(m.stripDashes("long-term thinking"), "long term thinking", "hyphenated compound -> two words");
+eq(m.stripDashes("ship fast — then fix"), "ship fast, then fix", "em dash -> comma");
+eq(m.stripDashes("build the boring stuff"), "build the boring stuff", "clean text untouched");
+// the collision guard: a bare number must survive the link-shield unmask
+eq(m.stripDashes("sent 40 dms, got 6 calls"), "sent 40 dms, got 6 calls", "bare numbers are NOT eaten by the link unmask (the sentinel-collision guard)");
+eq(m.stripDashes("check my-startup.com for the fix"), "check my-startup.com for the fix", "domain hyphen is shielded (link stays intact)");
+eq(m.stripDashes("email me at a@b-co.com"), "email me at a@b-co.com", "email domain shielded");
+ok(m.stripDashes("raised prices 30%").includes("30%"), "percentages survive");
+
+// ---- stripEmphasisQuotes ----
+eq(m.stripEmphasisQuotes("a bad output is 'close enough' honestly"), "a bad output is close enough honestly", "single-quote emphasis phrase unwrapped");
+eq(m.stripEmphasisQuotes('the "real work" nobody does'), "the real work nobody does", "double-quote emphasis phrase unwrapped");
+// contractions + possessives MUST survive (a single quote is only a delimiter, never an apostrophe)
+eq(m.stripEmphasisQuotes("it's the moat, don't skip it"), "it's the moat, don't skip it", "contractions preserved");
+eq(m.stripEmphasisQuotes("the users' churn graph"), "the users' churn graph", "possessive apostrophe preserved");
+eq(m.stripEmphasisQuotes("everyone's building wrappers"), "everyone's building wrappers", "mid-word apostrophe preserved");
+// a phrase containing an apostrophe is left wrapped (safe: never eats the apostrophe)
+ok(m.stripEmphasisQuotes("he said 'don't ship' loudly").includes("don't"), "phrase with a contraction keeps its apostrophe (left wrapped, never mangled)");
+// curly quotes
+eq(m.stripEmphasisQuotes("the ‘quiet part’ nobody says"), "the quiet part nobody says", "curly single quotes unwrapped");
+eq(m.stripEmphasisQuotes("the “banger screen” gate"), "the banger screen gate", "curly double quotes unwrapped");
+
+// ---- cleanDraft (the combined net both surfaces use) ----
+eq(m.cleanDraft('"just ship it — then talk to users"'), "just ship it, then talk to users", "whole-string wrapping quote stripped + dash fixed");
+eq(m.cleanDraft("built 4 features. 2 got used. the 'invisible' one won."), "built 4 features. 2 got used. the invisible one won.", "inline emphasis quote removed, numbers intact");
+eq(m.cleanDraft("  spaced  out   draft  "), "spaced out draft", "trims + collapses whitespace");
+
+console.log(fail === 0 ? `\n✓ text-clean: ${pass} assertions passed` : `\n✗ text-clean: ${fail} failed, ${pass} passed`);
+process.exit(fail === 0 ? 0 : 1);

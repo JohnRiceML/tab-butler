@@ -30,6 +30,9 @@ ok(/FINAL SWEEP/.test(P), "post-ideas keeps the final anti-slop sweep (eval-meas
 ok(/BANGER SCREEN/.test(P) && /slop/i.test(P), "post-ideas keeps the banger-screen self-check anchored to X's real slop/quality gate (grounded in banger_initial_screen.py)");
 ok(/ECHOES A SOURCE/.test(P), "post-ideas keeps the source-echo kill (eval-measured: 4/5 ideas were recognizable source remixes)");
 ok(/BLUNTNESS RULE/.test(P), "post-ideas keeps the bluntness voice rule (eval-measured: drafts over-polished vs terse users)");
+ok(/KILL IF MOLD/.test(P) && /negation-reframe/.test(P), "post-ideas keeps the mold-ban (audit-measured: the 'X isn't Y it's Z' reframe drove ~7/20 slop)");
+ok(/KILL IF IT LIFTS THE BEST LINE/.test(P), "post-ideas keeps the best-line anti-lift (audit: the 2 most quotable posts were source costume-lifts)");
+ok(/NO QUOTE-WRAPPING/.test(P), "post-ideas bans emphasis quote-wrapping");
 
 // ---- X_DRAFT_SYSTEM: reply-draft invariants ----
 const D = m.X_DRAFT_SYSTEM;
@@ -37,6 +40,7 @@ ok(/em dash or en dash/.test(D), "reply draft keeps the no-dash rule");
 ok(/generic praise/.test(D), "reply draft keeps the no-empty-praise rule");
 ok(/deboosts aggressive replies/.test(D), "reply draft keeps the civility / anti-aggression tone rule");
 ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the funnel step that makes follows)");
+ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the value paragraph's 'engage the specific claim' push was REVERTED — measured −0.2 voiceMatch for no grade/value gain, drafter was already at ceiling)");
 
 // ---- POST_IDEA_REWRITE_SYSTEM: mirrors the tone gate so a rewrite can't undo it ----
 ok(/constructive/i.test(m.POST_IDEA_REWRITE_SYSTEM) && /(dunk|sneer)/i.test(m.POST_IDEA_REWRITE_SYSTEM), "rewrite prompt mirrors the constructive-tone rule");

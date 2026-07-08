@@ -1,6 +1,7 @@
 import { CONFIG, isLocalhost } from "./config";
 import { idleMinutes } from "./heuristics";
 import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { cleanDraft } from "./text-clean";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
@@ -167,25 +168,6 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
   }));
 }
 
-/** Enforce the user's hard rule for replies: no em/en dashes, no hyphenated
- *  compound words. A deterministic safety net on top of the prompt instruction.
- *  Digit hyphens (ranges, negatives) and bullet hyphens are left alone — and
- *  URLs / domains / @handles / emails are SHIELDED so we never break a link
- *  (e.g. my-startup.com stays intact while "long-term" -> "long term"). */
-function stripDashes(s: string): string {
-  // Mask URLs/emails/domains/handles with NUL-delimited sentinels (NUL never
-  // occurs in text, so no collision with bare numbers in the reply).
-  const shielded: string[] = [];
-  const masked = s.replace(/(https?:\/\/\S+|[\w.+-]+@[\w-]+\.[a-z]{2,}|\b[\w-]+\.[a-z]{2,}\S*|@[\w-]+)/gi,
-    (m) => `\u0000${shielded.push(m) - 1}\u0000`);
-  const out = masked
-    .replace(/\s*[—–]\s*/g, ", ")          // em/en dash -> comma
-    .replace(/(\p{L})-+(\p{L})/gu, "$1 $2") // hyphenated compound -> two words
-    .replace(/\s+,/g, ",")                  // tidy any " ," produced
-    .replace(/\s{2,}/g, " ")                // collapse doubled spaces
-    .trim();
-  return out.replace(/\u0000(\d+)\u0000/g, (_, i) => shielded[Number(i)]);
-}
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
  *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
@@ -207,7 +189,7 @@ export async function draftReply(post: { author: string; text: string; context?:
     `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${extra ?? ""}${prod}${angleLine}${steerLine}`,
     400,
   );
-  return stripDashes(reply.trim().replace(/^["']|["']$/g, ""));
+  return cleanDraft(reply); // dashes + quote-wrapping net (prompt says it, this guarantees it)
 }
 
 export interface PostIdea { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number; }
@@ -244,7 +226,7 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
   );
   return (raw.ideas || [])
     .slice(0, 6)
-    .map((d) => ({ text: stripDashes((d.text || "").trim()), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), critique: (d.critique || "").trim(), hookStrength: Math.max(0, Math.min(3, Math.round(Number(d.hookStrength) || 0))) }))
+    .map((d) => ({ text: cleanDraft(d.text || ""), source: (d.source || "").replace(/^@/, "").trim(), pattern: (d.pattern || "").trim(), why: (d.why || "").trim(), critique: (d.critique || "").trim(), hookStrength: Math.max(0, Math.min(3, Math.round(Number(d.hookStrength) || 0))) }))
     .filter((d) => d.text);
 }
 
@@ -261,5 +243,5 @@ export async function generatePostIdeaRewrite(text: string, steer: string, voice
     `User voice:\n${voice || "(not set — terse and specific; no marketing language, no emojis, no hashtags)"}\n\nCurrent draft:\n${text}\n\nSteer (how to change it): ${steer}${pat}${src}`,
     400,
   );
-  return stripDashes(out.trim().replace(/^["']|["']$/g, ""));
+  return cleanDraft(out); // dashes + quote-wrapping net
 }
