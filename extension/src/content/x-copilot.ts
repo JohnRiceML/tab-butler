@@ -793,6 +793,41 @@ let sentSeq = 0; // bump per reply so two in the same millisecond still get dist
 const commentedIds = new Set<string>(); // post ids you've replied to — drives the "✓ commented" badge in the feed
 const SENT_MAX = 500; // cap the feature log
 
+/** Conservatively UNION two reply logs (a second x.com tab writes this whole object last-write-wins,
+ *  so a stale tab could otherwise reset the rolling-hour `times` that drive the ease-off SAFETY guard
+ *  — the union guarantees the safety counter can only ever grow toward the true cross-tab total). */
+function mergeReplyLog(a: ReplyLog, b: Partial<ReplyLog>): ReplyLog {
+  const bSent = Array.isArray(b.sent) ? b.sent : [];
+  const byId = new Map<string, SentRecord>();
+  const put = (r: SentRecord) => {
+    const k = r.id || String(r.at);
+    const ex = byId.get(k);
+    // Prefer the copy carrying a measured outcome, else the newer one.
+    byId.set(k, !ex ? r : (ex.outcome && !r.outcome ? ex : r.outcome && !ex.outcome ? r : r.at >= ex.at ? r : ex));
+  };
+  for (const r of a.sent) put(r);
+  for (const r of bSent) put(r);
+  let sent = [...byId.values()].sort((x, y) => x.at - y.at);
+  if (sent.length > SENT_MAX) sent = sent.slice(-SENT_MAX);
+
+  const times = Array.from(new Set([...a.times, ...(Array.isArray(b.times) ? b.times : [])])).sort((x, y) => x - y).slice(-SENT_MAX);
+
+  const daily: Record<string, number> = { ...a.daily };
+  for (const [k, v] of Object.entries(b.daily ?? {})) daily[k] = Math.max(daily[k] ?? 0, Number(v) || 0); // a day's count must never decrease
+
+  const authors: Record<string, number> = { ...a.authors };
+  for (const [k, v] of Object.entries(b.authors ?? {})) authors[k] = Math.max(authors[k] ?? 0, Number(v) || 0); // conservative for the repeat-author guard
+
+  const draftMap = new Map<string, { norm: string; at: number }>();
+  for (const d of [...a.drafts, ...(Array.isArray(b.drafts) ? b.drafts : [])]) draftMap.set(`${d.norm}@${d.at}`, d);
+  const drafts = [...draftMap.values()].sort((x, y) => x.at - y.at).slice(-SENT_MAX);
+
+  const dailySum = Object.values(daily).reduce((s, v) => s + v, 0);
+  const total = Math.max(a.total || 0, Number(b.total) || 0, dailySum); // never regress the all-time counter
+
+  return { times, authors, drafts, daily, total, sent };
+}
+
 /** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
 function dayKey(ts: number): string {
   const d = new Date(ts); const p = (n: number) => String(n).padStart(2, "0");
@@ -1137,7 +1172,7 @@ async function draftFor(req: DraftReq) {
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, authorLine });
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
-  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${resp.error}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
+  else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${friendlyErr(resp.error)}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
   else paintPanel(root, author, text, { draft: resp.reply ?? "", ...ui });
 }
 
@@ -1527,6 +1562,26 @@ const DOCK_CSS = `
 
 let dockHost: HTMLElement | null = null;
 let dockRoot: ShadowRoot | null = null;
+/** True when the user is typing in a dock input (filter, idea editor, target-reply). Ambient
+ *  re-renders (reach completions, timers, cross-tab syncs) must skip renderDock while this holds,
+ *  or a full rebuild yanks the caret out from under them. (The draft-panel steer lives in a
+ *  separate shadow host and is already immune.) */
+function dockInputFocused(): boolean {
+  const el = dockRoot?.activeElement as HTMLElement | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+}
+/** Map a raw broker/API error string ("anthropic 401", "bad-output", …) to something a user can act
+ *  on, instead of leaking the status code. */
+function friendlyErr(raw?: string): string {
+  const s = (raw || "").toLowerCase();
+  if (/no-key/.test(s)) return "add your Anthropic key in the side panel first";
+  if (/40[13]/.test(s)) return "your Anthropic key looks invalid or expired, check it in the side panel";
+  if (/429/.test(s)) return "rate limited, give it a minute and try again";
+  if (/insufficient|credit|billing|402/.test(s)) return "your Anthropic account looks out of credit";
+  if (/overload|529|503|500/.test(s)) return "the model is busy right now, try again in a moment";
+  if (/bad-output/.test(s)) return "the model returned an unreadable response, try again";
+  return raw || "something went wrong, try again";
+}
 function ensureDock(): ShadowRoot {
   if (dockHost?.isConnected && dockRoot) return dockRoot;
   dockHost = document.createElement("div");
@@ -1590,7 +1645,7 @@ function pumpReach(): void {
       })
       .catch(() => authorReach.set(key, { failed: true, at: Date.now() }))
       .then(() => schedulePersistReach())
-      .finally(() => { reachInFlight--; renderDock(); pumpReach(); });
+      .finally(() => { reachInFlight--; if (!dockInputFocused()) renderDock(); pumpReach(); }); // don't rebuild the dock (losing the user's caret) mid-type; the next render picks up the reach data
   }
 }
 
@@ -2747,7 +2802,7 @@ async function generateIdeas() {
       shapeLine: measuredShapeLine()?.line,
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
-    if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${resp.error}` : "Couldn't write ideas — try again."; return; }
+    if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${friendlyErr(resp.error)}` : "Couldn't write ideas — try again."; return; }
     // Attach the REAL source post (already in `winners`) by matching the handle the model cited, and
     // anchor the honest virality band to that source's measured RANK in the pool.
     const now = Date.now();
@@ -3392,6 +3447,11 @@ function renderDock() {
   if (!enabled || invalidated) return;
   if (dockPlayOpen && dockRoot?.querySelector(".dplay")) return; // playground is live — ambient re-renders must not tear it down under the user
   const root = ensureDock();
+  // Preserve the reply-list scroll across the full rebuild (ambient renders — reach completions,
+  // timers, cross-tab syncs — otherwise snap it back to the top). Restored in a microtask, after
+  // this synchronous rebuild appends the new list, before paint (no flicker). No-op on the pill.
+  const prevScroll = (root.querySelector(".dl") as HTMLElement | null)?.scrollTop ?? 0;
+  if (prevScroll > 0) queueMicrotask(() => { if (!invalidated) { const dl = root.querySelector(".dl") as HTMLElement | null; if (dl) dl.scrollTop = prevScroll; } });
   goobiDockHandle?.destroy(); goobiDockHandle = null; // stop the previous header Goobi before we rebuild (replaceChildren only detaches it)
   stopIdeasGoobi(); // the ideas-loading dancer (re-mounted below if still loading)
   root.replaceChildren();
@@ -3717,6 +3777,12 @@ async function boot() {
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan
+    if (changes[CONFIG.X_REPLY_LOG_KEY]) {
+      // Another tab wrote the reply ledger. MERGE (union), never adopt — a stale tab's blob must not
+      // reset the rolling-hour count the ease-off safety guard reads, or defeat the daily tally.
+      const nv = changes[CONFIG.X_REPLY_LOG_KEY].newValue as Partial<ReplyLog> | undefined;
+      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
+    }
     if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
     if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets)) { targetStore = nv; renderDock(); } } // synced from another tab
     if (changes[CONFIG.TWTTR_KEY_KEY]) {

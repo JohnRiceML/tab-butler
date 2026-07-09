@@ -25,42 +25,48 @@ export const GLOBAL_THIN = 12; // below this many total scored events, show only
 export const FALLBACK_FOLLOWERS = 1000;
 const HI = 0.5, LO = 0.2;      // mutual/fan/one-way thresholds on the squashed axes
 const RING_WINDOW = 8, RING_PCT = 0.4; // closed-loop (pod) detector
+// FIXED squash references (NOT the cohort mean) so a pair's label can't shift when an unrelated
+// account joins — the invariance the reciprocity contract promises. SUP_REF ≈ "a clear supporter"
+// in recency-weighted engagements; INVEST_REF ≈ the neutral reply-quality mean.
+export const SUP_REF = 4;
+export const INVEST_REF = 0.5;
 
 export type EngagedKind = "reply" | "mention" | "repost" | "like";
 const SCORED: Record<EngagedKind, boolean> = { reply: true, mention: true, repost: false, like: false };
-const SUPPORT_W: Record<EngagedKind, number> = { reply: 2.0, mention: 2.0, repost: 0, like: 0 };
 
 export interface EngagedRecord { at: number; handle: string; kind: EngagedKind; postId?: string; followers?: number; avatar?: string; name?: string; text?: string /* the reply/mention snippet — powers the "tend your threads" queue; optional so pre-existing records stay valid */; key: string; }
 export interface SupporterAgg { handle: string; support: number; nSup: number; events: number; replies: number; mentions: number; likes: number; reposts: number; followers?: number; avatar?: string; name?: string; lastAt: number; }
 export interface SupportResult { supporters: Record<string, SupporterAgg>; muSup: number; totalScored: number; }
 export type Rel = "mutual" | "fan" | "one-way-you" | "acquaintance";
 
-/** "Who shows up for you" — scored on reply+mention only; likes/reposts tallied for the chip. */
+/** "Who shows up for you" — scored on reply+mention only; likes/reposts tallied for the chip.
+ *  The score is recency-weighted VOLUME (how much + how recently they engage you), with a MILD
+ *  reach modifier. Frequency is the driver: a loyal frequent supporter must outrank a bigger,
+ *  rarer one — reply and mention count equally (both are "they showed up"). */
 export function aggregateSupporters(inbound: EngagedRecord[], now: number): SupportResult {
   const by = new Map<string, EngagedRecord[]>();
   for (const e of inbound) (by.get(e.handle) ?? by.set(e.handle, []).get(e.handle)!).push(e);
-  // global recency-weighted mean intensity over scored events (for shrinkage)
-  let gw = 0, gwv = 0, totalScored = 0;
-  for (const e of inbound) { if (!SCORED[e.kind]) continue; const w = recencyW((now - e.at) / DAY_MS); gw += w; gwv += w * SUPPORT_W[e.kind]; totalScored++; }
-  const muSup = gw > 0 ? gwv / gw : 0;
+  let totalScored = 0;
+  for (const e of inbound) if (SCORED[e.kind]) totalScored++;
 
   const supporters: Record<string, SupporterAgg> = {};
   for (const [handle, evs] of by) {
-    let sw = 0, swv = 0, lastAt = 0, followers: number | undefined, fAt = -1, avatar: string | undefined, name: string | undefined;
+    let sw = 0, lastAt = 0, followers: number | undefined, fAt = -1, avatar: string | undefined, name: string | undefined;
     let replies = 0, mentions = 0, likes = 0, reposts = 0;
     for (const e of evs) {
       if (e.kind === "reply") replies++; else if (e.kind === "mention") mentions++; else if (e.kind === "like") likes++; else reposts++;
       if (e.at > lastAt) { lastAt = e.at; avatar = e.avatar ?? avatar; name = e.name ?? name; }
       if (e.followers != null && e.at >= fAt) { followers = e.followers; fAt = e.at; }
       if (!SCORED[e.kind]) continue;
-      const w = recencyW((now - e.at) / DAY_MS); sw += w; swv += w * SUPPORT_W[e.kind];
+      sw += recencyW((now - e.at) / DAY_MS); // recency-weighted event count = how much + how recently
     }
     if (sw <= 0) continue; // like/repost-only accounts can't be scored — they don't rank (honest)
-    const intensity = swv / sw;
-    const reachBoost = clamp(1 + 0.15 * (Math.log10((followers ?? FALLBACK_FOLLOWERS) + 10) - 3), 0.85, 1.4); // a whale can't crown
-    const support = ((K * muSup + sw * intensity) / (K + sw)) * reachBoost; // count-anchored shrinkage
+    const reachBoost = clamp(1 + 0.15 * (Math.log10((followers ?? FALLBACK_FOLLOWERS) + 10) - 3), 0.85, 1.4); // a whale can't crown; a mild ±modifier only
+    const support = sw * reachBoost; // VOLUME drives the score (fixes the old collapse-to-follower-count); reach is a nudge
     supporters[handle] = { handle, support, nSup: sw, events: evs.length, replies, mentions, likes, reposts, followers, avatar, name, lastAt };
   }
+  const vals = Object.values(supporters);
+  const muSup = vals.length ? vals.reduce((s, x) => s + x.support, 0) / vals.length : 0; // informational only — fuseMutual uses the FIXED SUP_REF, not this
   return { supporters, muSup, totalScored };
 }
 
@@ -73,8 +79,8 @@ export function rankSupporters(r: SupportResult, max = 5): { ranked: SupporterRo
   return { ranked: ranked.slice(0, max), learning, totalScored: r.totalScored };
 }
 
-/** Cohort-invariant squash: x/(x+ref) with a FIXED reference (the global mean), so a pair's
- *  label can't shift just because an unrelated account joins the cohort. */
+/** Cohort-invariant squash: x/(x+ref) with a FIXED reference (SUP_REF / INVEST_REF constants, NOT
+ *  the live cohort mean), so a pair's label can't shift just because an unrelated account joins. */
 const squash = (x: number, ref: number): number => (x + ref <= 0 ? 0 : Math.max(x, 0) / (Math.max(x, 0) + Math.max(ref, 1e-9)));
 export interface InvestLike { accounts: Record<string, { invest: number; nEff: number }>; muInvest: number; }
 export interface MutualInfo { rel: Rel; mutual: number; balance: number; }
@@ -87,8 +93,8 @@ export function fuseMutual(inv: InvestLike, sup: SupportResult): Record<string, 
   for (const h of handles) {
     const a = inv.accounts[h]; const s = sup.supporters[h];
     const nInvest = a?.nEff ?? 0, nSup = s?.nSup ?? 0;
-    const investN = squash(a?.invest ?? 0, inv.muInvest);
-    const supportN = squash(s?.support ?? 0, sup.muSup);
+    const investN = squash(a?.invest ?? 0, INVEST_REF); // FIXED ref → cohort-invariant (was inv.muInvest)
+    const supportN = squash(s?.support ?? 0, SUP_REF);  // FIXED ref → cohort-invariant (was sup.muSup)
     let rel: Rel = "acquaintance";
     if (investN >= HI && supportN >= HI && nInvest >= N_MIN && nSup >= N_MIN) rel = "mutual";
     else if (supportN >= HI && investN < LO && nSup >= N_MIN) rel = "fan";

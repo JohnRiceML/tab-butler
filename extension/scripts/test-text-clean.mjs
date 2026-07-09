@@ -39,6 +39,14 @@ ok(m.stripEmphasisQuotes("he said 'don't ship' loudly").includes("don't"), "phra
 eq(m.stripEmphasisQuotes("the ‘quiet part’ nobody says"), "the quiet part nobody says", "curly single quotes unwrapped");
 eq(m.stripEmphasisQuotes("the “banger screen” gate"), "the banger screen gate", "curly double quotes unwrapped");
 
+// ---- review-caught edge bugs (apostrophe-elisions, speech quotations, sentinel collision) ----
+eq(m.cleanDraft("rock 'n' roll energy"), "rock 'n' roll energy", "rock 'n' roll: the 1-char elision is NOT unwrapped (meaning preserved)");
+eq(m.stripEmphasisQuotes("fish 'n' chips"), "fish 'n' chips", "'n' elision left intact");
+eq(m.cleanDraft('She said "no" today'), 'She said "no" today', "speech verb before a double-quote → genuine quotation preserved");
+eq(m.cleanDraft('the memo read: "ship it"'), 'the memo read: "ship it"', "colon before a double-quote → quotation preserved");
+eq(m.stripEmphasisQuotes("the 'invisible' one won"), "the invisible one won", "≥2-char single-word scare quote still unwrapped");
+eq(m.stripDashes("check code LNK0KNL now"), "check code LNK0KNL now", "an ASCII 'LNK0KNL' string is NOT mangled (NUL sentinel, no collision)");
+
 // ---- cleanDraft (the combined net both surfaces use) ----
 eq(m.cleanDraft('"just ship it — then talk to users"'), "just ship it, then talk to users", "whole-string wrapping quote stripped + dash fixed");
 eq(m.cleanDraft("built 4 features. 2 got used. the 'invisible' one won."), "built 4 features. 2 got used. the invisible one won.", "inline emphasis quote removed, numbers intact");

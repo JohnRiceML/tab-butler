@@ -60,6 +60,27 @@ const ev = (handle, kind, at, extra = {}) => ({ at, handle, kind, key: `${kind}:
   ok(m.fuseMutual(invBig, supBig).alpha.rel === before, "label is cohort-invariant when a whale joins the cohort");
 }
 
+// ---- VOLUME drives support, not follower count (a loyal frequent supporter outranks a rare whale) ----
+{
+  const inbound = [];
+  for (let i = 0; i < 15; i++) inbound.push(ev("loyal", "reply", NOW - i * DAY, { followers: 400 }));
+  for (let i = 0; i < 5; i++) inbound.push(ev("bigfan", "reply", NOW - i * DAY, { followers: 9000 }));
+  const sup = m.aggregateSupporters(inbound, NOW);
+  ok(sup.supporters.loyal.support > sup.supporters.bigfan.support, "15-reply/400-follower loyal OUTSCORES a 5-reply/9k-follower whale (volume drives, not followers)");
+  ok(m.rankSupporters(sup).ranked[0].handle === "loyal", "rankSupporters puts the frequent supporter first, not the bigger account");
+}
+
+// ---- fuseMutual labels are invariant to the invest cohort MEAN (fixed ref, not the live mean) ----
+{
+  const inbound = [];
+  for (let i = 0; i < 8; i++) inbound.push(ev("pair", "reply", NOW - i * DAY, { followers: 3000 }));
+  const sup = m.aggregateSupporters(inbound, NOW);
+  const inv = (mu) => ({ accounts: { pair: { invest: 0.55, nEff: 5 } }, muInvest: mu });
+  const relLo = m.fuseMutual(inv(0.5), sup).pair.rel;
+  const relHi = m.fuseMutual(inv(0.6), sup).pair.rel;
+  ok(relLo === relHi, `label invariant to the invest cohort mean (muInvest 0.5 vs 0.6 → same: ${relLo}/${relHi})`);
+}
+
 // ---- reciprocal-ring (pod) detector ----
 {
   const inb = [ev("m0", "reply", NOW), ev("m1", "reply", NOW), ev("m2", "reply", NOW)];

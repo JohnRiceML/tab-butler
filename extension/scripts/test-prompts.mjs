@@ -48,6 +48,13 @@ ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the val
 // ---- POST_IDEA_REWRITE_SYSTEM: mirrors the tone gate so a rewrite can't undo it ----
 ok(/constructive/i.test(m.POST_IDEA_REWRITE_SYSTEM) && /(dunk|sneer)/i.test(m.POST_IDEA_REWRITE_SYSTEM), "rewrite prompt mirrors the constructive-tone rule");
 
+// ---- shared ban set: regen + rewrite must inherit the FULL generation ban set (else a steer-
+// rewrite / regen silently reintroduces molds/dashes/AI-tells that generation forbade) ----
+ok(/No em\/en dash/.test(m.SHARED_POST_BANS) && /negation-reframe/.test(m.SHARED_POST_BANS) && /emphasis quotes/.test(m.SHARED_POST_BANS), "SHARED_POST_BANS carries the dash + negation-reframe + quote-wrap bans");
+ok(m.POST_IDEAS_REGEN_SYSTEM.includes(m.SHARED_POST_BANS), "regen prompt inherits the shared ban set");
+ok(m.POST_IDEA_REWRITE_SYSTEM.includes(m.SHARED_POST_BANS), "rewrite prompt inherits the shared ban set (was strictly weaker before)");
+ok(/ADDITIVE .it's not just X, it's Y. is a different construction and is banned outright/.test(P), "post-ideas resolves the two-negation-template contradiction (substitution allowed ≤1, additive banned 0)");
+
 // ---- reply angles still wired (the draft-panel steer chips) ----
 ok(Array.isArray(m.REPLY_ANGLES) && m.REPLY_ANGLES.length > 0 && m.REPLY_ANGLES.every((a) => a.id && a.directive), "REPLY_ANGLES are present and well-formed");
 

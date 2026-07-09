@@ -5,44 +5,51 @@
  *
  * Philosophy (same as the old inline stripDashes): the PROMPT tells the model not to do it, and
  * this GUARANTEES it — belt and suspenders. Both are conservative: they never touch a link, a
- * contraction, or a possessive, so a false rewrite can't mangle real text.
+ * contraction, a possessive, or an apostrophe-elision, so a false rewrite can't mangle real text.
  */
 
 // straight + curly quote glyphs
 const DQUOTE = "\"“”"; // "  “  ”
 const SQUOTE = "'‘’";  // '  ‘  ’
+const NUL = String.fromCharCode(0); // a sentinel that cannot occur in real text (built at runtime so no literal NUL sits in source)
 
 /** Enforce the no-dash rule: em/en dash -> comma, hyphenated compound -> two words. Digit hyphens
  *  (ranges, negatives) and bullet hyphens are left alone; URLs / emails / domains / @handles are
  *  SHIELDED so a link is never broken ("my-startup.com" survives, "long-term" -> "long term"). */
 export function stripDashes(s: string): string {
-  // Mask links with a guard-token sentinel (LNK<i>KNL). The letter guards mean the unmask can't
-  // collide with a bare number like "sent 40" in the draft, and it stays plain-ASCII/link-safe.
+  // Mask links with a NUL-delimited sentinel. NUL genuinely cannot appear in a draft, so the unmask
+  // can never collide with real content (a bare number like "sent 40", or a literal token in the text).
   const shielded: string[] = [];
   const masked = s.replace(/(https?:\/\/\S+|[\w.+-]+@[\w-]+\.[a-z]{2,}|\b[\w-]+\.[a-z]{2,}\S*|@[\w-]+)/gi,
-    (m) => `LNK${shielded.push(m) - 1}KNL`);
+    (m) => `${NUL}${shielded.push(m) - 1}${NUL}`);
   const out = masked
     .replace(/\s*[—–]\s*/g, ", ")   // em/en dash -> comma
     .replace(/(\p{L})-+(\p{L})/gu, "$1 $2")   // hyphenated compound -> two words
     .replace(/\s+,/g, ",")
     .replace(/\s{2,}/g, " ")
     .trim();
-  return out.replace(/LNK(\d+)KNL/g, (_, i) => shielded[Number(i)]);
+  return out.replace(new RegExp(`${NUL}(\\d+)${NUL}`, "g"), (_, i) => shielded[Number(i)]);
 }
 
-/** Remove emphasis / scare quotes that WRAP a short phrase ('close enough', "the real work") — a
- *  reliable AI tell in blunt X copy. Preserves:
- *   - apostrophes + possessives (it's, don't, users') — a single quote is only unwrapped when it's
- *     a clear DELIMITER (opening preceded by start/space/bracket, closing followed by space/punct/end),
- *     and a phrase containing an apostrophe simply isn't matched (safe, just left wrapped),
- *   - genuine quotation of someone's words when it runs longer than the phrase cap.
- *  Deliberately conservative: it would rather leave a quote than eat an apostrophe. */
+/** Remove emphasis / scare quotes that WRAP a phrase ('close enough', "the real work") — a reliable
+ *  AI tell in blunt X copy. Conservative — it spares:
+ *   - apostrophes, possessives, and apostrophe-elisions: a single-quote span must be ≥2 chars, so the
+ *     "rock 'n' roll" elision ('n' = 1 char) is left alone; contractions can't be spanned at all
+ *     (the content class excludes the quote glyph, so 'don't ship' never matches),
+ *   - genuine quotations of speech: a double-quote span preceded by a speech verb or a colon
+ *     (She said "no", the memo read: "ship") is left intact,
+ *   - links/numbers (untouched here; dashes handle their own shielding). */
 export function stripEmphasisQuotes(s: string): string {
-  // Double quotes never collide with apostrophes → unwrap any short wrapped span.
-  let out = s.replace(new RegExp(`[${DQUOTE}]([^${DQUOTE}\\n]{1,80})[${DQUOTE}]`, "g"), (_m, inner) => inner);
-  // Single quotes only as clear delimiters (content excludes ' so a contraction can't be spanned).
+  // Double quotes: unwrap a wrapped span (≤80 chars, ≥2 chars), UNLESS a speech verb / colon
+  // immediately precedes it (then it's a real quotation, not an emphasis tell).
+  let out = s.replace(
+    new RegExp(`(?<!\\b(?:said|says|say|asks?|asked|tells?|told|writes?|wrote|calls?|called|named|labell?ed|read|reads)\\s)(?<!:\\s)[${DQUOTE}]([^${DQUOTE}\\n]{2,80})[${DQUOTE}]`, "g"),
+    (_m, inner) => inner,
+  );
+  // Single quotes: only as clear delimiters (opening preceded by start/space/bracket, closing
+  // followed by space/punct/end), inner ≥2 chars so 1-char elisions like 'n' survive.
   out = out.replace(
-    new RegExp(`(^|[\\s(\\[${DQUOTE}])[${SQUOTE}]([^${SQUOTE}\\n]{1,80}?)[${SQUOTE}](?=$|[\\s).,!?;:\\]${DQUOTE}])`, "g"),
+    new RegExp(`(^|[\\s(\\[${DQUOTE}])[${SQUOTE}]([^${SQUOTE}\\n]{2,80}?)[${SQUOTE}](?=$|[\\s).,!?;:\\]${DQUOTE}])`, "g"),
     (_m, pre, inner) => pre + inner,
   );
   return out.replace(/\s{2,}/g, " ").trim();
@@ -51,6 +58,14 @@ export function stripEmphasisQuotes(s: string): string {
 /** The full clean applied to a finished draft (reply or post): trim, drop quotes wrapping the WHOLE
  *  string, unwrap inline emphasis quotes, enforce the no-dash rule. */
 export function cleanDraft(s: string): string {
-  const trimmed = (s || "").trim().replace(new RegExp(`^[${DQUOTE}${SQUOTE}]|[${DQUOTE}${SQUOTE}]$`, "g"), "").trim();
-  return stripDashes(stripEmphasisQuotes(trimmed));
+  let t = (s || "").trim();
+  // Unwrap quotes around the WHOLE string only when it is a single quoted span (no internal quote),
+  // i.e. the model wrapped the entire draft — never a lone trailing quote that closes a quotation
+  // sitting inside the text (e.g. the memo read: "ship it").
+  const isQ = (c: string) => DQUOTE.includes(c) || SQUOTE.includes(c);
+  if (t.length >= 2 && isQ(t[0]) && isQ(t[t.length - 1])) {
+    const inner = t.slice(1, -1);
+    if (![...inner].some(isQ)) t = inner.trim();
+  }
+  return stripDashes(stripEmphasisQuotes(t));
 }

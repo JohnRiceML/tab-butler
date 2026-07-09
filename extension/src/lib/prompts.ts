@@ -102,7 +102,7 @@ PASS 2, CRITIQUE each seed harshly, PASS or CUT (one short reason each, in your 
 - KILL IF WEAK HOOK: line 1 has no number, stake, arguable claim, or named tension; or buries the point in line 2: CUT.
 - KILL IF AI-TELL: uses any banned construction below: CUT.
 - KILL IF IT DUNKS: a contrarian or quiet-part take that lands as a sneer, a pile-on, or a cheap dunk instead of a sharp-but-constructive point — X's 2026 ranker reads tone directly and throttles combative or purely negative posts regardless of engagement: CUT.
-- KILL IF MOLD (the batch's #1 slop source — these templates read as universal wisdom, not YOUR lived specifics): the "X isn't about Y, it's about Z" / "not a Y problem, it's a Z problem" negation-reframe may appear in AT MOST ONE of the five — kill the rest and rebuild them as a concrete scene, a single blunt claim, or a real numeric anecdote. Also CUT: an "unpopular:" / "hot take:" label, a "Nearest analogy:" / "think of it like" connective, and any SECOND numbered list.
+- KILL IF MOLD (the batch's #1 slop source — these templates read as universal wisdom, not YOUR lived specifics): the SUBSTITUTION reframe "X isn't about Y, it's about Z" / "not a Y problem, it's a Z problem" may appear in AT MOST ONE of the five — kill the rest and rebuild them as a concrete scene, a single blunt claim, or a real numeric anecdote. (This substitution shape is the ONE allowance; the ADDITIVE "it's not just X, it's Y" is a different construction and is banned outright, 0 times — see HARD RULES.) Also CUT: an "unpopular:" / "hot take:" label, a "Nearest analogy:" / "think of it like" connective, and any SECOND numbered list.
 - KILL IF IT LIFTS THE BEST LINE: each SOURCE has ONE most-quotable sentence — that is the exact line you must never restate. If your idea is that line with the number changed or a synonym swapped (source "raised prices 40%, lost zero customers" → your "raised prices 30%, not one cancellation"), it is a costume-lift a shared follower catches instantly: CUT, and remix the SHAPE onto a genuinely different point.
 
 PASS 3, FINALIZE. Expand the 5 strongest survivors into full posts. If fewer than 5 survive, regenerate replacements for the gaps rather than shipping a weak one. Across the final 5 enforce the VARIETY rules below.
@@ -186,22 +186,33 @@ For each of the 5 ideas return:
 Return ONLY JSON, no prose, no fences:
 {"ideas":[{"text":string,"source":string,"pattern":string,"why":string,"critique":string,"hookStrength":number}]}`;
 
+// The single SHARED ban set, appended to every prompt that produces a post (generation's own HARD
+// RULES mirror this; the SINGLE-post prompts below inherit it verbatim, so a regen or a user
+// steer-rewrite can never quietly reintroduce a mold/dash/AI-tell that generation forbade).
+export const SHARED_POST_BANS = `Hard bans (never break — these mirror the generation rules so a rewrite can't reintroduce them):
+- No em/en dash, and no hyphenated compounds ("long term" not "long-term").
+- No AI tells: "it's not just X, it's Y"; the "X isn't about Y, it's about Z" negation-reframe (and "not a Y problem, it's a Z problem" — the same shape); a list of exactly three; "here's the thing"/"the kicker"; opening with a rhetorical question; restating the input back; "in a world where"; "the truth is".
+- No label tics: "unpopular:", "hot take:", "Nearest analogy:", "think of it like".
+- No wrapping a phrase in emphasis quotes (write it plain, not 'like this'); quoting someone's actual words is fine.
+- No hashtags. No emojis unless the user's own posts clearly use them.
+- Keep every sharp take constructive, never a sneer or dunk (the 2026 ranker throttles combative posts).`;
+
 // ---- The reject-and-regenerate SECOND PASS (measured 2026-07-08: swap-fails 60%→40%, antiGeneric
 // +0.67, slopFree +0.33 vs pass-1). A cheap Haiku judge flags the ideas that fail the swap test,
 // then Sonnet regenerates ONLY those into user-specific posts. See generatePostIdeas. ----
 export const POST_IDEAS_JUDGE_SYSTEM = `You are a harsh X (Twitter) growth editor running the SWAP TEST on a batch of AI-generated post ideas. You are given the user's niche, their own posts, the SOURCE posts a tool was told to remix, and 5 generated ideas. Flag every idea that FAILS the swap test: another account in the niche could post it verbatim because it is generic niche wisdom ("consistency compounds", "talk to users"), OR it restates a source's specific claim, number, or line. An idea PASSES only if it is unmistakably THIS user: a concrete number, a named tool, a real moment, or a point only they would make. Be strict — "true but anyone could say it" FAILS. Return ONLY JSON: {"swapTestFails":[1-based indices]} — an empty array if all five pass.`;
 
-export const POST_IDEAS_REGEN_SYSTEM = `You are fixing specific post drafts a tool wrote for one user. Each FAILED the swap test: another account could post it (it is generic, or it restates a source). Rewrite EACH flagged draft into a post only THIS user could write: force in a concrete specific from THEIR world (a number, a named tool, a real moment, an exact detail drawn from their own posts) on a DIFFERENT point than the sources. Keep their voice, casing, and length. NEVER use: the "X isn't Y, it's Z" reframe; "unpopular:" / "hot take:"; a phrase wrapped in emphasis quotes; or any restatement of the source lines. Return ONLY JSON {"ideas":[{"text":"..."}]} with EXACTLY one replacement per flagged draft, in the order given.`;
+export const POST_IDEAS_REGEN_SYSTEM = `You are fixing specific post drafts a tool wrote for one user. Each FAILED the swap test: another account could post it (it is generic, or it restates a source). Rewrite EACH flagged draft into a post only THIS user could write: force in a concrete specific from THEIR world (a number, a named tool, a real moment, an exact detail drawn from their own posts) on a DIFFERENT point than the sources. Keep their voice, casing, and length. Never restate a source's specific claim, number, or line.
+
+${SHARED_POST_BANS}
+
+Return ONLY JSON {"ideas":[{"text":"...","why":"one short line on why this lands for THIS user","pattern":"2-4 word shape label"}]} with EXACTLY one replacement per flagged draft, in the order given. The "why" and "pattern" must describe the REWRITTEN text, not the original.`;
 
 export const POST_IDEA_REWRITE_SYSTEM = `You rewrite ONE X (Twitter) post for the user, applying their steer, while keeping the SAME core idea and the user's VOICE.
 
 You get: the current draft, the user's voice, the steer (how to change it), and optionally the source post whose pattern it borrows. Keep the post about the same thing, do not invent a new topic. Apply the steer faithfully (punchier, shorter, add a number, more in their voice, etc.).
 
-Hard rules you must NEVER break (same as the user's other posts):
-- Never use an em dash or en dash (the — or – characters); use a period or a comma. Never use hyphenated compound words ("long term" not "long-term").
-- No hashtags, and no emojis unless the voice clearly uses them.
-- Avoid AI tells: the "it's not just X, it's Y" construction; lists of exactly three; "here's the thing" or "the kicker"; opening with a rhetorical question.
-- Keep the tone constructive: sharp and honest, never a sneer or a dunk. X's 2026 ranker throttles combative posts even when they would get engagement.
+${SHARED_POST_BANS}
 - Keep line 1 a real hook (a number, a stake, or an arguable claim); never open with throat-clearing or a windup.
 - Use real line breaks where the format calls for them. Keep it tight and postable.
 

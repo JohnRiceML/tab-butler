@@ -247,10 +247,16 @@ async function refinePostIdeas(key: string, ideas: PostIdea[], userMsg: string):
     if (!fails.length) return ideas;
     const flagged = fails.map((n) => ideas[n - 1].text);
     const regenMsg = `${userMsg}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, i) => `${i + 1}. ${t}`).join("\n\n")}`;
-    const re = await callDirect<{ ideas?: { text?: string }[] }>(key, "claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, regenMsg, 1600);
-    const repl = (re.ideas || []).map((d) => cleanDraft(d?.text || "")).filter(Boolean);
+    const re = await callDirect<{ ideas?: { text?: string; why?: string; pattern?: string }[] }>(key, "claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, regenMsg, 1600);
     const out = ideas.slice();
-    fails.forEach((n, k) => { if (repl[k]) out[n - 1] = { ...out[n - 1], text: repl[k], source: "" }; });
+    // Replace text AND its rationale — a regenerated idea is a new point, so carrying over the pass-1
+    // why/pattern would describe text that no longer exists. source is dropped (it's now an original).
+    fails.forEach((n, k) => {
+      const r = (re.ideas || [])[k];
+      const txt = cleanDraft(r?.text || "");
+      if (!txt) return;
+      out[n - 1] = { ...out[n - 1], text: txt, source: "", why: (r?.why || "").trim() || "Rewritten to be specific to your own work, not a niche template.", pattern: (r?.pattern || "").trim() };
+    });
     return out;
   } catch { return ideas; }
 }
