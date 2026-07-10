@@ -640,6 +640,14 @@ affirmations). Redesigned with tiering, not deletion:
   number in its tooltip (a queue, not a guilt ledger). Every honesty disclosure is preserved, one
   hover away.
 
+**Insight-panel contrast bug (2026-07-08, live feedback: "really hard to read").** The three insight
+panel titles ("Tend your threads", "Who you show up with", "Who shows up for you") and the @handles
+in their rows were `color:#3a3027` — a dark brown on the `#14110d` dock, ~1.5:1 contrast, effectively
+dark-on-dark and unreadable (that color belongs on a LIGHT background; these sit on the dark dock
+body — a gap the 2026-07-06 a11y pass missed because it audited the reply-card surface). Titles →
+`#f3ead9` (~15.7:1), handles → `#e6d6ba` (~12.7:1), and the small row meta / reply snippets lifted
+`#8c7d68`→`#a89a85` (~6.4:1). All now clear WCAG AA on the dock.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

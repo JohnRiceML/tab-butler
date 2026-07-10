@@ -1325,7 +1325,7 @@ const DOCK_CSS = `
 .mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
 .insight { border-bottom:.5px solid rgba(214,154,92,.1); }
 .ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
-.ins-ttl { font:600 12px -apple-system,system-ui,sans-serif; color:#3a3027; }
+.ins-ttl { font:600 12.5px -apple-system,system-ui,sans-serif; color:#f3ead9; } /* section title — bright on the dark dock (was #3a3027, dark-on-dark ~1.5:1, unreadable) */
 .ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
 .ins-car { font-size:10px; color:#8c7d68; width:10px; text-align:center; }
 .ins-body { padding:2px 14px 12px; }
@@ -1337,11 +1337,11 @@ const DOCK_CSS = `
 .ins-av-l { display:flex; align-items:center; justify-content:center; font:600 11px -apple-system,system-ui,sans-serif; color:#8c7d68; }
 .ins-mid { flex:1; min-width:0; }
 .ins-top { display:flex; align-items:center; gap:6px; }
-.ins-h { font:600 12px -apple-system,system-ui,sans-serif; color:#3a3027; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; }
+.ins-h { font:600 12px -apple-system,system-ui,sans-serif; color:#e6d6ba; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; } /* @handle — readable on dark (was #3a3027, dark-on-dark) */
 .ins-ar { font-size:11px; color:#8c7d68; }
 .ins-badge { font-size:9.5px; color:#6fcf7f; font-weight:600; white-space:nowrap; }
 .ins-thin { font-size:9px; color:#a89a85; opacity:.8; }
-.ins-meta { font-size:10px; color:#8c7d68; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ins-meta { font-size:10.5px; color:#a89a85; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } /* reply snippet / row meta — lifted from #8c7d68 for legibility */
 .ins-bar { height:4px; border-radius:3px; background:rgba(214,154,92,.12); margin-top:4px; overflow:hidden; }
 .ins-fill { height:100%; border-radius:3px; background:#c9b79a; }
 .ins-pips { font-size:8px; color:#c9a25a; letter-spacing:1px; flex:0 0 auto; }
