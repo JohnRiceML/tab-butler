@@ -3788,8 +3788,15 @@ function renderDock() {
   d.append(f, list);
 
   const foot = document.createElement("div"); foot.className = "foot";
-  const f1 = document.createElement("div"); f1.className = "foot1"; f1.textContent = n ? "✦ You're all caught up" : "✦ Watching your feed";
-  const f2 = document.createElement("div"); f2.className = "foot2"; f2.textContent = "We'll surface more great posts as you scroll.";
+  const f1 = document.createElement("div"); f1.className = "foot1";
+  const f2 = document.createElement("div"); f2.className = "foot2";
+  if (n) { // there ARE reply spots — this is the end of the list, not "caught up"
+    f1.textContent = "✦ End of the list";
+    f2.textContent = "Scroll your feed for more, or ↻ Scan again to refresh.";
+  } else { // no spots surfaced — the genuine "nothing to do" / watching state
+    f1.textContent = "✦ You're all caught up";
+    f2.textContent = "New reply spots appear as you scroll — or tap ✦ to find some in your niche.";
+  }
   foot.append(f1, f2);
   d.append(foot);
 
