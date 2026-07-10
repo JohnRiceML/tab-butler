@@ -1343,7 +1343,7 @@ const DOCK_CSS = `
 .rel-tab.on { background:rgba(214,154,92,.13); border-color:transparent; color:#f3ead9; }
 .rel-badge { min-width:15px; text-align:center; font-size:9px; font-weight:700; padding:1px 5px; border-radius:999px; background:rgba(214,154,92,.22); color:#e6d6ba; }
 .rel-badge.amber { background:#e89a3c; color:#1a1206; }
-.rel-body { border-top:.5px solid rgba(214,154,92,.1); flex:1 1 0; min-height:0; overflow-y:auto; } /* when open, SHARES the flexible space with the reply list (both flex:1) — roomy + scrollable, never a cramped sliver, never pushes the queue off-screen */
+.rel-body { border-top:.5px solid rgba(214,154,92,.1); flex:1 1 auto; min-height:0; overflow-y:auto; } /* when open, shows its content (basis auto) AND shares/shrinks with the reply list (both flex:1 1 auto) so it never collapses to 0 (basis 0 did that when the dock was short), never a sliver, never pushes the queue off-screen */
 .ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
 .ins-ttl { font:600 12.5px -apple-system,system-ui,sans-serif; color:#f3ead9; } /* section title — bright on the dark dock (was #3a3027, dark-on-dark ~1.5:1, unreadable) */
 .ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
@@ -1480,7 +1480,7 @@ const DOCK_CSS = `
 .tg-hh { margin-top:8px; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
-.dl { flex:1 1 0; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; } /* flex:1 basis:0 so it splits the leftover space evenly with an open .rel-body, and takes it ALL when none is open */
+.dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; } /* basis auto: shows its content, grows into leftover, and shrinks+scrolls (with an open .rel-body) when the dock is full */
 .it { display:flex; flex-direction:column; padding:12px 16px 10px; border-top:.5px solid rgba(214,154,92,.10); }
 .top { display:flex; gap:12px; }
 .botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:8px; padding-top:7px; border-top:.5px solid rgba(214,154,92,.08); }
