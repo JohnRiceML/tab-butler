@@ -1311,9 +1311,9 @@ const DOCK_CSS = `
 .dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
 .pace { font-weight:500; white-space:nowrap; cursor:default; }
 .mom { padding:8px 14px 9px; background:rgba(214,154,92,.045); border-bottom:.5px solid rgba(214,154,92,.12); flex:0 0 auto; }
-.mom-sum { display:flex; align-items:center; gap:8px; cursor:pointer; -webkit-user-select:none; user-select:none; border-radius:6px; }
-.mom-bar { flex:1; height:7px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; }
-.mom-bar.mini { flex:0 0 92px; height:7px; }
+.mom-sum { cursor:pointer; -webkit-user-select:none; user-select:none; }
+.mom-bar { width:100%; height:8px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; } /* full-width progress bar */
+.mom-meta { display:flex; align-items:center; gap:8px; margin-top:6px; } /* state label + facts + caret, below the bar */
 .mom-fill { height:100%; border-radius:5px; transition:width .6s ease, background .3s; }
 .mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
 .mom-bits { display:flex; align-items:center; gap:5px; font-size:10.5px; color:#8c7d68; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; }
@@ -3630,7 +3630,7 @@ function renderDock() {
     const toggleToday = () => { todayOpen = !todayOpen; renderDock(); };
     sum.onclick = toggleToday;
     sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleToday(); } };
-    const bar = document.createElement("div"); bar.className = "mom-bar mini";
+    const bar = document.createElement("div"); bar.className = "mom-bar"; // full-width progress bar spanning the strip
     const fill = document.createElement("div"); fill.className = "mom-fill"; fill.style.width = m.score + "%"; fill.style.background = m.color;
     if (m.state === "peak") fill.style.boxShadow = `0 0 8px ${m.color}`;
     bar.append(fill);
@@ -3648,7 +3648,8 @@ function renderDock() {
     chainEl.title = chainTitle;
     bits.append(chainEl);
     const car = document.createElement("span"); car.className = "mom-car"; car.textContent = todayOpen ? "▾" : "▸";
-    sum.append(bar, lbl, bits, car);
+    const meta = document.createElement("div"); meta.className = "mom-meta"; meta.append(lbl, bits, car); // label + facts sit BELOW the full-width bar
+    sum.append(bar, meta);
     mom.append(sum);
 
     // Row 2 — the ONE coach line. Priority: safety (ease-off callout / caution cue) → daily shape
