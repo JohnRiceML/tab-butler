@@ -1799,6 +1799,7 @@ interface IdeaRecord {
 }
 let ideaQueue: IdeaRecord[] = [];          // persisted drafts queue (X_IDEAS_KEY): working drafts + shipped
 const expandedIdeas = new Set<string>();   // idea ids expanded into the in-place editor (single-open)
+let ideasInsightsOpen = false;             // the Post-ideas header's insight rows (explainer + batch shapes + measured signal + biggest gainer) — collapsed by default so the idea LIST gets the room
 const expandedSources = new Set<string>(); // idea ids whose source-post proof is expanded
 const ideaBusy = new Set<string>();        // ids currently being rewritten (per-idea steer)
 const ideaUndo = new Map<string, string>(); // id → prior text, for one-level undo after a steer
@@ -3449,7 +3450,13 @@ function buildIdeas(): HTMLElement {
   const gen = document.createElement("button"); gen.className = "scanb";
   gen.textContent = ideasLoading ? "Thinking…" : working.length ? "+ New batch" : "✨ Generate ideas";
   gen.disabled = ideasLoading; gen.onclick = () => void generateIdeas();
-  top.append(left, gen); head.append(top);
+  const car = document.createElement("button"); car.className = "iconb"; car.textContent = ideasInsightsOpen ? "▾" : "▸";
+  car.title = ideasInsightsOpen ? "Hide batch insights (show more ideas)" : "Show batch insights (shapes, measured signal, biggest gainer)";
+  car.setAttribute("aria-label", ideasInsightsOpen ? "Hide insights" : "Show insights");
+  car.onclick = () => { ideasInsightsOpen = !ideasInsightsOpen; renderDock(); };
+  const rgrp = document.createElement("div"); rgrp.style.cssText = "display:flex;align-items:center;gap:6px"; rgrp.append(gen, car);
+  top.append(left, rgrp); head.append(top);
+  if (ideasInsightsOpen) { // the insight rows below collapse by default so the idea LIST gets the room
   // Row 2 — sub + reach folded into one muted line.
   const sub = document.createElement("div"); sub.className = "ideasub";
   sub.textContent = "Remixes your niche's winning patterns into your voice — you review and post." + (myFollowers > 0 ? ` · tuned to ~${fmtCount(myFollowers)} followers` : "");
@@ -3480,6 +3487,7 @@ function buildIdeas(): HTMLElement {
       head.append(tr);
     }
   }
+  } // end ideasInsightsOpen — the collapsed insight rows
   wrap.append(head);
 
   const body = document.createElement("div"); body.className = "dl";
