@@ -2448,6 +2448,15 @@ async function maybeRunDailyLearn(): Promise<void> {
 let inbound: EngagedRecord[] = [];
 let inboundKeys = new Set<string>();
 const SUPPORTERS_MAX = 1000;
+// Reply postIds the user has explicitly MARKED DONE in "tend your threads" (device-local). Pruned to
+// the live harvest on persist so it can't grow unbounded as old events age out of the window.
+let threadsDone = new Set<string>();
+function hydrateThreadsDone(arr: unknown): void { if (Array.isArray(arr)) threadsDone = new Set(arr.filter((x): x is string => typeof x === "string")); }
+function persistThreadsDone(): void {
+  const live = new Set(inbound.map((e) => e.postId).filter((x): x is string => !!x));
+  threadsDone = new Set([...threadsDone].filter((id) => live.has(id))); // drop keys whose event has aged out of the harvest
+  safeSet({ [CONFIG.X_THREADS_DONE_KEY]: [...threadsDone] });
+}
 /** Adopt an inbound array from storage (boot OR cross-tab sync) — validate shape, drop >60d,
  *  cap, and rebuild the key index. Never trust foreign/partial writes raw. */
 function hydrateInbound(arr: unknown): void {
@@ -2517,7 +2526,7 @@ function avatarChip(handle: string, url?: string): HTMLElement {
  *  reply in your own words. It's an ACTION list, so it hides itself when there's nothing to tend. */
 function renderThreadsPanel(d: HTMLElement): void {
   const now = Date.now();
-  const { rows, total, untended } = rankThreads(inbound as InboundLite[], replyLog.sent, now);
+  const { rows, total, untended } = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
   if (total === 0) return; // nothing recent to tend → no empty panel (unlike the learning panels)
 
   const wrap = document.createElement("div"); wrap.className = "insight";
@@ -2560,12 +2569,20 @@ function renderThreadsPanel(d: HTMLElement): void {
         mid.append(meta);
       }
       row.append(mid);
+      const acts = document.createElement("div"); acts.style.cssText = "flex:none;align-self:center;display:flex;gap:5px;align-items:center";
+      const doneBtn = document.createElement("button");
+      doneBtn.textContent = "✓"; doneBtn.setAttribute("aria-label", `Mark @${r.handle}'s thread done`);
+      doneBtn.title = "Mark done — clears it from your tend queue (stays on your device; the reciprocity panel still counts them).";
+      doneBtn.style.cssText = "font:600 12px -apple-system,system-ui,sans-serif;color:#8c7d68;background:none;border:1px solid rgba(214,154,92,.25);border-radius:6px;padding:3px 8px;cursor:pointer";
+      doneBtn.disabled = !r.postId;
+      doneBtn.onclick = () => { if (r.postId) { threadsDone.add(r.postId); persistThreadsDone(); toast(`Marked @${r.handle} done.`); renderDock(); } };
       const act = document.createElement("button");
       act.textContent = "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
       act.title = "Open their reply on X so you can respond in-thread (Goobi never posts for you).";
-      act.style.cssText = "flex:none;align-self:center;font:600 11px -apple-system,system-ui,sans-serif;color:#e89a3c;background:rgba(232,154,60,.12);border:1px solid rgba(232,154,60,.35);border-radius:6px;padding:3px 8px;cursor:pointer";
+      act.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#e89a3c;background:rgba(232,154,60,.12);border:1px solid rgba(232,154,60,.35);border-radius:6px;padding:3px 8px;cursor:pointer";
       act.onclick = () => { if (r.postId) window.open(`https://x.com/${r.handle}/status/${r.postId}`, "_blank", "noopener"); };
-      row.append(act);
+      acts.append(doneBtn, act);
+      row.append(acts);
       body.append(row);
     }
     if (rows.length > 3) {
@@ -3807,6 +3824,7 @@ async function boot() {
   const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
   if (storedLearn?.handle) learn = storedLearn;
   hydrateInbound(await getLocal(CONFIG.X_SUPPORTERS_KEY)); // who engages with me (reciprocity)
+  hydrateThreadsDone(await getLocal(CONFIG.X_THREADS_DONE_KEY)); // threads I've marked done
   { // cross-session coverage caches (public author data + niche-stamped heavy hitters), TTL-pruned on load
     const now = Date.now();
     const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, { followers?: number; following?: number; bio?: string; at: number }> | undefined;
@@ -3843,6 +3861,7 @@ async function boot() {
       if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
     }
     if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
+    if (changes[CONFIG.X_THREADS_DONE_KEY]) { hydrateThreadsDone(changes[CONFIG.X_THREADS_DONE_KEY].newValue); renderDock(); } // marked-done threads synced from another tab
     if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets)) { targetStore = nv; renderDock(); } } // synced from another tab
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.

@@ -77,12 +77,14 @@ function isTended(handle: string, at: number, sentByHandle: Map<string, number[]
 }
 
 /** Rank the inbound engagement into a to-tend queue. Freshest-first, tended rows sink, one handle
- *  can't take more than PER_HANDLE_CAP slots, cold events (outside the window) are dropped. */
-export function rankThreads(inbound: InboundLite[], sent: SentLite[], now: number, max = 8): { rows: TendRow[]; total: number; untended: number } {
+ *  can't take more than PER_HANDLE_CAP slots, cold events (outside the window) are dropped. `done`
+ *  is the set of reply postIds the user has explicitly MARKED DONE — those drop out of the queue and
+ *  the count entirely (distinct from the lossy auto-`tended` guess, which only sinks a row). */
+export function rankThreads(inbound: InboundLite[], sent: SentLite[], now: number, max = 8, done?: Set<string>): { rows: TendRow[]; total: number; untended: number } {
   const sentByHandle = new Map<string, number[]>();
   for (const s of sent) { if (!s.author) continue; const h = s.author.toLowerCase(); (sentByHandle.get(h) ?? sentByHandle.set(h, []).get(h)!).push(s.at); }
 
-  const eligible = inbound.filter((e) => (e.kind === "reply" || e.kind === "mention") && e.handle && now - e.at <= TEND_WINDOW_MS && now - e.at >= 0);
+  const eligible = inbound.filter((e) => (e.kind === "reply" || e.kind === "mention") && e.handle && now - e.at <= TEND_WINDOW_MS && now - e.at >= 0 && !(done && e.postId != null && done.has(e.postId)));
   const rows: TendRow[] = eligible.map((e) => {
     const age = now - e.at;
     return { ...e, priority: tendPriority(e, now), fresh: freshnessOf(age), ageLabel: ageLabel(age), tended: isTended(e.handle, e.at, sentByHandle) };

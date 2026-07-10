@@ -648,6 +648,14 @@ body — a gap the 2026-07-06 a11y pass missed because it audited the reply-card
 `#f3ead9` (~15.7:1), handles → `#e6d6ba` (~12.7:1), and the small row meta / reply snippets lifted
 `#8c7d68`→`#a89a85` (~6.4:1). All now clear WCAG AA on the dock.
 
+**Tend-your-threads: mark done (2026-07-08, live request).** Each thread row gets a **✓** that
+explicitly clears it from the queue (and the count) — a hard user signal, distinct from the lossy
+auto-"tended" guess (which only sinks a row). Persisted device-local (`X_THREADS_DONE_KEY`), synced
+across tabs, and pruned to the live harvest on every write so it can't grow unbounded as events age
+out. `rankThreads` gained an optional `done` set (excludes those postIds from rows/total/untended;
+back-compat when omitted; +4 test assertions). Marking done does not touch the reciprocity panel —
+the person still counts as having engaged you.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

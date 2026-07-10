@@ -14,8 +14,9 @@ Why it matters (grounded in the open-sourced 2026 ranker): **author-engaged repl
 
 - It's a panel in the dock, **open by default** (it's a to-do, not a read-only insight). Collapses like the others.
 - **Compact by design** (2026-07-08 UX pass — the first cut ate the whole dock): **top 3 rows** by default with a "▾ N more" toggle up to the ranked 8; the "why" explainer lives on the panel title's hover; the honesty footer is one terse line with the full disclosures in its tooltip; the header count caps at **"20+ to tend"** (an exact 111 is a guilt list, not a queue — the tooltip carries the real number).
-- Each row: avatar (tap → their profile), @handle, the age (colored green while the thread is still live — freshness rides on the timestamp, no separate badge), their reply snippet, and **Reply →** (opens the thread; Goobi never posts for you).
-- Rows you've likely already answered sink to the bottom and show a soft "likely tended" tag.
+- Each row: avatar (tap → their profile), @handle, the age (colored green while the thread is still live — freshness rides on the timestamp, no separate badge), their reply snippet, a **✓** (mark done), and **Reply →** (opens the thread; Goobi never posts for you).
+- **✓ Mark done** — an explicit "handled" that removes the row from the queue and the count (persisted device-local under `X_THREADS_DONE_KEY`, synced across tabs, pruned to the live harvest so it can't grow unbounded). Distinct from the lossy auto-"tended" guess below: done is a hard user signal, "tended" only sinks a row. Marking done does NOT touch the reciprocity panel — the person still counts as having engaged you.
+- Rows you've likely already answered (the auto-guess) sink to the bottom and show a soft "likely tended" tag.
 - It only appears when there's something recent to tend — no empty state.
 
 ## How it works (the pipeline)

@@ -106,5 +106,19 @@ ok(m.ageLabel(2 * DAY) === "2d ago", "days label");
   ok(m.rankThreads(inbound, [], NOW, 8).rows.length === 8, "respects the max row cap");
 }
 
+// ---- explicitly MARKED DONE → drops out of the queue AND the count ----
+{
+  const inbound = [
+    { at: NOW - 10 * MIN, handle: "alice", kind: "reply", postId: "a1" },
+    { at: NOW - 20 * MIN, handle: "bob", kind: "reply", postId: "b1" },
+  ];
+  const done = new Set(["a1"]);
+  const r = m.rankThreads(inbound, [], NOW, 8, done);
+  ok(r.total === 1 && r.untended === 1, "a done event is excluded from total + untended");
+  ok(!r.rows.some((x) => x.postId === "a1") && r.rows.some((x) => x.postId === "b1"), "done row is gone; the other remains");
+  ok(m.rankThreads(inbound, [], NOW, 8, new Set(["a1", "b1"])).total === 0, "all done → total 0 (panel hides)");
+  ok(m.rankThreads(inbound, [], NOW).total === 2, "no done set → nothing excluded (back-compat)");
+}
+
 console.log(fail === 0 ? `\n✓ threads: ${pass} assertions passed` : `\n✗ threads: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);
