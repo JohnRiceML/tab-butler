@@ -1313,7 +1313,7 @@ const DOCK_CSS = `
 .mom { padding:8px 14px 9px; background:rgba(214,154,92,.045); border-bottom:.5px solid rgba(214,154,92,.12); flex:0 0 auto; }
 .mom-sum { display:flex; align-items:center; gap:8px; cursor:pointer; -webkit-user-select:none; user-select:none; border-radius:6px; }
 .mom-bar { flex:1; height:7px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; }
-.mom-bar.mini { flex:0 0 54px; height:6px; }
+.mom-bar.mini { flex:0 0 92px; height:7px; }
 .mom-fill { height:100%; border-radius:5px; transition:width .6s ease, background .3s; }
 .mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
 .mom-bits { display:flex; align-items:center; gap:5px; font-size:10.5px; color:#8c7d68; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; }
@@ -1324,6 +1324,13 @@ const DOCK_CSS = `
 .mom-detail { margin-top:4px; padding-top:3px; border-top:.5px dashed rgba(214,154,92,.12); }
 .mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
 .insight { border-bottom:.5px solid rgba(214,154,92,.1); }
+.rel-tabs { display:flex; gap:6px; padding:8px 14px; flex:0 0 auto; }
+.rel-tab { flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 6px; border-radius:9px; border:.5px solid rgba(214,154,92,.2); background:none; color:#cbb89c; font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; white-space:nowrap; }
+.rel-tab:hover { color:#f3ead9; }
+.rel-tab.on { background:rgba(214,154,92,.13); border-color:transparent; color:#f3ead9; }
+.rel-badge { min-width:15px; text-align:center; font-size:9px; font-weight:700; padding:1px 5px; border-radius:999px; background:rgba(214,154,92,.22); color:#e6d6ba; }
+.rel-badge.amber { background:#e89a3c; color:#1a1206; }
+.rel-body { border-top:.5px solid rgba(214,154,92,.1); }
 .ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
 .ins-ttl { font:600 12.5px -apple-system,system-ui,sans-serif; color:#f3ead9; } /* section title — bright on the dark dock (was #3a3027, dark-on-dark ~1.5:1, unreadable) */
 .ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
@@ -1802,9 +1809,11 @@ function persistIdeas(): void {
 let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
 let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
-let insightOpen = false; // the "who you show up with" learning panel (collapsed by default)
-let supportersOpen = false; // the "who shows up for you" reciprocity panel (collapsed by default)
-let threadsOpen = true; // the "tend your threads" action queue — open by default (it's a to-do, not an insight)
+// The three relationship surfaces (threads / who-you-show-up-with / who-shows-up-for-you) are one
+// horizontal tab row now, accordion — at most one body open at a time. null = all collapsed (just
+// the tabs + their count badges). Defaults to "threads" (the action queue) when there's something to tend.
+type RelTab = "threads" | "invest" | "supporters" | null;
+let relTab: RelTab = "threads";
 let todayOpen = false; // the Today strip's full detail (cue/shape/dots/callout) — collapsed to summary+coach by default
 let threadsAll = false; // tend-your-threads: false = top 3 rows (the dock is a queue, not a ledger), true = the full ranked 8
 
@@ -2526,25 +2535,10 @@ function avatarChip(handle: string, url?: string): HTMLElement {
  *  reply in your own words. It's an ACTION list, so it hides itself when there's nothing to tend. */
 function renderThreadsPanel(d: HTMLElement): void {
   const now = Date.now();
-  const { rows, total, untended } = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
-  if (total === 0) return; // nothing recent to tend → no empty panel (unlike the learning panels)
-
-  const wrap = document.createElement("div"); wrap.className = "insight";
-  const head = document.createElement("div"); head.className = "ins-head";
-  head.onclick = () => { threadsOpen = !threadsOpen; renderDock(); };
-  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Tend your threads";
-  // The "why" lives here (hover), not as a body paragraph — it was costing 3 lines on every render.
-  ttl.title = "Answering a reply on your own thread is the top-ranked growth move: you keep the thread alive (the branch the ranker promotes) and author-engaged replies grade highest. Grounded in the open-source ranker (dedup_conversation_filter + the reply grade).";
-  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = threadsOpen ? "▾" : "▸";
-  const cnt = document.createElement("div"); cnt.className = "ins-cnt";
-  // Cap the number: "111 to tend" is a guilt list, not a queue — past 20 the exact count adds
-  // nothing actionable (the panel surfaces the freshest few; the rest age out of the window).
-  cnt.textContent = untended ? `${untended > 20 ? "20+" : untended} to tend` : "all tended";
-  cnt.title = untended > 20 ? `${untended} unanswered replies/mentions in the last 3 days — freshest first; older ones age out of the window.` : "";
-  if (untended) cnt.style.color = "#e89a3c";
-  head.append(ttl, cnt, car); wrap.append(head);
-
-  if (threadsOpen) {
+  const { rows, total } = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
+  if (total === 0) return; // nothing recent to tend → the tab is hidden anyway
+  const wrap = document.createElement("div"); wrap.className = "insight rel-body";
+  {
     const body = document.createElement("div"); body.className = "ins-body";
     const shown = threadsAll ? rows : rows.slice(0, 3); // a queue, not a ledger — the reply list below needs the room
     for (const r of shown) {
@@ -2609,17 +2603,8 @@ function renderInsightPanel(d: HTMLElement): void {
   const now = Date.now();
   const agg = aggregateAccounts(replyLog.sent, now);
   const { ranked, learning } = rankAccounts(agg);
-  const wrap = document.createElement("div"); wrap.className = "insight";
-
-  const head = document.createElement("div"); head.className = "ins-head";
-  head.onclick = () => { insightOpen = !insightOpen; renderDock(); };
-  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Who you show up with";
-  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = insightOpen ? "▾" : "▸";
-  const cnt = document.createElement("div"); cnt.className = "ins-cnt";
-  cnt.textContent = agg.attributed < GLOBAL_THIN ? "learning" : `${ranked.length} top`;
-  head.append(ttl, cnt, car); wrap.append(head);
-
-  if (insightOpen) {
+  const wrap = document.createElement("div"); wrap.className = "insight rel-body";
+  {
     const body = document.createElement("div"); body.className = "ins-body";
     // The OUTCOME half of momentum: is the account actually picking up? Measured per-post results,
     // week over week, from the daily snaps — silent until both windows have real posts (no guessing).
@@ -2735,19 +2720,8 @@ function relBadge(rel: Rel): { text: string; cls: string } | null {
  *  like-for-like nudging. */
 function renderSupportersPanel(d: HTMLElement): void {
   const now = Date.now();
-  // Cheap header signal only (no grouping/fuse) — the full aggregation runs only when open.
-  let scored = 0; const seenHandles = new Set<string>();
-  for (const e of inbound) if (e.kind === "reply" || e.kind === "mention") { scored++; seenHandles.add(e.handle); }
-
-  const wrap = document.createElement("div"); wrap.className = "insight";
-  const head = document.createElement("div"); head.className = "ins-head";
-  head.onclick = () => { supportersOpen = !supportersOpen; renderDock(); };
-  const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Who shows up for you";
-  const car = document.createElement("div"); car.className = "ins-car"; car.textContent = supportersOpen ? "▾" : "▸";
-  const cnt = document.createElement("div"); cnt.className = "ins-cnt"; cnt.textContent = scored < SUP_GLOBAL_THIN ? "learning" : `${seenHandles.size} ${seenHandles.size === 1 ? "acct" : "accts"}`;
-  head.append(ttl, cnt, car); wrap.append(head);
-
-  if (supportersOpen) {
+  const wrap = document.createElement("div"); wrap.className = "insight rel-body";
+  {
     const sup = aggregateSupporters(inbound, now);
     const { ranked, learning, totalScored } = rankSupporters(sup);
     const rel = fuseMutual(aggregateAccounts(replyLog.sent, now), sup); // fuse with who YOU show up with
@@ -2799,6 +2773,41 @@ function renderSupportersPanel(d: HTMLElement): void {
     wrap.append(body);
   }
   d.append(wrap);
+}
+
+/** The three relationship surfaces as ONE horizontal accordion tab row with count badges (the "top
+ *  level notifications"), replacing three stacked collapsible panels. At most one body open at a
+ *  time; tapping the active tab collapses it. Threads carries the actionable amber badge (untended);
+ *  the other two carry a muted account count. */
+function renderRelationshipTabs(d: HTMLElement): void {
+  const now = Date.now();
+  const th = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
+  const showThreads = th.total > 0;
+  const invAgg = aggregateAccounts(replyLog.sent, now);
+  const invRanked = rankAccounts(invAgg).ranked.length;
+  const invLearning = invAgg.attributed < GLOBAL_THIN;
+  let supScored = 0; const supHandles = new Set<string>();
+  for (const e of inbound) if (e.kind === "reply" || e.kind === "mention") { supScored++; supHandles.add(e.handle); }
+  const supLearning = supScored < SUP_GLOBAL_THIN;
+
+  const tabs = document.createElement("div"); tabs.className = "rel-tabs";
+  const mkTab = (id: Exclude<RelTab, null>, label: string, tip: string, badge: string | null, amber: boolean) => {
+    const on = relTab === id;
+    const b = document.createElement("button"); b.className = "rel-tab" + (on ? " on" : "");
+    b.title = tip; b.setAttribute("aria-expanded", String(on));
+    const t = document.createElement("span"); t.textContent = label; b.append(t);
+    if (badge) { const bd = document.createElement("span"); bd.className = "rel-badge" + (amber ? " amber" : ""); bd.textContent = badge; b.append(bd); }
+    b.onclick = () => { relTab = on ? null : id; renderDock(); };
+    return b;
+  };
+  if (showThreads) tabs.append(mkTab("threads", "Threads", "Reply to the people who replied to you — the top-ranked growth move (author-engaged replies grade highest; keeps the thread alive).", th.untended ? (th.untended > 20 ? "20+" : String(th.untended)) : null, true));
+  tabs.append(mkTab("invest", "Your circle", "Who you show up with — the accounts your replies invest in, upgraded to measured (✓) as outcomes settle.", invLearning ? null : String(invRanked), false));
+  tabs.append(mkTab("supporters", "Supporters", "Who shows up for you — accounts that reply to / mention you (from your notifications).", supLearning ? null : String(supHandles.size), false));
+  d.append(tabs);
+
+  if (relTab === "threads" && showThreads) renderThreadsPanel(d);
+  else if (relTab === "invest") renderInsightPanel(d);
+  else if (relTab === "supporters") renderSupportersPanel(d);
 }
 
 let apiAlive: boolean | undefined; // session cache: undefined = unknown, true = verified working, false = shape looks dead
@@ -3678,11 +3687,9 @@ function renderDock() {
     d.append(mom);
   }
 
-  // Tend your threads — the action queue (answer your repliers) sits above the read-only insights.
-  renderThreadsPanel(d);
-  // Relationships: "Who you show up with" (you→them) + "Who shows up for you" (them→you).
-  renderInsightPanel(d);
-  renderSupportersPanel(d);
+  // Relationship surfaces — one horizontal accordion tab row (Threads / Your circle / Supporters)
+  // with count badges, replacing the three stacked collapsible panels.
+  renderRelationshipTabs(d);
 
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {

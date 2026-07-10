@@ -656,6 +656,17 @@ out. `rankThreads` gained an optional `done` set (excludes those postIds from ro
 back-compat when omitted; +4 test assertions). Marking done does not touch the reciprocity panel —
 the person still counts as having engaged you.
 
+**Relationship panels → one horizontal tab row (2026-07-08, live request).** "Tend your threads",
+"Who you show up with", and "Who shows up for you" were three stacked collapsible panels eating
+vertical space above the reply queue. Consolidated into ONE horizontal accordion tab row
+(`renderRelationshipTabs`) — **Threads / Your circle / Supporters** — at most one body open at a
+time, tapping the active tab collapses it. The count badges ARE the "top-level notifications":
+Threads carries the actionable amber badge (untended count, capped 20+), the other two a muted
+account count (or nothing while still learning). The three render functions became body-only (the
+tab is their header now); `relTab` state replaces `threadsOpen`/`insightOpen`/`supportersOpen`
+(defaults to Threads). The Today strip's momentum bar widened for more presence as the top status
+band. Net: three panel-headers + up to three open bodies → one tab row + one body.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

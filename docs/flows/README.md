@@ -13,13 +13,18 @@ Every doc follows the same template: **What it does for the user → How the use
 - [Post ideas](post-ideas.md) — remix the patterns over-performing in your niche into original posts in your voice, with an honest virality band anchored to the source's real rank.
 - [Target accounts + suggestions](targets.md) — comment early on big *in-reach* niche accounts to borrow their audience; auto-suggests accounts and tracks which ones your replies actually land with.
 
-### Action queue
-- [Tend your threads](tend-threads.md) — answer the people who replied to / mentioned you, freshest first, one click to the thread. The highest-ordered growth action (author-engaged replies grade highest; keeping a convo alive is what dedup promotes), built on the notifications harvest.
+### Relationship tabs — one horizontal accordion row (`renderRelationshipTabs`, 2026-07-08)
+The three surfaces below render as a single horizontal tab row above the reply queue (Threads / Your
+circle / Supporters), accordion — at most one body open at a time, with count badges as the
+top-level notifications (Threads = actionable amber untended count; the others = a muted account
+count). Their mechanics are unchanged; only the container is (three stacked collapsible panels → one
+tab row).
+- [Tend your threads](tend-threads.md) — answer the people who replied to / mentioned you, freshest first, ✓ to mark done, one click to the thread. The highest-ordered growth action (author-engaged replies grade highest; keeping a convo alive is what dedup promotes), built on the notifications harvest.
+- [Learning loop — "Who you show up with"](learning-loop.md) ("Your circle" tab) — which accounts your replies do well with, measured via a daily reply-engagement pass and attributed to the parent account.
+- [Reciprocity — "Who shows up for you"](reciprocity.md) ("Supporters" tab) — who replies to / mentions you (harvested from your notifications), fused into mutual / fan labels, with an anti-pod guard.
 
-### Insight panels — read-only, compound over time
-- [Warm-up / momentum meter](momentum.md) — your daily account momentum from real activity; peaks at a *healthy* pace, never rewards unsafe volume. Now carries a **daily-cadence coach** (the balance of replies + a spaced original).
-- [Learning loop — "Who you show up with"](learning-loop.md) — which accounts your replies do well with, measured via a daily reply-engagement pass and attributed to the parent account.
-- [Reciprocity — "Who shows up for you"](reciprocity.md) — who replies to / mentions you (harvested from your notifications), fused into mutual / fan labels, with an anti-pod guard.
+### Insight strip — read-only, always visible
+- [Warm-up / momentum meter](momentum.md) — the "Today strip" at the top of the dock: your daily account momentum from real activity; peaks at a *healthy* pace, never rewards unsafe volume. Carries the **daily-cadence coach** (the balance of replies + a spaced original).
 
 ### Cross-cutting
 - [Account safety (pace + reputation)](account-safety.md) — the hourly-volume / repeat-author / duplicate guards and the honest-mirror keystone (Goobi never celebrates a reply past the pace line).
