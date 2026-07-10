@@ -126,5 +126,9 @@ Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILO
   required for any input we add (else typing loses focus).
 - **Context invalidation.** Reloading the unpacked extension orphans the old content
   script; `teardown()` + the `invalidated` flag shut it down cleanly. Gate any new
-  recurring loop/observer on `contextOK()`.
+  recurring loop/observer on `contextOK()`, and re-check `invalidated`/`contextOK()`
+  after any `await` before touching the DOM/chrome. A global `window` `error` +
+  `unhandledrejection` catch-all (`isCtxInvalidated`) tears the script down and swallows
+  the "Extension context invalidated" throw that async continuations can still leak past
+  the per-call guards — so it never surfaces as an uncaught console error.
 - **Draft-only, BYO-key, no auto-post** are product invariants — don't break them.

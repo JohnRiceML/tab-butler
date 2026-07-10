@@ -73,6 +73,7 @@ async function loadFavicons(): Promise<void> {
   const hosts = [...new Set(xProducts.map((p) => faviconHost(p.url)).filter((h): h is string => !!h && !faviconCache.has(h)))];
   if (!hosts.length) return;
   const resp = await send<{ favicons?: Record<string, string> }>({ type: "GET_FAVICONS", hosts });
+  if (invalidated || !contextOK()) return; // context may have died during the await
   let any = false;
   for (const [h, d] of Object.entries(resp?.favicons || {})) { faviconCache.set(h, d); if (d) any = true; } // cache "" too (known miss)
   if (any) renderDock(); // upgrade the letter chips to the real favicon once it resolves
@@ -164,6 +165,18 @@ function teardown(): void {
   try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
   try { dismissPanel(); } catch { /* ignore */ }
 }
+
+/** Belt-and-suspenders for the orphaned-content-script race: when the extension is reloaded while
+ *  x.com stays open, the old script can throw "Extension context invalidated" from an ASYNC
+ *  continuation (a pending sendMessage/storage callback, a timer, an image load) that the per-call
+ *  guards can't wrap. Catch it globally, shut down quietly once, and swallow it so it never surfaces
+ *  as an uncaught console error. */
+function isCtxInvalidated(e: unknown): boolean {
+  const msg = (e as { message?: string } | null)?.message ?? String(e ?? "");
+  return /context invalidated|extension context/i.test(msg);
+}
+window.addEventListener("error", (ev) => { if (isCtxInvalidated(ev.error) || isCtxInvalidated(ev.message)) { teardown(); ev.preventDefault(); } }, true);
+window.addEventListener("unhandledrejection", (ev) => { if (isCtxInvalidated(ev.reason)) { teardown(); ev.preventDefault(); } });
 
 /* ---------- X DOM extraction (resilient to quote-tweets / virtualization) ---------- */
 
