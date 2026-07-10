@@ -1344,10 +1344,6 @@ const DOCK_CSS = `
 .rel-badge { min-width:15px; text-align:center; font-size:9px; font-weight:700; padding:1px 5px; border-radius:999px; background:rgba(214,154,92,.22); color:#e6d6ba; }
 .rel-badge.amber { background:#e89a3c; color:#1a1206; }
 .rel-body { border-top:.5px solid rgba(214,154,92,.1); flex:2 1 auto; min-height:max(200px, 36vh); overflow-y:auto; } /* an OPEN section is roomy: a generous floor (≥200px / 36vh) + double the reply list's grow, so it dominates the dock when expanded. Toggle it shut via its tab. (Only exists while open, so no effect collapsed.) */
-.ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
-.ins-ttl { font:600 12.5px -apple-system,system-ui,sans-serif; color:#f3ead9; } /* section title — bright on the dark dock (was #3a3027, dark-on-dark ~1.5:1, unreadable) */
-.ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
-.ins-car { font-size:10px; color:#8c7d68; width:10px; text-align:center; }
 .ins-body { padding:2px 14px 12px; }
 .ins-trend { font-size:11px; color:#6fcf7f; margin:2px 0 8px; font-weight:500; }
 .ins-fact { font-size:11px; color:#8c7d68; margin:2px 0 6px; } /* neutral insight line — green means POSITIVE, not "any insight" */
