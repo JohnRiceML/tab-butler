@@ -10,9 +10,9 @@ It shows a single colored progress bar with a mood label ("Cold start" → "Warm
 ## How the user uses it
 1. The user replies through Goobi and/or marks post ideas as "posted" over the course of a day.
 2. They click the Goobi launcher pill to open the dock (this also kicks off a background stats refresh).
-3. They see the momentum strip: a fill bar (width = score%, color = state), a label, and a cue. Early in the day it reads "Cold start" / muted; after a few replies it climbs through "Warming up" into "In flow"; a full healthy day with a shipped post and an active streak reaches "In the zone" (green, with a glow on the bar).
-4. If they idle for a while after building momentum, the cue softens to "Cooling off" (tapering). If they pile up replies past ~20/hr the strip turns amber ("ease off the throttle a touch"); past ~30/hr it turns red "Too hot — ease off" and the score drops.
-5. Below the bar, when own-post data is available, they read a plain "◷ N posts today · X views" fact (or "No posts yet today").
+3. They see the **Today strip** (tiered 2026-07-08 — the old six stacked equal-weight lines buried the reply queue): **row 1** is a compact summary — mini fill bar (width = score%, color = state) + colored state label + today's posts/views + the chain, with a ▸ caret (keyboard-accessible, aria-expanded); **row 2** is a single "next best move" coach line chosen by deterministic priority — **safety always wins the slot** (ease-off callout / caution cue), then the daily-shape nudge, then the algo/measured callout. The caret expands the full detail: momentum cue, daily shape, the 14-day activity dots + full chain, and the callout — every tooltip and evidence label intact (nothing was deleted, only tiered).
+4. If they idle for a while after building momentum, the (expanded) cue softens to "Cooling off" (tapering). If they pile up replies past ~20/hr the state label + coach line turn amber ("ease off the throttle a touch"); past ~30/hr they turn red "Too hot — ease off" and the score drops — visible even collapsed, since the label is in row 1 and safety owns row 2.
+5. In the summary row, when own-post data is available, they read a plain "N posts · X views" fact (or "no posts yet").
 
 ## How it works
 **Trigger / render.** The strip is built inside `x-copilot.ts:renderDock` (the `mom` block, ~lines 3057–3086), re-run on every dock render. It composes a `MomentumInput` and calls `computeMomentum` from `lib/momentum.ts`, then paints `m.score` (bar width), `m.color`, `m.label`, `m.cue`; `state === "peak"` adds a box-shadow glow.

@@ -617,6 +617,21 @@ original on a new point, so it bands as an own-theme idea, no false proof post);
 (Haiku judge + Sonnet regen) per generation. Residual: not monotonic per-batch (judge noise can
 wobble one fixture ±1); a re-judge-and-keep-best guard would cost a 4th call — deferred.
 
+**Dock "Today strip" redesign (2026-07-08, UX pass)** — the expanded dock stacked SIX status lines
+of identical size/weight/color (momentum label+cue, daily shape, post stat, chain, callout) between
+the header and the reply queue; several restated each other ("16 sent today" twice; three separate
+affirmations). Redesigned with tiering, not deletion:
+- **Row 1 — summary:** mini momentum bar + colored state label + posts/views + chain, one line,
+  with a ▸ caret (role=button, Enter/Space, aria-expanded).
+- **Row 2 — ONE coach line** ("the next best move"), deterministic priority: **safety always wins**
+  (ease-off callout red / caution cue amber — the honesty keystone stays front-and-center even
+  collapsed, agreeing with the pace chip + state label from the same `stt`), then the daily-shape
+  nudge, then the algo/measured callout. Bare affirmations only when nothing actionable exists.
+- **Caret-expanded detail:** everything the strip used to stack (cue, shape, 14-day dots + full
+  chain, callout) with every tooltip + measured/prior evidence label intact.
+- The strip got a faint background tint so status reads as a band distinct from the work queue;
+  light density trims on cards (`.it`/`.botacts`) and tabs. Six rows → two by default.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

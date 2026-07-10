@@ -1310,13 +1310,19 @@ const DOCK_CSS = `
 .dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
 .dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
 .pace { font-weight:500; white-space:nowrap; cursor:default; }
-.mom { padding:9px 14px 11px; border-bottom:.5px solid rgba(214,154,92,.1); flex:0 0 auto; }
-.mom-top { display:flex; align-items:center; gap:9px; }
+.mom { padding:8px 14px 9px; background:rgba(214,154,92,.045); border-bottom:.5px solid rgba(214,154,92,.12); flex:0 0 auto; }
+.mom-sum { display:flex; align-items:center; gap:8px; cursor:pointer; -webkit-user-select:none; user-select:none; border-radius:6px; }
 .mom-bar { flex:1; height:7px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; }
+.mom-bar.mini { flex:0 0 54px; height:6px; }
 .mom-fill { height:100%; border-radius:5px; transition:width .6s ease, background .3s; }
 .mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
+.mom-bits { display:flex; align-items:center; gap:5px; font-size:10.5px; color:#8c7d68; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; }
+.mom-car { flex:0 0 auto; color:#8c7d68; font-size:10px; }
+.mom-coach { font-size:11px; color:#b6a892; margin-top:6px; line-height:1.4; }
+.mom-coach.warn { color:#d6604a; font-weight:600; }
+.mom-coach.amber { color:#e89a3c; }
+.mom-detail { margin-top:4px; padding-top:3px; border-top:.5px dashed rgba(214,154,92,.12); }
 .mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
-.mom-stat { font-size:10.5px; color:#8c7d68; margin-top:5px; }
 .insight { border-bottom:.5px solid rgba(214,154,92,.1); }
 .ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
 .ins-ttl { font:600 12px -apple-system,system-ui,sans-serif; color:#3a3027; }
@@ -1358,7 +1364,7 @@ const DOCK_CSS = `
 .kitem { background:none; border:0; color:#f3ead9; text-align:left; font:500 12.5px -apple-system,system-ui,sans-serif;
          padding:8px 10px; border-radius:7px; cursor:pointer; }
 .kitem:hover { background:#2c241d; } .kitem:disabled { opacity:.5; cursor:default; }
-.tabs { display:flex; gap:4px; padding:0 14px 10px; flex:0 0 auto; }
+.tabs { display:flex; gap:4px; padding:0 14px 8px; flex:0 0 auto; }
 .tab { flex:1; border:.5px solid transparent; border-radius:9px; background:none; color:#8c7d68;
        font:500 11.5px -apple-system,system-ui,sans-serif; padding:7px 4px; cursor:pointer; white-space:nowrap; }
 .tab:hover { color:#cbb89c; } .tab.on { background:rgba(214,154,92,.13); border-color:rgba(214,154,92,.32); color:#e7b277; }
@@ -1455,9 +1461,9 @@ const DOCK_CSS = `
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; }
-.it { display:flex; flex-direction:column; padding:13px 16px; border-top:.5px solid rgba(214,154,92,.10); }
+.it { display:flex; flex-direction:column; padding:12px 16px 10px; border-top:.5px solid rgba(214,154,92,.10); }
 .top { display:flex; gap:12px; }
-.botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:11px; padding-top:10px; border-top:.5px solid rgba(214,154,92,.08); }
+.botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:8px; padding-top:7px; border-top:.5px solid rgba(214,154,92,.08); }
 .av { width:40px; height:40px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:#221c15; }
 .av.init { display:inline-flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:#fff; }
 .bodywrap { flex:1; min-width:0; display:flex; gap:12px; }
@@ -1799,6 +1805,7 @@ let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 let insightOpen = false; // the "who you show up with" learning panel (collapsed by default)
 let supportersOpen = false; // the "who shows up for you" reciprocity panel (collapsed by default)
 let threadsOpen = true; // the "tend your threads" action queue — open by default (it's a to-do, not an insight)
+let todayOpen = false; // the Today strip's full detail (cue/shape/dots/callout) — collapsed to summary+coach by default
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -3537,8 +3544,12 @@ function renderDock() {
   h.append(dhl, acts);
   d.append(h);
 
-  // Warm-up / momentum strip — your pacing TODAY (peaks at healthy, overheats past the line),
-  // reusing the SAME stt the pace chip read so they can never disagree. Real views ride beside it.
+  // Today strip — the same data the old six-line stack showed, TIERED so it stops burying the work
+  // queue: one compact summary row (momentum bar + state + today's facts), ONE "next best move"
+  // coach line, and the full detail (cue / shape / activity dots / callout, tooltips intact) behind
+  // a caret. The coach slot has a deterministic priority and SAFETY ALWAYS WINS it — at ease-off or
+  // caution the safety message owns the line, so the honesty keystone is front and center even
+  // collapsed (the pace chip + red state label agree with it, same stt).
   {
     const lastReply = replyLog.times.length ? Math.max(...replyLog.times) : 0;
     const lastPost = ideaQueue.reduce((mx, i) => (i.postedAt && i.postedAt > mx ? i.postedAt : mx), 0);
@@ -3547,37 +3558,67 @@ function renderDock() {
       repliesToday: repliesToday(), postedToday: postedToday(), replyStreak: replyStreak(),
       minsSinceLast: lastAt ? (Date.now() - lastAt) / 60000 : 9999, repLevel: stt.level,
     });
+    const ds = dailyShape({ repliesToday: repliesToday(), postedToday: postedToday(), repLevel: stt.level });
+    const dsTitle = "The healthy shape of a growth day — replies earn reach, a spaced original converts the profile clicks into follows. The ranker decays back-to-back posts, so space them.";
+    const postsByDay: Record<string, number> = {};
+    for (const [k, sn] of Object.entries(learn.snaps)) postsByDay[k] = sn.posts;
+    const cells = activityCells(replyLog.daily, postsByDay, Date.now(), dayKey, 14);
+    const ch = chain(cells);
+    let postsThisWeek = 0; for (const c of cells.slice(-7)) postsThisWeek += c.posts;
+    const co = pickCallout({ easeoff: stt.level === "easeoff", trend: accountTrend(learn.snaps, Date.now())?.state ?? null, chainDays: ch.current, repliesToday: repliesToday(), postsThisWeek, freeTier: premiumTier === "free" });
+    const coText = (co.kind === "measured" ? "✓ " : "✦ ") + co.text;
+    const coTitle = co.why + (co.kind === "measured" ? " — measured on your own data." : " — an algo prior (directional; the live ranker is undisclosed).");
+    const chainTitle = `Consecutive days with a Goobi reply or a shipped post (best in this window: ${ch.best}). Measured activity. X has no literal streak bonus — consistency pays through repeat engagement (affinity) and account reputation, which is exactly what a gap decays.`;
+
     const mom = document.createElement("div"); mom.className = "mom";
-    const top = document.createElement("div"); top.className = "mom-top";
-    const bar = document.createElement("div"); bar.className = "mom-bar";
+
+    // Row 1 — summary: [mini bar][state] · posts/views · chain … caret. Click/Enter toggles detail.
+    const sum = document.createElement("div"); sum.className = "mom-sum";
+    sum.setAttribute("role", "button"); sum.tabIndex = 0;
+    sum.setAttribute("aria-expanded", String(todayOpen));
+    sum.title = todayOpen ? "Hide today's detail" : "Show today's detail — momentum cue, daily shape, 14-day activity, and the algo callout";
+    const toggleToday = () => { todayOpen = !todayOpen; renderDock(); };
+    sum.onclick = toggleToday;
+    sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleToday(); } };
+    const bar = document.createElement("div"); bar.className = "mom-bar mini";
     const fill = document.createElement("div"); fill.className = "mom-fill"; fill.style.width = m.score + "%"; fill.style.background = m.color;
     if (m.state === "peak") fill.style.boxShadow = `0 0 8px ${m.color}`;
     bar.append(fill);
-    const lbl = document.createElement("div"); lbl.className = "mom-label"; lbl.textContent = m.label; lbl.style.color = m.color;
-    top.append(bar, lbl);
-    const cue = document.createElement("div"); cue.className = "mom-cue"; cue.textContent = m.cue;
-    mom.append(top, cue);
-    // Daily-shape coach: the BALANCE of the day (replies + a spaced original), not raw volume.
-    // Safety-deferent — silent at ease-off, never nudges more replies at caution.
-    const ds = dailyShape({ repliesToday: repliesToday(), postedToday: postedToday(), repLevel: stt.level });
-    if (ds) { const dl = document.createElement("div"); dl.className = "mom-cue"; dl.textContent = "◆ " + ds.text; dl.title = "The healthy shape of a growth day — replies earn reach, a spaced original converts the profile clicks into follows. The ranker decays back-to-back posts, so space them."; mom.append(dl); }
-    // Real X-reported views today — a neutral FACT (never colored/celebrated), only when we have the data.
+    const lbl = document.createElement("span"); lbl.className = "mom-label"; lbl.textContent = m.label; lbl.style.color = m.color;
+    const bits = document.createElement("span"); bits.className = "mom-bits";
     if (ownStats !== undefined) {
       const v = ownViewsToday();
-      const stat = document.createElement("div"); stat.className = "mom-stat";
-      stat.textContent = v.posts ? `◷ ${v.posts} post${v.posts === 1 ? "" : "s"} today${v.hasViews ? ` · ${fmtCount(v.views)} views` : ""}` : "No posts yet today";
+      const stat = document.createElement("span");
+      stat.textContent = "· " + (v.posts ? `${v.posts} post${v.posts === 1 ? "" : "s"}${v.hasViews ? ` · ${fmtCount(v.views)} views` : ""}` : "no posts yet");
       stat.title = "X-reported views on the posts you've shipped today, pulled from the X-data API. Refreshed on dock open (~hourly), not live.";
-      mom.append(stat);
+      bits.append(stat);
     }
-    // ---- the "show up" chain: measured activity dots + ONE algo-backed callout (gamified, honest) ----
-    // Every dot/number is measured (Goobi replies + shipped posts per day); the flame never fires
-    // past the safety line; the callout is contextual and names its evidence class in the tooltip.
-    {
-      const postsByDay: Record<string, number> = {};
-      for (const [k, sn] of Object.entries(learn.snaps)) postsByDay[k] = sn.posts;
-      const cells = activityCells(replyLog.daily, postsByDay, Date.now(), dayKey, 14);
-      const ch = chain(cells);
-      let postsThisWeek = 0; for (const c of cells.slice(-7)) postsThisWeek += c.posts;
+    const chainEl = document.createElement("span");
+    chainEl.textContent = "· " + (stt.level === "easeoff" ? `⏸ ${ch.current}d chain` : ch.current >= 2 ? `🔥 ${ch.current}d chain` : ch.current === 1 ? "1 active day" : "start a chain");
+    chainEl.title = chainTitle;
+    bits.append(chainEl);
+    const car = document.createElement("span"); car.className = "mom-car"; car.textContent = todayOpen ? "▾" : "▸";
+    sum.append(bar, lbl, bits, car);
+    mom.append(sum);
+
+    // Row 2 — the ONE coach line. Priority: safety (ease-off callout / caution cue) → daily shape
+    // (the actionable next move) → the algo/measured callout. Never empty; a bare affirmation only
+    // when nothing actionable exists.
+    let coachSrc: "callout" | "cue" | "shape";
+    const coach = document.createElement("div"); coach.className = "mom-coach";
+    if (stt.level === "easeoff") { coachSrc = "callout"; coach.textContent = coText; coach.title = coTitle; coach.classList.add("warn"); }
+    else if (stt.level === "caution") { coachSrc = "cue"; coach.textContent = m.cue; coach.classList.add("amber"); }
+    else if (ds) { coachSrc = "shape"; coach.textContent = "◆ " + ds.text; coach.title = dsTitle; }
+    else { coachSrc = "callout"; coach.textContent = coText; coach.title = coTitle; }
+    mom.append(coach);
+
+    // Expanded detail — everything the strip used to stack (minus the line already in the coach
+    // slot): momentum cue, daily shape, the 14-day dots + full chain, and the callout. Every
+    // dot/number stays measured and every tooltip keeps its evidence class (honesty intact).
+    if (todayOpen) {
+      const det = document.createElement("div"); det.className = "mom-detail";
+      if (coachSrc !== "cue") { const cue = document.createElement("div"); cue.className = "mom-cue"; cue.textContent = m.cue; det.append(cue); }
+      if (ds && coachSrc !== "shape") { const dl = document.createElement("div"); dl.className = "mom-cue"; dl.textContent = "◆ " + ds.text; dl.title = dsTitle; det.append(dl); }
       const shades = ["rgba(214,154,92,.15)", "rgba(232,154,60,.4)", "rgba(232,154,60,.7)", "#e89a3c"];
       const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:7px";
       const dots = document.createElement("div"); dots.style.cssText = "display:flex;gap:3px;align-items:center"; dots.setAttribute("aria-hidden", "true"); // decorative — the chain label + per-dot titles carry the data
@@ -3587,17 +3628,14 @@ function renderDock() {
         dot.title = `${c.day} — ${c.replies} ${c.replies === 1 ? "reply" : "replies"} · ${c.posts} ${c.posts === 1 ? "post" : "posts"} (measured: sent through Goobi)`;
         dots.append(dot);
       });
-      const chainEl = document.createElement("span");
-      chainEl.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#8c7d68;white-space:nowrap";
-      chainEl.textContent = stt.level === "easeoff" ? `⏸ ${ch.current}-day chain` : ch.current >= 2 ? `🔥 ${ch.current}-day chain` : ch.current === 1 ? "1 active day" : "start a chain";
-      chainEl.title = `Consecutive days with a Goobi reply or a shipped post (best in this window: ${ch.best}). Measured activity. X has no literal streak bonus — consistency pays through repeat engagement (affinity) and account reputation, which is exactly what a gap decays.`;
-      row.append(dots, chainEl);
-      mom.append(row);
-      const co = pickCallout({ easeoff: stt.level === "easeoff", trend: accountTrend(learn.snaps, Date.now())?.state ?? null, chainDays: ch.current, repliesToday: repliesToday(), postsThisWeek, freeTier: premiumTier === "free" });
-      const coEl = document.createElement("div"); coEl.className = "mom-cue";
-      coEl.textContent = (co.kind === "measured" ? "✓ " : "✦ ") + co.text;
-      coEl.title = co.why + (co.kind === "measured" ? " — measured on your own data." : " — an algo prior (directional; the live ranker is undisclosed).");
-      mom.append(coEl);
+      const chainFull = document.createElement("span");
+      chainFull.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#8c7d68;white-space:nowrap";
+      chainFull.textContent = stt.level === "easeoff" ? `⏸ ${ch.current}-day chain` : ch.current >= 2 ? `🔥 ${ch.current}-day chain` : ch.current === 1 ? "1 active day" : "start a chain";
+      chainFull.title = chainTitle;
+      row.append(dots, chainFull);
+      det.append(row);
+      if (coachSrc !== "callout") { const coEl = document.createElement("div"); coEl.className = "mom-cue"; coEl.textContent = coText; coEl.title = coTitle; det.append(coEl); }
+      mom.append(det);
     }
     d.append(mom);
   }
