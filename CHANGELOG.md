@@ -671,6 +671,10 @@ band. Net: three panel-headers + up to three open bodies → one tab row + one b
     the badges do the notifying — and an expanded tab body is **capped at `max-height:34vh` with its
     own scroll**, so opening one can never push the reply queue off-screen again. The `.dl` reply
     list is `flex:1` in the dock's flex column, so it now reliably absorbs the freed height.
+  - **Follow-up 2 (live: the capped body was a cramped sliver):** replaced the `max-height:34vh`
+    cap with a proper flex SPLIT — an open `.rel-body` and the `.dl` reply list are both `flex:1 1 0`,
+    so opening a section gives it ~half the flexible area (roomy + scrollable) while the reply list
+    keeps the other half; collapsed, the reply list takes it all. No more sliver, no more off-screen.
 
 ## Next phase
 
