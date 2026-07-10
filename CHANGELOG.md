@@ -631,6 +631,14 @@ affirmations). Redesigned with tiering, not deletion:
   chain, callout) with every tooltip + measured/prior evidence label intact.
 - The strip got a faint background tint so status reads as a band distinct from the work queue;
   light density trims on cards (`.it`/`.botacts`) and tabs. Six rows → two by default.
+- **Round 2 (live feedback: "this is all I see now"): Tend-your-threads compressed.** With a full
+  notifications harvest the panel rendered a 3-line explainer + 8 rows (each with a redundant
+  "● live" badge) + a 3-line footer + "111 to tend" — pushing the reply queue entirely off-screen.
+  Now: top **3 rows** + "▾ N more" toggle (up to the ranked 8); explainer → the panel title's
+  tooltip; footer → one terse line with full disclosures on hover; freshness rides on the age label
+  (green while live) instead of a per-row badge; the count caps at **"20+ to tend"** with the exact
+  number in its tooltip (a queue, not a guilt ledger). Every honesty disclosure is preserved, one
+  hover away.
 
 ## Next phase
 

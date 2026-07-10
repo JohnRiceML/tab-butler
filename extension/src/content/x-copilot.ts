@@ -1806,6 +1806,7 @@ let insightOpen = false; // the "who you show up with" learning panel (collapsed
 let supportersOpen = false; // the "who shows up for you" reciprocity panel (collapsed by default)
 let threadsOpen = true; // the "tend your threads" action queue — open by default (it's a to-do, not an insight)
 let todayOpen = false; // the Today strip's full detail (cue/shape/dots/callout) — collapsed to summary+coach by default
+let threadsAll = false; // tend-your-threads: false = top 3 rows (the dock is a queue, not a ledger), true = the full ranked 8
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -2523,18 +2524,21 @@ function renderThreadsPanel(d: HTMLElement): void {
   const head = document.createElement("div"); head.className = "ins-head";
   head.onclick = () => { threadsOpen = !threadsOpen; renderDock(); };
   const ttl = document.createElement("div"); ttl.className = "ins-ttl"; ttl.textContent = "Tend your threads";
+  // The "why" lives here (hover), not as a body paragraph — it was costing 3 lines on every render.
+  ttl.title = "Answering a reply on your own thread is the top-ranked growth move: you keep the thread alive (the branch the ranker promotes) and author-engaged replies grade highest. Grounded in the open-source ranker (dedup_conversation_filter + the reply grade).";
   const car = document.createElement("div"); car.className = "ins-car"; car.textContent = threadsOpen ? "▾" : "▸";
-  const cnt = document.createElement("div"); cnt.className = "ins-cnt"; cnt.textContent = untended ? `${untended} to tend` : "all tended";
+  const cnt = document.createElement("div"); cnt.className = "ins-cnt";
+  // Cap the number: "111 to tend" is a guilt list, not a queue — past 20 the exact count adds
+  // nothing actionable (the panel surfaces the freshest few; the rest age out of the window).
+  cnt.textContent = untended ? `${untended > 20 ? "20+" : untended} to tend` : "all tended";
+  cnt.title = untended > 20 ? `${untended} unanswered replies/mentions in the last 3 days — freshest first; older ones age out of the window.` : "";
   if (untended) cnt.style.color = "#e89a3c";
   head.append(ttl, cnt, car); wrap.append(head);
 
   if (threadsOpen) {
     const body = document.createElement("div"); body.className = "ins-body";
-    const lead = document.createElement("div"); lead.className = "ins-fact";
-    lead.textContent = "Answering a reply on your own thread is the top-ranked growth move — you keep it alive (the branch the ranker promotes) and author-engaged replies grade highest.";
-    lead.title = "Grounded in the open-source ranker: author-engaged replies are the highest-ordered action, and dedup_conversation_filter promotes the liveliest single branch of a conversation.";
-    body.append(lead);
-    for (const r of rows) {
+    const shown = threadsAll ? rows : rows.slice(0, 3); // a queue, not a ledger — the reply list below needs the room
+    for (const r of shown) {
       const row = document.createElement("div"); row.className = "ins-row";
       const av = avatarChip(r.handle, r.avatar); av.style.cursor = "pointer"; av.title = `Open @${r.handle}`;
       av.onclick = () => window.open(`https://x.com/${r.handle}`, "_blank", "noopener");
@@ -2542,14 +2546,19 @@ function renderThreadsPanel(d: HTMLElement): void {
       const mid = document.createElement("div"); mid.className = "ins-mid";
       const top = document.createElement("div"); top.className = "ins-top";
       const h = document.createElement("span"); h.className = "ins-h"; h.textContent = "@" + r.handle; top.append(h);
-      if (r.fresh === "live") { const b = document.createElement("span"); b.className = "ins-badge"; b.textContent = "● live"; b.style.color = "#6fcf7f"; b.title = "still in the thread's live window — answering now compounds most"; top.append(b); }
+      // Freshness rides ON the age label (green = live) — a separate "● live" badge per row was
+      // pure noise once every row in a fresh harvest qualified.
+      const age = document.createElement("span"); age.className = "ins-ar"; age.textContent = r.ageLabel;
+      if (r.fresh === "live") { age.style.color = "#6fcf7f"; age.title = "still in the thread's live window — answering now compounds most"; }
+      top.append(age);
       if (r.tended) { const b = document.createElement("span"); b.className = "ins-thin"; b.textContent = "likely tended"; b.title = "You sent a Goobi reply to them after they engaged you — a lossy handle+time guess (could be a different post), not a confirmed answer."; top.append(b); }
       mid.append(top);
-      const meta = document.createElement("div"); meta.className = "ins-meta";
-      const snip = r.text ? `"${r.text.length > 90 ? r.text.slice(0, 90) + "…" : r.text}" · ` : "";
-      meta.textContent = snip + r.ageLabel;
-      meta.title = "Their reply/mention, captured from your notifications (stays on your device).";
-      mid.append(meta);
+      if (r.text) {
+        const meta = document.createElement("div"); meta.className = "ins-meta";
+        meta.textContent = `"${r.text.length > 80 ? r.text.slice(0, 80) + "…" : r.text}"`;
+        meta.title = "Their reply/mention, captured from your notifications (stays on your device).";
+        mid.append(meta);
+      }
       row.append(mid);
       const act = document.createElement("button");
       act.textContent = "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
@@ -2559,8 +2568,20 @@ function renderThreadsPanel(d: HTMLElement): void {
       row.append(act);
       body.append(row);
     }
+    if (rows.length > 3) {
+      const more = document.createElement("div"); more.className = "ins-more";
+      more.style.cursor = "pointer";
+      more.setAttribute("role", "button"); more.tabIndex = 0;
+      more.textContent = threadsAll ? "▴ show fewer" : `▾ ${rows.length - 3} more`;
+      const toggleAll = () => { threadsAll = !threadsAll; renderDock(); };
+      more.onclick = toggleAll;
+      more.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleAll(); } };
+      body.append(more);
+    }
+    // One terse line; the full honesty text stays a hover away (same disclosures, less real estate).
     const foot = document.createElement("div"); foot.className = "ins-foot";
-    foot.textContent = "People who replied to or mentioned you, freshest first — a live thread is where a reply still travels. We can't see which of your posts each is on, or confirm you've answered (\"tended\" is a lossy guess). Opens the thread so you reply in your own words. From your notifications, device-local.";
+    foot.textContent = "Freshest first · opens the thread, you reply in your own words · \"tended\" is a guess.";
+    foot.title = "People who replied to or mentioned you, freshest first — a live thread is where a reply still travels. We can't see which of your posts each is on, or confirm you've answered (\"tended\" is a lossy handle+time guess). Opens the thread on X so you reply in your own words; Goobi never posts for you. From your notifications, device-local.";
     body.append(foot);
     wrap.append(body);
   }

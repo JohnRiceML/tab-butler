@@ -13,7 +13,8 @@ Why it matters (grounded in the open-sourced 2026 ranker): **author-engaged repl
 ## How the user uses it
 
 - It's a panel in the dock, **open by default** (it's a to-do, not a read-only insight). Collapses like the others.
-- Each row: avatar (tap → their profile), @handle, a live/fresh badge, their reply snippet, how long ago, and **Reply →** (opens the thread; Goobi never posts for you).
+- **Compact by design** (2026-07-08 UX pass — the first cut ate the whole dock): **top 3 rows** by default with a "▾ N more" toggle up to the ranked 8; the "why" explainer lives on the panel title's hover; the honesty footer is one terse line with the full disclosures in its tooltip; the header count caps at **"20+ to tend"** (an exact 111 is a guilt list, not a queue — the tooltip carries the real number).
+- Each row: avatar (tap → their profile), @handle, the age (colored green while the thread is still live — freshness rides on the timestamp, no separate badge), their reply snippet, and **Reply →** (opens the thread; Goobi never posts for you).
 - Rows you've likely already answered sink to the bottom and show a soft "likely tended" tag.
 - It only appears when there's something recent to tend — no empty state.
 
