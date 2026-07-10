@@ -1330,7 +1330,7 @@ const DOCK_CSS = `
 .rel-tab.on { background:rgba(214,154,92,.13); border-color:transparent; color:#f3ead9; }
 .rel-badge { min-width:15px; text-align:center; font-size:9px; font-weight:700; padding:1px 5px; border-radius:999px; background:rgba(214,154,92,.22); color:#e6d6ba; }
 .rel-badge.amber { background:#e89a3c; color:#1a1206; }
-.rel-body { border-top:.5px solid rgba(214,154,92,.1); }
+.rel-body { border-top:.5px solid rgba(214,154,92,.1); max-height:34vh; overflow-y:auto; } /* bounded so an expanded tab can't push the reply queue off-screen */
 .ins-head { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; user-select:none; }
 .ins-ttl { font:600 12.5px -apple-system,system-ui,sans-serif; color:#f3ead9; } /* section title — bright on the dark dock (was #3a3027, dark-on-dark ~1.5:1, unreadable) */
 .ins-cnt { font-size:10px; color:#8c7d68; margin-left:auto; }
@@ -1813,7 +1813,10 @@ let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
 // horizontal tab row now, accordion — at most one body open at a time. null = all collapsed (just
 // the tabs + their count badges). Defaults to "threads" (the action queue) when there's something to tend.
 type RelTab = "threads" | "invest" | "supporters" | null;
-let relTab: RelTab = "threads";
+// Collapsed by DEFAULT so the reply-spots list is visible the moment you open the dock — the count
+// badges do the notifying; you tap a tab only when you want its body. (Open-by-default pushed the
+// reply queue off-screen.)
+let relTab: RelTab = null;
 let todayOpen = false; // the Today strip's full detail (cue/shape/dots/callout) — collapsed to summary+coach by default
 let threadsAll = false; // tend-your-threads: false = top 3 rows (the dock is a queue, not a ledger), true = the full ranked 8
 

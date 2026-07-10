@@ -666,6 +666,11 @@ account count (or nothing while still learning). The three render functions beca
 tab is their header now); `relTab` state replaces `threadsOpen`/`insightOpen`/`supportersOpen`
 (defaults to Threads). The Today strip's momentum bar widened for more presence as the top status
 band. Net: three panel-headers + up to three open bodies → one tab row + one body.
+  - **Follow-up (live: "sections push the reply content off-screen"):** the tabs now default
+    **collapsed** (`relTab = null`) so the reply-spots list is visible the instant the dock opens —
+    the badges do the notifying — and an expanded tab body is **capped at `max-height:34vh` with its
+    own scroll**, so opening one can never push the reply queue off-screen again. The `.dl` reply
+    list is `flex:1` in the dock's flex column, so it now reliably absorbs the freed height.
 
 ## Next phase
 
