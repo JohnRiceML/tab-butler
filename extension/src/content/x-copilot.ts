@@ -628,11 +628,19 @@ function badge(el: HTMLElement, reason: string, category?: string, score?: numbe
   if (existing) {
     // Already badged — keep the label/colors current (category re-classified on a
     // Rescan, score drifts, or you just commented), so it never shows a stale value.
-    existing.textContent = label;
-    existing.title = tip;
-    existing.style.background = bg;
-    existing.style.color = fg;
-    el.style.borderLeftColor = bg;
+    // CRITICAL: only WRITE when the value actually changed. `bodyObs` watches
+    // {childList, subtree} on <body>, and these badges live inside articles; an
+    // unconditional `textContent = label` recreates the text node every pass — a
+    // childList mutation that retriggers requestScan → scan → badge → mutation, a
+    // ~60fps feedback loop. On a normal feed it's a few badges (tolerable); right
+    // after you post a reply X re-renders the whole thread (many articles) while
+    // Goobi's celebration + the dock re-render land in the same frames, and the
+    // compounded per-frame work saturates the main thread until the tab crashes.
+    if (existing.textContent !== label) existing.textContent = label;
+    if (existing.title !== tip) existing.title = tip;
+    if (existing.style.background !== bg) existing.style.background = bg;
+    if (existing.style.color !== fg) existing.style.color = fg;
+    if (el.style.borderLeftColor !== bg) el.style.borderLeftColor = bg;
     return;
   }
   el.querySelector("[data-tbx-add]")?.remove(); // surfacing replaces the faint "+ Add" affordance
