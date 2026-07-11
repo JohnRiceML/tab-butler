@@ -192,7 +192,10 @@ export async function draftReply(post: { author: string; text: string; context?:
   return cleanDraft(reply); // dashes + quote-wrapping net (prompt says it, this guarantees it)
 }
 
-export interface PostIdea { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number; }
+/** Per-idea quality call-out from the judge — surfaced in the UI so the user can triage (ship the
+ *  strong, fix the ok/weak, skip the rest). Distinct from the virality band (which is source reach). */
+export interface Grade { tier: "strong" | "ok" | "weak"; lever?: string; callout?: string; fixable?: boolean; }
+export interface PostIdea { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number; grade?: Grade; }
 export interface OwnPostLite { text: string; likes?: number; reposts?: number; }
 
 /** Turn over-performing posts in the user's niche into ORIGINAL post ideas in
@@ -240,23 +243,37 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
  *  dropped (honest — it bands as an own-theme idea, no false proof post). */
 async function refinePostIdeas(key: string, ideas: PostIdea[], userMsg: string): Promise<PostIdea[]> {
   if (ideas.length < 2) return ideas;
+  const gradeBatch = async (batch: PostIdea[], indexNote = ""): Promise<Grade[]> => {
+    const msg = `${userMsg}\n\nGrade these ${batch.length} generated ideas${indexNote}, in order:\n${batch.map((d, i) => `${i + 1}. ${d.text}`).join("\n\n")}`;
+    const v = await callDirect<{ grades?: Grade[] }>(key, "claude-haiku-4-5", POST_IDEAS_JUDGE_SYSTEM, msg, 700);
+    return (v.grades || []).map((g) => ({ tier: g?.tier === "strong" || g?.tier === "weak" ? g.tier : "ok", lever: (g?.lever || "").trim() || undefined, callout: (g?.callout || "").trim() || undefined, fixable: g?.fixable !== false }));
+  };
   try {
-    const judgeMsg = `${userMsg}\n\nThe ${ideas.length} generated ideas to swap-test:\n${ideas.map((d, i) => `${i + 1}. ${d.text}`).join("\n\n")}`;
-    const verdict = await callDirect<{ swapTestFails?: number[] }>(key, "claude-haiku-4-5", POST_IDEAS_JUDGE_SYSTEM, judgeMsg, 300);
-    const fails = (verdict.swapTestFails || []).filter((n) => Number.isInteger(n) && n >= 1 && n <= ideas.length);
-    if (!fails.length) return ideas;
-    const flagged = fails.map((n) => ideas[n - 1].text);
-    const regenMsg = `${userMsg}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, i) => `${i + 1}. ${t}`).join("\n\n")}`;
-    const re = await callDirect<{ ideas?: { text?: string; why?: string; pattern?: string }[] }>(key, "claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, regenMsg, 1600);
     const out = ideas.slice();
-    // Replace text AND its rationale — a regenerated idea is a new point, so carrying over the pass-1
-    // why/pattern would describe text that no longer exists. source is dropped (it's now an original).
-    fails.forEach((n, k) => {
-      const r = (re.ideas || [])[k];
-      const txt = cleanDraft(r?.text || "");
-      if (!txt) return;
-      out[n - 1] = { ...out[n - 1], text: txt, source: "", why: (r?.why || "").trim() || "Rewritten to be specific to your own work, not a niche template.", pattern: (r?.pattern || "").trim() };
-    });
+    const grades = await gradeBatch(out);
+    out.forEach((d, i) => { if (grades[i]) d.grade = grades[i]; }); // attach the call-out to every idea
+    // Auto-fix the WEAK ones (the second pass): regenerate, then RE-GRADE just those so their shown
+    // call-out matches the new text (never a stale grade). source dropped — a regen is an original.
+    const fails = out.map((d, i) => (d.grade?.tier === "weak" ? i : -1)).filter((i) => i >= 0);
+    if (fails.length) {
+      const flagged = fails.map((i) => out[i].text);
+      const regenMsg = `${userMsg}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, k) => `${k + 1}. ${t}`).join("\n\n")}`;
+      const re = await callDirect<{ ideas?: { text?: string; why?: string; pattern?: string }[] }>(key, "claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, regenMsg, 1600);
+      const regenerated: { idx: number; idea: PostIdea }[] = [];
+      fails.forEach((idx, k) => {
+        const r = (re.ideas || [])[k];
+        const txt = cleanDraft(r?.text || "");
+        if (!txt) return;
+        out[idx] = { ...out[idx], text: txt, source: "", why: (r?.why || "").trim() || "Rewritten to be specific to your own work, not a niche template.", pattern: (r?.pattern || "").trim(), grade: undefined };
+        regenerated.push({ idx, idea: out[idx] });
+      });
+      if (regenerated.length) {
+        try {
+          const fresh = await gradeBatch(regenerated.map((r) => r.idea), " (each rewritten to be more specific)");
+          regenerated.forEach((r, k) => { out[r.idx].grade = fresh[k] || { tier: "ok" }; });
+        } catch { /* re-grade is best-effort — a regenerated idea just shows no badge */ }
+      }
+    }
     return out;
   } catch { return ideas; }
 }

@@ -676,6 +676,20 @@ band. Net: three panel-headers + up to three open bodies → one tab row + one b
     so opening a section gives it ~half the flexible area (roomy + scrollable) while the reply list
     keeps the other half; collapsed, the reply list takes it all. No more sliver, no more off-screen.
 
+**Post-ideas: per-idea GRADE + call-out (2026-07-08, "a better way to manage / call things out").**
+The second-pass judge already graded each idea to drive the auto-rewrite, but the user never saw it —
+the only row signal was the virality band (the SOURCE post's reach, not the idea's quality). Now the
+judge returns a per-idea `{tier: strong|ok|weak, lever, callout (≤10 words), fixable}`;
+`refinePostIdeas` attaches it to every `PostIdea` → `IdeaRecord.grade` (and re-grades the regenerated
+subset so a call-out never describes stale text). The UI surfaces it: a colored **tier chip + the
+call-out** on each row, the working list sorts **strong-first**, the header shows a **batch summary**
+(N strong · N ok · N weak), and ok/weak ideas get an **✎ Improve** button that reuses the rewrite
+seeded with the call-out (and clears the now-stale grade). Live-verified for John's niche: a batch
+graded 3 strong · 2 ok · 0 weak with sharp reasons ("true but generic survivorship-bias restatement
+of @levelsio"; "echoes @ai_tinkerer's demo/eval split, lacks your angle"). `POST_IDEAS_JUDGE_SYSTEM`
+now returns `grades[]` (weak = the swap-test fail that drives the regen). Turns the queue from "5 rows
+to read" into "ship these 2, fix this 1." Gate: tsc + build; 16/16 suites (prompts 26); Layer-A 47.
+
 ## Next phase
 
 - **"What's working" learning loop** (the post-ideas "bold bet", deferred on purpose

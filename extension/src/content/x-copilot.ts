@@ -1402,6 +1402,9 @@ const DOCK_CSS = `
 .idea.open .idea-hook { white-space:normal; }
 .idea-meta { font-size:10.5px; color:#8c7d68; line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .idea-meta b { font-weight:700; }
+.idea-summary { font-size:11px; color:#8c7d68; margin-top:6px; } .idea-summary b { font-weight:700; }
+.idea-improve { border:.5px solid rgba(232,154,60,.4); background:rgba(232,154,60,.14); color:#e89a3c; border-radius:9px; padding:8px 12px; font:600 12px inherit; cursor:pointer; }
+.idea-improve:hover { background:rgba(232,154,60,.22); } .idea-improve:disabled { opacity:.6; cursor:default; }
 .idea.open .idea-meta { display:none; }
 .idea-rowact { flex:0 0 auto; display:flex; align-items:center; gap:2px; padding:0 8px 0 2px; }
 .idea-quickopen { border:0; background:none; color:${ACCENT}; font-size:15px; line-height:1; width:30px; height:30px; border-radius:8px; cursor:pointer; }
@@ -1789,10 +1792,12 @@ let dockSort: DockSort = "best";
 type DockView = "replies" | "ideas" | "targets"; // top-level dock mode: reply spots vs post ideas vs big-account targeting
 let dockView: DockView = "replies";
 interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; views?: number; } // the real over-performing post we remixed
+interface IdeaGrade { tier: "strong" | "ok" | "weak"; lever?: string; callout?: string; fixable?: boolean; } // per-idea quality call-out from the judge (distinct from the virality band = source reach)
 interface IdeaRecord {
   id: string; text: string; source: string; pattern: string; why: string;
   shape?: Shape; // code-classified at creation — links the model's "pattern" to the measured shape table
   band?: Band; basis?: string; sortScore?: number; // honest virality (band cites the source's real rank)
+  grade?: IdeaGrade;                               // the quality tier + call-out surfaced on the row
   virality?: number;                               // legacy: old persisted records render via a fallback
   src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
   createdAt: number; lastEditedAt: number; postedAt?: number;
@@ -2861,7 +2866,7 @@ async function generateIdeas() {
     }
     if (!winners.length) { ideasError = (await verifyApiAlive()) ? "Didn't find enough strong posts in your niche. Use fewer, broader keywords in your niche setting (e.g. \"AI, SaaS, founders\") — the words before the \";\" drive the search." : "The X-data API returned nothing usable — your RapidAPI key may not be subscribed to the right provider (twitter241). Check your subscription in the popup."; return; }
     const ownPosts = await getOwnPosts(); // cheap (cached ~24h, [] if no handle) — voice anchor + de-dupe
-    const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number }[]; error?: string }>({
+    const resp = await send<{ ideas?: { text: string; source: string; pattern: string; why: string; critique: string; hookStrength: number; grade?: IdeaGrade }[]; error?: string }>({
       type: "POST_IDEAS",
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers, shape: t.shape })),
       ownPosts,
@@ -2888,7 +2893,7 @@ async function generateIdeas() {
       const sourceStrong = w && (w.followers ?? 0) > 0 ? isBreakout(w) : undefined; // real over-performer vs its size, not just rank #1
       const { band, sort, basis } = bandFor(anchor, d.hookStrength ?? 0, !!w, winners.length, sourceStrong); // poolSize → thin-pool haircut; sourceStrong → Strong needs a real breakout
       return { id: newIdeaId(), text: d.text, source: d.source, pattern: d.pattern, why: d.why,
-        band, basis, sortScore: sort,
+        band, basis, sortScore: sort, grade: d.grade,
         shape: classifyShape(d.text),
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts, views: w.views } : undefined,
         status: "working", createdAt: now, lastEditedAt: now };
@@ -2936,8 +2941,9 @@ function postedStreak(): number {
 }
 /** Working drafts, pinned-first then newest then strongest. */
 function workingIdeas(): IdeaRecord[] {
+  const tierRank = (i: IdeaRecord) => TIER_UI[i.grade?.tier ?? ""]?.rank ?? 1; // ungraded sorts with "ok"
   return ideaQueue.filter((i) => i.status === "working")
-    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.createdAt - a.createdAt || (b.sortScore ?? 0) - (a.sortScore ?? 0));
+    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || tierRank(a) - tierRank(b) || b.createdAt - a.createdAt || (b.sortScore ?? 0) - (a.sortScore ?? 0));
 }
 function postedIdeas(): IdeaRecord[] { return ideaQueue.filter((i) => i.status === "posted").sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0)); }
 
@@ -2948,7 +2954,7 @@ async function rewriteIdea(rec: IdeaRecord, steer: string): Promise<void> {
   const prior = rec.text;
   const resp = await send<{ text?: string; error?: string }>({ type: "POST_IDEA_REWRITE", text: rec.text, steer: steer.trim(), source: rec.src?.text, pattern: rec.pattern });
   ideaBusy.delete(rec.id); goobiDrafting = false; refreshGoobi();
-  if (resp?.text) { ideaUndo.set(rec.id, prior); rec.text = resp.text; rec.lastEditedAt = Date.now(); persistIdeas(); }
+  if (resp?.text) { ideaUndo.set(rec.id, prior); rec.text = resp.text; rec.grade = undefined; rec.lastEditedAt = Date.now(); persistIdeas(); } // clear the now-stale grade (its call-out described the old text)
   else toast(resp?.error === "no-key" ? "Add your Anthropic key to rewrite ideas." : "Rewrite failed — try again.");
   renderDock();
 }
@@ -2998,6 +3004,12 @@ function openInComposer(idea: IdeaRecord, shipped: boolean): void {
 }
 const firstLine = (s: string): string => s.split("\n").map((l) => l.trim()).find(Boolean) || s;
 
+const TIER_UI: Record<string, { icon: string; color: string; label: string; rank: number }> = {
+  strong: { icon: "✓", color: "#6fcf7f", label: "strong", rank: 0 },
+  ok:     { icon: "~", color: "#a89a85", label: "ok",     rank: 1 },
+  weak:   { icon: "!", color: "#e89a3c", label: "weak",   rank: 2 },
+};
+
 /** A scannable idea ROW: virality rail + one-line hook + source meta + one-tap ↗. Click the
  *  row to expand IN PLACE into the editor (draft hero + why + steer + source + actions). */
 function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
@@ -3021,9 +3033,19 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   const main = document.createElement("div"); main.className = "idea-main";
   const hook = document.createElement("div"); hook.className = "idea-hook"; hook.textContent = firstLine(idea.text); main.append(hook);
   const meta = document.createElement("div"); meta.className = "idea-meta";
-  const vl = document.createElement("b"); vl.textContent = vv.band; vl.style.color = vv.color; meta.append(vl);
-  const tail = [idea.pattern, idea.src ? `↺ @${idea.src.handle}` : (!idea.pattern ? "↺ your niche" : "")].filter(Boolean).join(" · ");
-  if (tail) meta.append(document.createTextNode(" · " + tail));
+  if (idea.grade) {
+    // The quality CALL-OUT is the primary triage signal (the user asked to "call things out"): a
+    // colored tier chip + the one-line reason. The virality band stays as the left pip color.
+    const t = TIER_UI[idea.grade.tier] ?? TIER_UI.ok;
+    const chip = document.createElement("b"); chip.textContent = `${t.icon} ${t.label}`; chip.style.color = t.color;
+    chip.title = `Quality: how much this reads as uniquely YOU (vs generic niche filler). Graded by the same judge that drives the auto-rewrite. Separate from the virality band (that's the source post's reach).`;
+    meta.append(chip);
+    if (idea.grade.callout) { const co = document.createElement("span"); co.textContent = " · " + idea.grade.callout; co.title = idea.grade.callout + (idea.grade.lever ? ` — aimed at a ${idea.grade.lever}` : ""); meta.append(co); }
+  } else {
+    const vl = document.createElement("b"); vl.textContent = vv.band; vl.style.color = vv.color; meta.append(vl);
+    const tail = [idea.pattern, idea.src ? `↺ @${idea.src.handle}` : (!idea.pattern ? "↺ your niche" : "")].filter(Boolean).join(" · ");
+    if (tail) meta.append(document.createTextNode(" · " + tail));
+  }
   main.append(meta); c.append(main);
 
   // Collapsed-row right actions — quick open + chevron.
@@ -3057,6 +3079,15 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
     const back = document.createElement("button"); back.className = "idea-pin"; back.textContent = "↩"; back.title = "Move back to working drafts (didn't post it)";
     back.onclick = () => markPosted(idea, false); actions.append(back);
   } else {
+    // Improve = one-click "fix the flagged weakness" on ok/weak ideas — reuses the rewrite, seeded
+    // with the call-out so the model targets exactly what the judge flagged.
+    if (idea.grade && idea.grade.tier !== "strong") {
+      const imp = document.createElement("button"); imp.className = "idea-improve";
+      imp.textContent = ideaBusy.has(idea.id) ? "Improving…" : "✎ Improve"; imp.disabled = ideaBusy.has(idea.id);
+      imp.title = "Rewrite it to be more specific to you" + (idea.grade.callout ? ` — fixing: ${idea.grade.callout}` : "") + ". Clears the flag after (the rewrite targets exactly what was called out).";
+      imp.onclick = () => void rewriteIdea(idea, `Make this unmistakably THIS user's post — force in a concrete specific (a real number, a named tool, an exact moment they'd know), on their own point. ${idea.grade?.callout ? `The current weakness to fix: ${idea.grade.callout}.` : "It reads too generic right now."}`);
+      actions.append(imp);
+    }
     const pin = document.createElement("button"); pin.className = "idea-pin" + (idea.pinned ? " on" : ""); pin.textContent = "📌";
     pin.title = idea.pinned ? "Kept — won't be replaced on a reroll." : "Keep this one — survives a reroll.";
     pin.onclick = () => togglePin(idea);
@@ -3456,6 +3487,20 @@ function buildIdeas(): HTMLElement {
   car.onclick = () => { ideasInsightsOpen = !ideasInsightsOpen; renderDock(); };
   const rgrp = document.createElement("div"); rgrp.style.cssText = "display:flex;align-items:center;gap:6px"; rgrp.append(gen, car);
   top.append(left, rgrp); head.append(top);
+  // Batch call-out summary — always visible so you triage at a glance ("2 strong to ship, 1 weak to fix").
+  const graded = working.filter((i) => i.grade);
+  if (graded.length) {
+    const counts: Record<"strong" | "ok" | "weak", number> = { strong: 0, ok: 0, weak: 0 };
+    for (const i of graded) counts[i.grade!.tier]++;
+    const sm = document.createElement("div"); sm.className = "idea-summary";
+    (["strong", "ok", "weak"] as const).forEach((t) => {
+      if (!counts[t]) return;
+      if (sm.childNodes.length) sm.append(document.createTextNode(" · "));
+      const s = document.createElement("b"); s.textContent = `${TIER_UI[t].icon} ${counts[t]} ${TIER_UI[t].label}`; s.style.color = TIER_UI[t].color; sm.append(s);
+    });
+    sm.title = "How many working drafts read as unmistakably YOU (strong) vs generic-leaning (ok/weak). Ship the strong; tap ✎ Improve on the rest.";
+    head.append(sm);
+  }
   if (ideasInsightsOpen) { // the insight rows below collapse by default so the idea LIST gets the room
   // Row 2 — sub + reach folded into one muted line.
   const sub = document.createElement("div"); sub.className = "ideasub";
