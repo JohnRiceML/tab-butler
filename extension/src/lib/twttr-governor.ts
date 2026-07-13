@@ -8,9 +8,11 @@
  * v1 is a budget + rate governor (no persistent response cache yet — callers
  * dedupe in memory; a storage-backed per-resource cache is the planned v2).
  */
-import { TWTTR_CLASS, TWTTR_BUDGET, classForPath, degradeMode, canFetch, monthKeyOf } from "./twttr-policy";
+import { TWTTR_CLASS, TWTTR_BUDGET, classForPath, degradeMode, canFetch, monthKeyOf,
+  type TwttrCache, cacheExpiry, cacheFresh, pruneCache, TWTTR_CACHE_MAX_ENTRY } from "./twttr-policy";
 
 const METER_KEY = "twttrMeter";
+const CACHE_KEY = "twttrCache";
 
 export interface TwttrMeter { monthKey: string; requests: number; bytes: number; }
 export interface GovResult { ok: boolean; status?: number; data?: unknown; error?: string }
@@ -41,6 +43,25 @@ async function bumpMeter(now: number, bytes: number): Promise<void> {
 }
 /** This month's usage, for the popup. */
 export async function readMeter(): Promise<TwttrMeter> { return loadMeter(Date.now()); }
+
+// ---- storage-backed response cache (per-resource, keyed on the full URL) ----
+async function loadCache(): Promise<TwttrCache> {
+  try { return ((await chrome.storage.local.get(CACHE_KEY))[CACHE_KEY] as TwttrCache) || {}; } catch { return {}; }
+}
+/** Serialize cache writes (same reasoning as the meter chain: interleaved awaits must not
+ *  clobber each other), and never reject the chain on a transient storage failure. */
+let cacheChain: Promise<void> = Promise.resolve();
+function writeCache(url: string, cls: ReturnType<typeof classForPath>, data: unknown, bytes: number, now: number): Promise<void> {
+  cacheChain = cacheChain.then(async () => {
+    try {
+      if (bytes > TWTTR_CACHE_MAX_ENTRY) return; // don't let one oversized blob evict the whole working set
+      const cache = await loadCache();
+      cache[url] = { at: now, exp: cacheExpiry(cls, now), bytes, data };
+      await chrome.storage.local.set({ [CACHE_KEY]: pruneCache(cache, now) }); // prune expired + evict-oldest on every write → self-bounding
+    } catch (e) { console.warn("[goobi] twttr cache write failed", e); }
+  });
+  return cacheChain;
+}
 
 // ---- token bucket (in-memory; resets on SW restart, which is fine for a burst guard) ----
 // Start nearly empty (1) rather than full, so a cold-start flood can't exceed the
@@ -73,6 +94,19 @@ export async function governedFetch(host: string, key: string, path: string, que
   const url = `https://${host}/${path.replace(/^\//, "")}${qs}`;
   const ckey = `${cls}|${url}|${intent ? 1 : 0}`;
 
+  // Scope the persistent cache to the expensive/uncached classes. `user` is skipped: it's
+  // cheap AND already cached cross-session by the content script's authorReach map, so
+  // governor-caching it would only add read-modify-write churn on the highest-frequency path.
+  const useCache = cls !== "user";
+
+  // Cache hit = zero bytes, zero requests → serve it BEFORE the budget/rate gates and even
+  // before coalescing (a fresh entry beats joining an in-flight fetch). Response is identical
+  // regardless of `intent`, so the cache is keyed on the URL alone.
+  if (useCache) {
+    const hit = (await loadCache())[url];
+    if (cacheFresh(hit, Date.now())) return { ok: true, data: hit!.data };
+  }
+
   const existing = inflight.get(ckey);
   if (existing) return existing; // coalesce a duplicate in-flight request
 
@@ -94,8 +128,11 @@ export async function governedFetch(host: string, key: string, path: string, que
         console.warn("[goobi] twttr", path, res.status, detail);
         return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
       }
-      try { return { ok: true, data: JSON.parse(text) }; }
-      catch { return { ok: false, status: res.status, error: "bad-json" }; }
+      try {
+        const data = JSON.parse(text);
+        if (useCache) void writeCache(url, cls, data, bytes, now); // cache the success so a re-open / another tab reuses it within the class TTL
+        return { ok: true, data };
+      } catch { return { ok: false, status: res.status, error: "bad-json" }; }
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }

@@ -89,3 +89,35 @@ export function canFetch(tier: Tier, mode: DegradeMode, intent: boolean): boolea
 export function monthKeyOf(ts: number): string {
   return new Date(ts).toISOString().slice(0, 7);
 }
+
+/* ---- storage-backed per-resource response cache (the governor's "planned v2") ----
+ * A cache HIT costs zero bytes and zero requests, so it is served BEFORE the budget /
+ * rate gates — even in lockdown. The freshness window is the class's own TTL (how fast
+ * the underlying data changes), stamped onto the entry at write time so pruning needs no
+ * re-classification. Bounded by total bytes (search/timeline blobs are ~350KB) with
+ * oldest-first eviction, so the cache can never grow past the local-storage quota.
+ * Pure + unit-tested here (scripts/test-twttr-cache.mjs); the IO lives in the governor. */
+export interface CacheEntry { at: number; exp: number; bytes: number; data: unknown; }
+export type TwttrCache = Record<string, CacheEntry>;
+export const TWTTR_CACHE_MAX_BYTES = 4 * 1024 * 1024; // 4MB — safe under a 10MB default local quota, leaves room for the meter + coverage caches
+export const TWTTR_CACHE_MAX_ENTRY = 1024 * 1024;     // never cache a single response bigger than this (defensive; no real response is)
+
+/** Expiry stamp for a freshly-fetched response of the given class. */
+export function cacheExpiry(cls: TwttrClass, now: number): number { return now + TWTTR_CLASS[cls].ttl; }
+
+/** A still-fresh entry (within its class TTL). Undefined / expired → not fresh. */
+export function cacheFresh(e: CacheEntry | undefined, now: number): boolean { return !!e && now < e.exp; }
+
+/** Drop expired entries, then evict oldest-by-write until under the byte cap. Pure — returns a
+ *  NEW object, never mutates the input. Keeps the freshest working set within `maxBytes`. */
+export function pruneCache(cache: TwttrCache, now: number, maxBytes = TWTTR_CACHE_MAX_BYTES): TwttrCache {
+  const live = Object.entries(cache).filter(([, e]) => e && now < e.exp);
+  let total = live.reduce((a, [, e]) => a + (e.bytes || 0), 0);
+  if (total > maxBytes) {
+    live.sort((a, b) => a[1].at - b[1].at); // oldest first
+    while (total > maxBytes && live.length) { total -= live.shift()![1].bytes || 0; }
+  }
+  const out: TwttrCache = {};
+  for (const [k, e] of live) out[k] = e;
+  return out;
+}
