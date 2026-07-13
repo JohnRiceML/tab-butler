@@ -397,6 +397,32 @@ export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
   return res;
 }
 
+/* ---------- closing the loop: measured outcomes → RANKING ---------- */
+export const LEARN_MULT_MIN = 0.85;  // a proven-weak account can be demoted this far, no further
+export const LEARN_MULT_MAX = 1.20;  // a proven-strong account can be lifted this far, no further
+export const LEARN_MULT_TILT = 0.25; // sensitivity: fraction of the raw score/mean ratio that reaches the multiplier
+
+/** Per-account RANKING multipliers from MEASURED outcomes — the ranking half of the closed loop.
+ *  Gated on the fitCorr "is stage-1 fit even predictive for this user?" test: if their own ranking
+ *  doesn't correlate with real outcomes, we tilt NOTHING (applied=false, every account neutral) —
+ *  never amplify a signal the data says is noise. When it does correlate, an account's shrunk
+ *  measured `score` tilts its rank relative to the user's own measured mean (muObs), clamped to
+ *  [MIN,MAX]. Accounts with no SETTLED measured score are omitted → the caller reads them as a
+ *  neutral 1.0 (thin data never zeroes an opportunity). Pure; caller precomputes it once per render. */
+export function accountRankMultipliers(sent: LearnReply[], now: number): { applied: boolean; mult: Record<string, number> } {
+  const fl = learnFeatures(sent, now);
+  if (fl.fitCorr == null || fl.fitCorr <= 0) return { applied: false, mult: {} };
+  const agg = aggregateAccounts(sent, now);
+  if (!(agg.muObs > 0)) return { applied: false, mult: {} };
+  const mult: Record<string, number> = {};
+  for (const a of Object.values(agg.accounts)) {
+    if (a.score == null) continue; // no settled measured score → neutral (omitted)
+    const ratio = a.score / agg.muObs;
+    mult[a.handle] = Math.max(LEARN_MULT_MIN, Math.min(LEARN_MULT_MAX, 1 + LEARN_MULT_TILT * (ratio - 1)));
+  }
+  return { applied: true, mult };
+}
+
 /* ---------- the $0 author-reply-back join (notifications harvest × sent-reply log) ---------- */
 // Author-engages-your-reply is the highest-ordered action in every evidence class (2023 weights
 // 75 vs 13.5; X's official #1 in-thread ordering factor; the 2026 Grok reply grade). The

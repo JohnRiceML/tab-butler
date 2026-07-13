@@ -4,7 +4,7 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
 import { profileCheck, analyzeBio, type ProfileState } from "../lib/profile-check";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, accountRankMultipliers, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, gradedSurface, surfaceLabel, surfaceMult, slotOdds, type TargetStore } from "../lib/targets";
@@ -46,6 +46,8 @@ let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
+let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until the backtest proves the signal predicts; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
+let debugOn = false;      // dev-only: exposes window.__goobiExport() for backtesting. No product effect.
 
 /** Twttr (X-data API) enrichment, all read-only + best-effort. */
 let xNiche = "";              // the niche query "Find spots" searches X for
@@ -89,8 +91,16 @@ function letterAvatar(name: string): HTMLElement {
   return s;
 }
 
-/** The angle a draft should open with: the user's default if set, else the scorer's pick. */
-function initialAngle(category?: string): string | undefined { return xDefaultAngle || category; }
+/** The user's measured-best drafting angle, when the loop is on. Reads bestAngle, which
+ *  learn-stats sets ONLY when the top angle clears the +15% band over >=2 angles — so it's
+ *  inert on thin/ambiguous data. Caveat: this is a USER-level tendency, not post-specific, so
+ *  it ships behind the flag + the T1 (angle-stability) gate and stays a SOFT default. */
+function learnedBestAngle(): string | undefined {
+  return learnLoopOn ? learnFeatures(replyLog.sent, Date.now()).bestAngle : undefined;
+}
+/** The angle a draft should open with: the user's explicit default, else their measured-best
+ *  angle (loop on), else the scorer's per-post pick. Steer chips still override per-click. */
+function initialAngle(category?: string): string | undefined { return xDefaultAngle || learnedBestAngle() || category; }
 /** Which product to preselect among candidates: the user's default if present, else the first. */
 function defaultProductIndex(candidates: ProductItem[]): number {
   if (!xDefaultProduct) return 0;
@@ -1068,8 +1078,10 @@ function bumpDaily(now: number): void {
   for (const k of Object.keys(replyLog.daily)) if (k < cut) delete replyLog.daily[k];
 }
 
-/** Append a feature record for the reply we just helped send — the raw material a
- *  future "what's working" loop could correlate with outcomes (not yet built). */
+/** Append a feature record for the reply we just helped send — the raw material the
+ *  "what's working" loop correlates with outcomes: the daily measure-pass fills SentRecord.outcome,
+ *  learnFeatures/aggregateAccounts turn it into per-angle/per-account signal, and (behind
+ *  learnLoopOn) accountRankMultipliers + learnedBestAngle feed it back into ranking + drafting. */
 function logSentReply(now: number, text: string, opp?: Opp, angle?: string): void {
   const rec: SentRecord = {
     id: `${now}.${sentSeq++}`,
@@ -1775,6 +1787,23 @@ function effectiveScore(o: Opp): number {
   return Math.max(0, Math.min(1, s));
 }
 
+// The closed loop's RANKING half. Deliberately SEPARATE from effectiveScore: effectiveScore
+// is logged into SentRecord.score (the stage-1 fit that fitCorr correlates against outcomes),
+// so folding the learned term into it would make the "is fit predictive?" gate circular. The
+// learned tilt therefore lives only in rankScore, used for SORT ORDER — never for the recorded
+// score, the displayed fit %, or the drafter. Off by default (learnLoopOn) and inert unless the
+// data clears learn-stats' own gates (fitCorr>0, settled measured score) → neutral 1.0 otherwise.
+let _multMemo: { key: string; mult: Record<string, number> } = { key: "", mult: {} };
+function learnedMults(): Record<string, number> {
+  const key = `${replyLog.sent.length}:${Math.floor(Date.now() / DAY_MS)}`; // rebuild on a new reply or a day roll (settled outcomes update daily); keeps the sort comparator O(1)
+  if (_multMemo.key !== key) _multMemo = { key, mult: accountRankMultipliers(replyLog.sent, Date.now()).mult };
+  return _multMemo.mult;
+}
+/** effectiveScore tilted by the measured per-account multiplier — RANKING ONLY. */
+function rankScore(o: Opp): number {
+  return effectiveScore(o) * (learnLoopOn ? (learnedMults()[o.author.toLowerCase()] ?? 1) : 1);
+}
+
 /** An at-a-glance "reply fit" verdict for a spot, from its live effectiveScore
  *  (which already folds in fit, freshness, reach, reply-pileup, and reciprocity). */
 function scoreVerdict(s: number): { label: string; color: string } {
@@ -1931,7 +1960,7 @@ function topOpps(): Opp[] {
     dockSort === "recent" ? (o.postedAt ?? 0) :
     dockSort === "reach" ? (knownFollowers(o) ?? 0) :
     dockSort === "easy" ? easyScore(o) :
-    effectiveScore(o);
+    rankScore(o); // "best" = fit tilted by measured per-account outcomes (learnLoopOn; neutral otherwise)
   return list.sort((a, b) => key(b) - key(a)).slice(0, 25);
 }
 
@@ -1966,7 +1995,7 @@ function lavInitial(o: Opp): HTMLElement {
 /** The overlapping avatar stack on the launcher pill — top reply-spot authors, faces
  *  first, so the minimized dock reads like "these people are worth replying to". */
 function launcherAvatars(): HTMLElement | null {
-  const ranked = [...opps.values()].sort((a, b) => effectiveScore(b) - effectiveScore(a));
+  const ranked = [...opps.values()].sort((a, b) => rankScore(b) - rankScore(a));
   if (!ranked.length) return null;
   const shown = ranked.slice(0, 4);
   const avs = document.createElement("span"); avs.className = "lavs";
@@ -3866,6 +3895,35 @@ function renderDock() {
   goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood); // Goobi lives at the top, mood-driven
 }
 
+/* ---------- dev-only learning-data export (for the offline backtest) ---------- */
+
+/** Snapshot the learning data + a size summary. `settledN` (outcomes frozen at
+ *  SETTLE_DAYS) is the honest power check — how many replies have a FINAL measured
+ *  outcome the backtest can trust. `measuredN` includes still-provisional ones. */
+function buildLearnExport(): unknown {
+  const sent = replyLog.sent || [];
+  const measuredN = sent.filter((r) => r.outcome && (r.outcome.likes != null || r.outcome.replies != null)).length;
+  const settledN = sent.filter((r) => r.outcome?.frozen).length;
+  return { replyLog, learn, meta: { exportedAt: Date.now(), handle: learn?.handle || selfHandle || "", n: sent.length, measuredN, settledN } };
+}
+
+/** Expose window.__goobiExport() when the debug flag is on (dev only). Returns the
+ *  data object (so DevTools `copy(__goobiExport())` works), also writes it to the
+ *  clipboard and logs the JSON string as a fallback copy path. No product effect. */
+function installDebugHook(): void {
+  const w = window as unknown as { __goobiExport?: () => unknown };
+  if (!debugOn) { try { delete w.__goobiExport; } catch { /* ignore */ } return; }
+  w.__goobiExport = () => {
+    const data = buildLearnExport();
+    const json = JSON.stringify(data);
+    const m = (data as { meta: { n: number; measuredN: number; settledN: number } }).meta;
+    try { void navigator.clipboard.writeText(json).then(() => toast("Learning data copied to clipboard."), () => { /* no gesture — use the logged string */ }); } catch { /* ignore */ }
+    console.log(`[goobi] learning export — n=${m.n} measured=${m.measuredN} settled=${m.settledN}. copy(__goobiExport()) to copy, or grab the string:\n`, json);
+    return data;
+  };
+  console.log("[goobi] debug on — run __goobiExport() in THIS console (content-script context) to dump learning data for the backtest.");
+}
+
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
@@ -3877,6 +3935,9 @@ async function boot() {
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
+  learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — flips on only once the backtest proves the learned signal predicts
+  debugOn = (await getLocal(CONFIG.X_DEBUG_KEY)) === true;
+  installDebugHook(); // dev-only window.__goobiExport() when debugOn (no-op otherwise)
   xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
   premiumTier = ((await getLocal(CONFIG.X_PREMIUM_KEY)) as string) || "";
   profileState = (await getLocal(CONFIG.X_PROFILE_KEY)) as ProfileState | undefined;
@@ -3933,6 +3994,8 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
+    if (changes[CONFIG.X_LEARN_LOOP_KEY]) { learnLoopOn = changes[CONFIG.X_LEARN_LOOP_KEY].newValue === true; renderDock(); } // flip the loop live (no reload), and re-rank the dock under the new weighting
+    if (changes[CONFIG.X_DEBUG_KEY]) { debugOn = changes[CONFIG.X_DEBUG_KEY].newValue === true; installDebugHook(); }
     if (changes[CONFIG.X_PREMIUM_KEY]) premiumTier = (changes[CONFIG.X_PREMIUM_KEY].newValue as string) || "";
     if (changes[CONFIG.X_PROFILE_KEY]) profileState = changes[CONFIG.X_PROFILE_KEY].newValue as ProfileState | undefined;
     if (changes[CONFIG.X_NICHE_KEY]) {
