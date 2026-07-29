@@ -18,6 +18,11 @@
 
 export const TARGET_CAP = 20;                  // research's "10-20 home accounts"
 export const TARGET_BAND = { lo: 2, hi: 25 };  // followers/myFollowers — the research reach sweet-spot (5-25×); 2× is the floor, 25× the "heavy hitter, still reachable if you're early" ceiling
+// The band's LOWER bound is now code-justified, not just a heuristic: X's TaskReplyRankingFilter
+// (grox/tasks/task_filters.py) only LLM-grades replies whose ancestor author exceeds a follower
+// threshold — below it the reply is dropped `low_blast_radius` (never graded, ~no OON placement).
+// The threshold NUMBER is runtime-injected (private), and it keys on the TARGET's follower count,
+// not yours. Aiming at bigger-than-you accounts is literally aiming at the surface X grades.
 export const MEGA_CAP = 500_000;               // an absolute "this is a mega-account, your reply is 1-of-thousands no matter how early" cut — binds for big users whose 25× would still be huge
 
 export interface Target { handle: string; followers?: number; addedAt: number; source: "auto" | "manual"; lastPolledAt?: number; lastFreshPostId?: string; }
@@ -86,7 +91,7 @@ export const CROWDED_MIN_REPLIES = 30; // ≥30 → you'd be buried regardless o
  *  "crowded" applies at any age; "early" only while the post is still in the live window. */
 export function earlyLabel(replies: number | undefined, postedAt: number | undefined, now: number): { level: "early" | "crowded"; text: string } | null {
   if (replies == null) return null;
-  if (replies >= CROWDED_MIN_REPLIES) return { level: "crowded", text: `${replies} replies already — you'd be buried; wait for their next post` };
+  if (replies >= CROWDED_MIN_REPLIES) return { level: "crowded", text: `${replies} replies already — you'd be buried. Quote it with your own take instead (a quote-post is your authored candidate in your followers' feeds, not reply #${replies + 1}), or wait for their next post` };
   if (freshnessLabel(postedAt, now)?.live === true && replies <= EARLY_MAX_REPLIES) {
     return { level: "early", text: `only ${replies} ${replies === 1 ? "reply" : "replies"} so far — you'd be near the top` };
   }

@@ -41,7 +41,7 @@ export function analyzeBio(text: string): { hasRole: boolean; hasAudience: boole
   // A follow is a subscription to FUTURE content — a repeatable promise ("documenting the road to
   // $50k MRR", "weekly teardowns") tells the visitor what they're subscribing to. follow_author is
   // a first-class scored action in the 2026 ranker, so this is a conversion lever, not vanity.
-  const hasPromise = /\b(every (?:week|day|month)|weekly|daily|document(?:ing)?|building in public|shar(?:e|es|ing) (?:what|how|the|my)|i (?:share|post|write|document|break ?down)|breaking down|break(?:down)?s of|lessons? (?:from|learned)|follow (?:for|along)|post(?:s|ing)? about|writ(?:e|es|ing) about|journey (?:to|from)|behind the scenes)\b/.test(t);
+  const hasPromise = /\b(every (?:week|day|month|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)|weekly|daily|document(?:ing)?|chronicling|building in public|shar(?:e|es|ing) (?:what|how|the|my)|i (?:share|post|write|document|break ?down|teach)|teach(?:es|ing)? [a-z]+ (?:to|how)|tips on|threads?\b|newsletter|breaking down|break(?:down)?s of|lessons? (?:from|learned)|follow (?:for|along)|post(?:s|ing)? about|writ(?:e|es|ing) about|journey (?:to|from)|behind the scenes)\b/.test(t);
   return { hasRole, hasAudience, hasProof, hasPromise };
 }
 
@@ -102,11 +102,15 @@ function finishBio(state: ProfileState, findings: ProfileFinding[]): ProfileFind
       findings.push({ level: "act", text: `Your bio is ${state.bioLen} characters — likely too thin to convert a curious stranger.`, why: "Harvested from your own profile page. One concrete line about who you help / what you build beats a fragment." });
       return findings;
     }
-    // healthy length — scan the what/who/PROOF formula (proof is the highest-leverage missing
-    // piece), then the follow PROMISE (a follow subscribes to future content — say what's coming)
+    // healthy length — one nudge at a time, in leverage order: PROOF (what tips the skeptic) →
+    // WHO/WHAT (a bio that never says what you do or for whom can't convert) → PROMISE (a follow
+    // subscribes to future content — but only nag for it once who/what/proof is complete; a
+    // static-authority bio missing its basics needs those first, not a content-cadence nag).
     if (state.bioHasProof === false) {
       findings.push({ level: "act", text: "Your bio has no concrete proof — a number (followers, $, shipped X) is what tips a skeptical visitor into a follow.", why: "A quick scan of your bio, not a judgment. profile_click → follow is a first-class ranked action; proof is what converts the click." });
-    } else if (state.bioHasPromise === false) {
+    } else if (state.bioHasRole === false || state.bioHasAudience === false) {
+      findings.push({ level: "act", text: state.bioHasRole === false ? "Your bio doesn't say what you DO — lead with it (\"building X\", \"founder of Y\"). A visitor can't follow a mystery." : "Your bio doesn't say who it's FOR — name the audience (\"for founders\", \"helping devs ship\"). Fit is what turns a click into a follow.", why: "A quick scan of your bio for the what/who/proof formula. The role and audience lines are the frame the proof hangs on." });
+    } else if (state.bioHasRole && state.bioHasAudience && state.bioHasPromise === false) {
       findings.push({ level: "act", text: "Your bio doesn't promise what a follower GETS — add the repeatable thing you share (\"documenting the road to $50k MRR\", \"weekly product teardowns\").", why: "A quick scan of your bio. A follow is a subscription to your future posts; follow-author is a scored action, and the visitor decides on what you PROMISE, not just what you've done." });
     } else if (state.bioHasRole && state.bioHasAudience && state.bioHasProof) {
       findings.push({ level: "good", text: "Bio covers what you do, who it's for, and proof ✓", why: "A quick scan of your bio for the standard convert-a-stranger formula." });

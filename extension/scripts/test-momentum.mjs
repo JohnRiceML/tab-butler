@@ -64,8 +64,9 @@ ok(dailyShape({ repliesToday: 0, postedToday: 0, repLevel: "healthy" }).kind ===
 ok(dailyShape({ repliesToday: 12, postedToday: 1, repLevel: "healthy" }).text.includes("Balanced day"), "replies + a post -> balanced-day affirmation");
 {
   const s = dailyShape({ repliesToday: 5, postedToday: 4, repLevel: "healthy" });
-  ok(s.kind === "spacing" && /space originals ~3h apart/i.test(s.text), "4 posts -> spacing nudge names the ~3h gap (author-diversity attenuation)");
-  ok(/replies between originals are fine/i.test(s.text), "spacing nudge notes replies between originals don't compete the same way");
+  ok(s.kind === "spacing" && /space originals ~3h apart/i.test(s.text), "4 posts -> spacing nudge names the ~3h gap");
+  ok(/measured \(correlational\)/i.test(s.text), "spacing copy leads with the measured-correlational framing, not a mechanism claim");
+  ok(/may also attenuate/i.test(s.text) && !/don't compete the same way/i.test(s.text), "attenuation is hedged (may), and the unsupported replies-exempt claim is gone");
   ok(/consistency beats volume/i.test(s.text), "spacing nudge carries the high-frequency reach tradeoff (correlational)");
 }
 // safety-deference: at caution it NEVER pushes more replies — only redirects to a post
@@ -86,8 +87,9 @@ ok(postSpacingNudge(POST_SPACING_MINS) === null, "exactly at the ~3h line -> cle
   const n = postSpacingNudge(30);
   ok(n && n.soft === true, "recent original -> soft nudge (never a block)");
   ok(n.minsToGo === 150, "minsToGo counts down to the ~3h line");
-  ok(/replies in between are fine/i.test(n.text), "nudge reassures that replies between originals don't compete");
-  ok(/compete for one feed slot/i.test(n.text), "nudge names the author-diversity attenuation mechanism");
+  ok(/measured: per-post reach declines/i.test(n.text), "nudge leads with the correlational reach finding");
+  ok(/may also attenuate/i.test(n.text) && !/don't compete/i.test(n.text), "nudge hedges attenuation (may) and drops the replies-exempt claim");
+  ok(/2h more/.test(n.text), "150min remaining renders as 2h (floored), never rounded up to 3h");
 }
 
 console.log(fail === 0 ? `\n✓ momentum: ${pass} assertions passed` : `\n✗ momentum: ${fail} failed, ${pass} passed`);

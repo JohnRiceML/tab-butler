@@ -23,6 +23,7 @@ export const K = 5;                 // shrinkage strength (pseudo-replies pullin
 export const N_MIN = 3;             // min effective replies to rank a Tier-1 account
 export const N_MIN_OUT = 4;         // min settled outcomes to show a Tier-2 measured score
 export const W_REPLY = 2.0;         // a reply on your reply is worth this many likes
+export const W_REPOST = 3.0;        // a repost of your reply is worth this many likes (retweet is its own scored head; rarer + carries the reply to a new feed). Reasoned prior, retunable.
 export const BASE = 0.5;            // reach-normalization base
 export const MIN_EXP = 0.5;         // floor on expected engagement (avoid divide-by-tiny)
 export const NEUTRAL_SCORE = 0.5;   // reply with no known effectiveScore counts as neutral, never 0
@@ -137,7 +138,7 @@ export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
     if (!r.author) continue;
     const w = recencyW((now - r.at) / DAY_MS);
     gw += w; gwv += w * (r.score ?? NEUTRAL_SCORE);
-    if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
+    if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
   }
   const muInvest = gw > 0 ? gwv / gw : NEUTRAL_SCORE;
   const muObs = gwf > 0 ? gwo / gwf : 0;
@@ -151,7 +152,7 @@ export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
       sw += w; swv += w * (r.score ?? NEUTRAL_SCORE);
       if (r.at > lastAt) lastAt = r.at;
       if (r.followers != null && r.at >= fAt) { followers = r.followers; fAt = r.at; }
-      if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
+      if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
     }
     const invest = (K * muInvest + sw * (swv / sw)) / (K + sw);
     const obs = swo > 0 ? (K * muObs + swo * (swfit / swo)) / (K + swo) : undefined;
@@ -378,7 +379,7 @@ export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
   for (const r of sent) {
     if (!hasMeasuredCounts(r.outcome)) continue; // join-only outcomes (authorReplied, no counts) never enter fit
     const w = recencyW((now - r.at) / DAY_MS);
-    const fit = ((r.outcome!.likes ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
+    const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
     out.push({ fit, w, angle: r.angle, ageMs: r.ageMs, score: r.score, views: r.outcome!.views });
     gwo += w * fit; gwf += w;
   }

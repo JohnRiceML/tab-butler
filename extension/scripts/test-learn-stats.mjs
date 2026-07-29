@@ -240,5 +240,17 @@ const DAY = 86_400_000;
   ok(m.accountTrend(up, NOW)?.followerDelta === undefined, "no follower snapshots → no delta claimed");
 }
 
+// ---- W_REPOST: a repost of your reply raises measured fit (was parsed+stored, then dropped) ----
+{
+  const NOWR = 1_700_000_000_000;
+  const mk = (reposts) => [{ at: NOWR - 86_400_000, author: "a", score: 0.5, followers: 1000,
+    outcome: { at: NOWR, likes: 5, replies: 1, reposts, frozen: true } }];
+  const withR = m.aggregateAccounts(mk(3), NOWR).accounts.a;
+  const withoutR = m.aggregateAccounts(mk(0), NOWR).accounts.a;
+  ok(withR.nOut === 1 && withoutR.nOut === 1, "repost fixture: both outcomes measured");
+  // score is undefined below N_MIN_OUT, so compare the raw obs path via muObs instead
+  ok(m.aggregateAccounts(mk(3), NOWR).muObs > m.aggregateAccounts(mk(0), NOWR).muObs, "reposts now raise measured fit (W_REPOST, was silently dropped)");
+}
+
 console.log(fail === 0 ? `\n✓ learn-stats: ${pass} assertions passed` : `\n✗ learn-stats: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

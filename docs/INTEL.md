@@ -21,10 +21,12 @@ engagement data, never causal. When in doubt it is downgraded, not up.
 **Grok-transformer relevance; hand-engineered features gone.**
 The README states X "eliminated every single hand-engineered feature and most heuristics from the
 system" — ranking is a learned transformer over user context, not a stack of tuned signals
-**[confirmed: repo README]**. Content understanding moved to a service the repo spells **Grox**
-(`grox/spam.py`, `grox/post_safety_screen_deluxe.py`, `grox/safety_ptos.py`,
-`grox/reply_ranking.py`) — classifiers, embedders, and a task engine for spam detection,
-post-category classification, and PTOS policy enforcement **[confirmed: repo tree]**.
+**[confirmed: repo README]**. Content understanding moved to a service the repo spells **Grox** —
+classifiers live at `grox/classifiers/content/` (`reply_ranking.py`, `spam.py`,
+`post_safety_screen_deluxe.py`, `safety_ptos.py`, `banger_initial_screen.py`, `classifier.py`),
+orchestrated by a `grox/tasks/task_*.py` layer and `grox/plans/plan_*.py` pipelines (e.g.
+`plan_reply_ranking.py` = filter → rate-limit → media-hydrate → rank) **[confirmed: repo tree,
+2026-07-29 re-read — earlier flat `grox/*.py` paths in this doc were wrong]**.
 *Naming discipline: keep them distinct — **Grox** = the VLM/classifier content-understanding
 service; **Grok** = the ranking-transformer lineage. Secondary write-ups conflate them.*
 
@@ -34,7 +36,14 @@ Thunder = "posts from accounts you follow," an in-memory store with "sub-millise
 **[confirmed: repo README]**. Phoenix = ML similarity search across the global corpus via a
 two-tower model (User Tower / Candidate Tower), returning "top-K posts via dot product
 similarity" **[confirmed: repo README]** — so a non-followed post reaches you on interest-embedding
-match, and reach is genuinely uncoupled from your follower count. Commit `e414c171` adds the
+match, and reach is genuinely uncoupled from your follower count. That uncoupling is now
+directly supported: the User Tower encodes the viewer's engagement history, and **author follower
+count is NOT a User-Tower feature** — its only sightings are the private `vm_ranker.rs` input
+`author_followers_count` (direction unknown) and the reply blast-radius gate (which keys on the
+TARGET) **[confirmed: phoenix/README + repo tree, 2026-07-29]**. Phoenix ships three retrieval
+variants (base / MoE / topics), and `new_user_topic_ids_filter.rs` requires OON candidates for
+NEW viewers to match expanded topic IDs (in-network bypasses) — topic explicitness is literally
+the door into new-user feeds **[confirmed: repo tree]**. Commit `e414c171` adds the
 May sources exactly: `followed_grok_topics_query_hydrator.rs`,
 `followed_starter_packs_query_hydrator.rs`, `mutual_follow_query_hydrator.rs`
 (+ `mutual_follow_jaccard_hydrator.rs`), `served_history_query_hydrator.rs`,
@@ -51,11 +60,14 @@ terms** into one weighted sum: favorite, reply, retweet, quote, click, profile_c
 vqv (qualified video view), share, **share_via_dm**, **share_via_copy_link**, dwell, quoted_click,
 quoted_vqv, follow_author, cont_dwell_time, cont_click_dwell_time, plus the negative heads
 not_interested, block_author, mute_author, report, **not_dwelled**
-**[confirmed: ranking_scorer.rs]**. (`phoenix/README.md` says "Action types: 19" — the scorer's 22
-terms include derived dwell/quoted variants, so the counts differ without contradiction
-**[confirmed: repo README]**.) Notable: **sharing is not one event** — a DM share, a copied link,
-and a repost each get their own head; and **not_dwelled is an explicit negative**, so a hook that
-isn't paid off costs twice (lost dwell + a scored skip). The combining **weights are not published**
+**[confirmed: ranking_scorer.rs]**. (Three nesting levels reconcile the head counts: the root
+README names ~14-15 base P(action) heads → `phoenix/README.md` says "Action types: 19" → the
+scorer combines 22 `_score` terms including derived dwell/quoted variants — different layers, no
+contradiction **[confirmed: repo README + ranking_scorer.rs]**.) Notable: **sharing is not one
+event** — a DM share, a copied link, and a repost each get their own head; and **not_dwelled** is
+its own tracked term (negative by NAME; its weight, like every coefficient, is unpublished — do
+not assert the sign as code-fact), so a hook that isn't paid off plausibly costs twice (lost
+dwell + a scored skip). The combining **weights are not published**
 **[confirmed: absent from tree]**. The "Retweets×20 / Replies×13.5 / Profile-clicks×12…" tables
 circulating are **[unverified writeup claim]** — recycled 2023 folklore, not in this code. Do not
 encode those numbers.
@@ -65,8 +77,13 @@ encode those numbers.
 diversity multiplier → out-of-network factor (`after_diversity * effective_oon`)
 **[confirmed: ranking_scorer.rs]**. The diversity multiplier is literally
 `(1.0 - floor) * decay_factor.powf(position) + floor` — each additional same-author candidate in
-one feed response decays toward a private floor **[confirmed: ranking_scorer.rs]**; the decay rate,
-floor, and OON factor values are private **[confirmed: absent from tree]**.
+one feed response decays toward a private floor **[confirmed: ranking_scorer.rs +
+author_diversity_scorer.rs, which scopes it "within a single feed response"]**; the decay rate,
+floor, and OON factor values are private **[confirmed: absent from tree]**. The scoring layer is
+more modular than one file: `scorers/` also holds standalone `weighted_scorer.rs`,
+`oon_scorer.rs` (applies `OON_WEIGHT_FACTOR` only when `in_network == Some(false)`),
+`author_diversity_scorer.rs`, and `phoenix_scorer.rs` — a second composable path
+**[confirmed: repo tree, 2026-07-29]**.
 
 **VMRanker: an optional private re-ranker can REPLACE the visible score.**
 `home-mixer/scorers/vm_ranker.rs` (direct read, 2026-07-29) defines a value-model reranker that
@@ -83,9 +100,13 @@ bookmark multiplier **[confirmed: absent from ranking_scorer.rs]**. No **externa
 term exists in the scorer — link costs are *structural* (a leaving viewer produces no further
 native actions; bare links give Phoenix little to embed; repeated URLs can trip spam policy), not a
 scored penalty **[confirmed: absent from ranking_scorer.rs]**. And no **velocity gate / graduation
-ladder** ("N likes in M minutes unlocks the next tier") exists in the pipeline — candidates are
-re-assembled and re-scored per viewer request; early engagement helps only by improving the
-evidence available while a post is fresh **[confirmed: structural, repo tree]**.
+ladder** ("N likes in M minutes unlocks the next tier") — **[confirmed: absent from
+ranking_scorer.rs; structurally implausible pipeline-wide]**: candidates are re-assembled and
+re-scored per viewer request (candidate isolation makes scores cacheable), so a global unlock
+tier has nowhere to live; early engagement helps only by improving the evidence available while a
+post is fresh. Related but distinct: `filters/age_filter.rs` IS a hard max-age cutoff (drops
+candidates older than a runtime `Duration`, replies treated identically) — a freshness cliff, not
+a velocity gate **[confirmed: repo tree, 2026-07-29]**.
 
 **Negative signals push content down.**
 "Negative actions (block, mute, report) have negative weights, pushing down content the user would
@@ -93,6 +114,35 @@ likely dislike" **[confirmed: repo README]** — and the scorer's own field list
 `not_interested` and `not_dwelled` as scored heads **[confirmed: ranking_scorer.rs]**. The
 forward-looking claim that *not-interested also suppresses similar future recommendations* is
 **[unverified writeup claim]** — plausible, not in the README; encode as a tip, not a mechanism.
+
+**The reply pipeline — Goobi's core surface — is now read end-to-end (2026-07-29).**
+Three code-facts that were priors last week:
+1. *Reply-grading is follower-GATED on the TARGET.* `grox/tasks/task_filters.py`
+`TaskReplyRankingFilter` only grades replies where an ancestor author exceeds
+`FOLLOWER_COUNT_THRESHOLD_FOR_REPLY_RANKING`; below it the reply is dropped with reason
+`low_blast_radius` — never graded, ~no OON placement **[confirmed: repo tree]**. The threshold
+NUMBER is runtime-injected (private). The gate keys on the *target's* size, not yours — your own
+follower count neither caps OON retrieval nor gates reply-grading. This upgrades the `TARGET_BAND`
+lower bound from heuristic to code-justified: replying under bigger-than-you accounts is literally
+aiming at the surface X grades.
+2. *The grade is ONE holistic 0-3, not a rubric of sub-scores.* `grox/classifiers/content/
+reply_ranking.py` calls a VLM (primary `VLM_MINI_CRITICAL`, fallback `VLM_PRIMARY_CRITICAL`,
+temperature ≈ 1e-6 — deterministic) whose output schema is `ReplyScoreResult { score, reason }`
+with metric buckets `[0.0, 1.0, 2.0, 3.0]` **[confirmed: repo tree]**. The 0-3 scale is code-fact
+now, not a prior read; the rubric TEXT (`ReplyScoringSystem` template) remains withheld. Goobi's
+drafter decomposing quality into profile-click + civility + specificity is a *proxy* for one
+holistic "is this a good reply" judgment — fine, but don't mistake the proxy for the objective.
+3. *Composition provenance is LIVE input, not a future watch item.* `grox/tasks/task_rank_replies.py`
+reads composition source, **paste status**, user agent, and app-attestation status into the reply
+pipeline today, alongside author-reputation signals (`has_risky_user_safety_label`,
+`num_legit_blocks_received_last_24hrs`) **[confirmed: repo tree]**. No evidence of a scored
+*penalty* for pasting — tracked feature, direction unknown → stays a caution for the
+insert-mechanics posture, not a claim.
+Also: replies are first-class For-You candidates (Thunder in-network + Phoenix OON; no
+reply-exclusion filter found), and the one place they could be treated structurally differently is
+`vm_ranker.rs`, which receives `is_reply` (direction unpublished) **[confirmed: repo tree +
+vm_ranker.rs]**. Practical read: a reply's reach is won IN the conversation (the 0-3 grade +
+conversation placement), not by optimizing it like a feed post.
 
 **Author-diversity attenuation + seen/served filtering.**
 An "Author Diversity Scorer" attenuates "repeated author scores for diversity" — formula now read
@@ -122,7 +172,11 @@ e414c171]** — the feed mixes ads in-pipeline, a detail earlier writeups missed
 
 **Premium = conversation placement, not a reach lever — but that's NOT in the open code.**
 The repo README contains **no mention** of Premium / verified / subscriber / blue affecting reach
-or reply ranking **[confirmed: absent from tree]**. `grox/reply_ranking.py` exists, but there is no
+or reply ranking **[confirmed: absent from tree]**. One nuance (2026-07-29):
+`filters/ineligible_subscription_filter.rs` DOES gate paid subscriber-only *content* (the viewer
+must be in `subscribed_user_ids`) — that is content-gating, not a reach boost, so "Premium ≠ reach
+lever" stands, but "no subscriber concept in code" would overstate it **[confirmed: repo tree]**.
+`grox/classifiers/content/reply_ranking.py` exists, but there is no
 primary evidence it keys on Premium status. "Premium buys reply placement, not general reach" is
 **[unverified writeup claim]** — widely reported, not in the open-source code. Goobi deliberately
 treats Premium as a covariate only (see the table), which stays correct either way.
@@ -189,13 +243,16 @@ is code-fact — `DedupConversationFilter` "removes duplicate conversation branc
 feed; it does not establish one universal reply slot," already cited at
 `src/lib/targets.ts:96–100` (`slotOdds`). Prior editions of this checklist listed it as
 "withheld"; that framing was retired 2026-07-29. The reply-spots doc's "X LLM-grades replies 0–3
-on big-author threads + models a slop score" note (`docs/flows/reply-spots.md:32`) stands —
-`grox/reply_ranking.py` exists and the structural claim holds; the specific 0–3 scale is a
-prior-read detail, not contradicted.
+on big-author threads + models a slop score" note (`docs/flows/reply-spots.md:32`) is now
+**code-fact end-to-end** — see "The reply pipeline" in the verified picture (follower-gated
+`TaskReplyRankingFilter`, `ReplyScoreResult { score, reason }`, buckets `[0,1,2,3]`); only the
+rubric text and the threshold number remain withheld.
 
 Also skim any drop for: new **negative actions** (extend the tone gate), changes to
-**author-diversity/OON scoring** (pace + funnel copy), new **composition-provenance fields** on
-replies (`is_pasted` et al. — touches the insert-mechanics posture), and any first appearance of a
+**author-diversity/OON scoring** (pace + funnel copy), the **composition-provenance direction**
+(paste status/user agent/app-attestation are LIVE reply-pipeline inputs as of the May tree — what's
+unknown is whether/how they're *scored*; a confirmed paste penalty would touch the insert-mechanics
+posture), and any first appearance of a
 **per-surface distribution multiplier** (would be the first real basis for a `surfaceMult` concept
 Goobi currently has no encoding for).
 
@@ -215,9 +272,13 @@ provenance discipline added 2026-07-29 against the May 15, 2026 tree read. Same 
 direct read of `ranking_scorer.rs` + `vm_ranker.rs` added: the verbatim score pipeline + diversity
 formula, the full 22-term head list (share_via_dm / share_via_copy_link / not_dwelled et al.), the
 VMRanker private-reranker caveat, and the bookmark / link-penalty / velocity-gate myth-busts.
-**As of 2026-07-29:** the architecture (Grok-transformer ranking, Thunder/Phoenix, the multi-action
-scorer, negative weights, author diversity, Grox spam/policy, native ads, VMRanker hook) is
-confirmed in code; still-withheld = the numeric `params` weights, the diversity decay/floor + OON
-factor values, `grox/prompts` templates, the redacted config constants, and the VMRanker value
-model itself. Premium-as-reach is NOT in the open code (widely-reported only). Last repo read:
-May 15, 2026 state.*
+**As of 2026-07-29 (third read — adversarial pass):** the architecture (Grok-transformer ranking,
+Thunder/Phoenix incl. the three retrieval variants + new-user topic gating, the multi-action
+scorer + the modular scorers/ layer, negative weights, author diversity scoped to one response,
+Grox spam/policy at the corrected `grox/classifiers/content/` paths, native ads, VMRanker hook,
+the follower-gated reply pipeline with its holistic 0-3 `{score, reason}` grade, live
+composition-provenance inputs, the `age_filter.rs` cutoff, and the subscription content-gate) is
+confirmed in code; still-withheld = the numeric `params`/`ScoringWeights`, diversity decay/floor +
+`OON_WEIGHT_FACTOR` values, the `ReplyScoringSystem` rubric text, the blast-radius threshold
+number, and the VMRanker value model. Premium-as-reach is NOT in the open code (widely-reported
+only). Last repo read: May 15, 2026 state.*

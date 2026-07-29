@@ -36,7 +36,10 @@ ok(/NO QUOTE-WRAPPING/.test(P), "post-ideas bans emphasis quote-wrapping");
 ok(/SEMANTIC DISCOVERY/.test(P) && /never make the ranker guess/.test(P), "post-ideas encodes the 2026 semantic-discovery rule (name the subject in the audience's real words so the interest-embedding ranker can place it; no keyword-stuffing)");
 ok(/not-interested/.test(P) && /net-negative/.test(P), "post-ideas tone gate accounts for predicted negative signals (not-interested/mute/block/report subtract; strong in-niche opinion GOOD, out-of-niche ragebait net-negative)");
 ok(/send this to/.test(P), "post-ideas banger screen aims each post at a send/share/profile-click (the highest-value reaction beats a drive-by like)");
-ok(/NOT dwelling as its own explicit negative/.test(P) && /costs twice/.test(P), "post-ideas hook rule encodes the not_dwelled head (an unpaid hook promise costs the read AND a scored skip; verified in ranking_scorer.rs 2026-07-29)");
+ok(/NOT dwelling as its own distinct scored signal/.test(P) && /costs twice/.test(P), "post-ideas hook rule encodes the not_dwelled term WITHOUT asserting its unpublished weight sign (adversary fix F4)");
+ok(/Quote-and-extend/.test(P) && /never a restate or a pile-on/.test(P), "post-ideas playbook carries the quote-and-extend shape (quote/quoted_click are scored heads; quote_hydrator shipped May 2026)");
+ok(/lead with the surprising word/.test(P), "semantic-discovery arbitrates against hook-craft (surprising word wins the front of line 1; subject appears somewhere in line 1)");
+ok(/SEND\/SHARE = /.test(P) && /ONE question per post/.test(P), "the send/share trigger lives in LEVER MAP and the banger screen keeps its single-question contract (adversary fix F3)");
 // second-pass prompts (measured: swap-fails 60%→40%, antiGeneric +0.67)
 ok(/SWAP TEST/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /"grades"/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /tier/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /callout/.test(m.POST_IDEAS_JUDGE_SYSTEM), "post-ideas JUDGE returns a per-idea grade (tier + call-out) — drives the second pass AND the UI call-out");
 ok(/only THIS user could write/.test(m.POST_IDEAS_REGEN_SYSTEM) && /DIFFERENT point than the sources/.test(m.POST_IDEAS_REGEN_SYSTEM), "post-ideas REGEN rewrites flagged ideas into user-specific posts");

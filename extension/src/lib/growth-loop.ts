@@ -28,7 +28,7 @@ export const GROWTH_STRATEGIES: GrowthStrategy[] = [
   {
     id: "proof", label: "Proof-led authority", promise: "Make the reason to follow tangible.",
     hypothesis: "Specific results and artifacts will turn curiosity into trust better than broad advice.",
-    postBrief: "Publish concrete results, before/after evidence, or a compact case study. Never invent a number.",
+    postBrief: "Publish concrete results, before/after evidence, or a compact case study. Never invent a number. When a screenshot IS the proof (a dashboard, a chart, a customer message), attach it — an image worth inspecting earns the photo-expand, a scored action.",
     replyBrief: "Add one specific lesson, example, or tradeoff that demonstrates real experience.",
     profileBrief: "Make the bio promise concrete and pin the strongest proof post.",
   },
@@ -42,7 +42,7 @@ export const GROWTH_STRATEGIES: GrowthStrategy[] = [
   {
     id: "builder", label: "Builder story", promise: "Give people a project and person to root for.",
     hypothesis: "Visible progress, decisions, and honest lessons will create repeat interest over time.",
-    postBrief: "Share a real build decision, artifact, setback, or progress marker and the lesson behind it.",
+    postBrief: "Share a real build decision, artifact, setback, or progress marker and the lesson behind it. When the artifact is visual (the screen you shipped, the diff, the graph), attach it — an image worth inspecting earns the photo-expand, a scored action.",
     replyBrief: "Connect through a real parallel from your own work without hijacking the conversation.",
     profileBrief: "Name what you are building now and make the banner or pin show it immediately.",
   },

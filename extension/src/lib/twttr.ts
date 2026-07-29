@@ -31,6 +31,8 @@ export interface TwttrTweet {
   likes?: number;
   replies?: number;
   reposts?: number;
+  quotes?: number;       // quote-post count (quote is a scored head; feeds the outcome loop)
+  bookmarks?: number;    // DIAGNOSTIC ONLY — bookmark is confirmed-absent from ranking_scorer.rs; never a ranking input
   views?: number;
   postedAt?: number;     // epoch ms
   avatar?: string;
@@ -122,6 +124,8 @@ function flattenTweet(result: any): TwttrTweet | null {
   const likes = num(counts.favorite_count) ?? num(lg.favorite_count);
   const replies = num(counts.reply_count) ?? num(lg.reply_count);
   const reposts = num(counts.retweet_count) ?? num(lg.retweet_count);
+  const quotes = num(counts.quote_count) ?? num(lg.quote_count);
+  const bookmarks = num(counts.bookmark_count) ?? num(lg.bookmark_count); // diagnostic only, never a ranking input
 
   let postedAt: number | undefined = num(result.details?.created_at_ms);
   if (postedAt == null && lg.created_at) {
@@ -148,6 +152,8 @@ function flattenTweet(result: any): TwttrTweet | null {
     likes,
     replies,
     reposts,
+    quotes,
+    bookmarks,
     views: viewCount(result.views),
     postedAt,
     avatar,

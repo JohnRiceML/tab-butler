@@ -132,5 +132,22 @@ ok(m.analyzeBio("shipped 3 apps").hasProof && m.analyzeBio("$5k ARR").hasProof, 
   ok(!f4.some((x) => /promise what a follower/i.test(x.text)) && f4.some((x) => /covers what you do/.test(x.text)), "bioHasPromise unset → no promise nag, ✓ unchanged");
 }
 
+// adversary fix F1: the promise nudge only fires once who/what/proof is complete, and the
+// broadened regex stops nagging bios that already promise future content
+{
+  // static-authority bio: proof yes, role/audience NO → gets the who/what nudge, never the promise nag
+  const f1 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: false, bioHasAudience: false, bioHasProof: true, bioHasPromise: false }, stats);
+  ok(f1.some((x) => /doesn't say what you DO/.test(x.text)) && !f1.some((x) => /promise what a follower/i.test(x.text)), "proof-only bio gets the who/what nudge, NOT the promise nag (F1)");
+  // role ok, audience missing → audience nudge
+  const f2 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: false, bioHasProof: true, bioHasPromise: false }, stats);
+  ok(f2.some((x) => /who it's FOR/.test(x.text)) && !f2.some((x) => /promise what a follower/i.test(x.text)), "audience gap outranks the promise nudge (F1)");
+  // broadened promise regex: these all promise future content and must NOT read as promise-less
+  ok(m.analyzeBio("I teach founders to code").hasPromise === true, "regex: 'I teach' is a promise (F1)");
+  ok(m.analyzeBio("threads every friday on SaaS growth").hasPromise === true, "regex: 'threads every friday' is a promise (F1)");
+  ok(m.analyzeBio("newsletter about AI search at aipeekaboo").hasPromise === true, "regex: 'newsletter' is a promise (F1)");
+  ok(m.analyzeBio("tips on shipping faster, daily").hasPromise === true, "regex: 'tips on' is a promise (F1)");
+  ok(m.analyzeBio("chronicling the road to $1M ARR").hasPromise === true, "regex: 'chronicling' is a promise (F1)");
+}
+
 console.log(fail === 0 ? `\n✓ profile-check: ${pass} assertions passed` : `\n✗ profile-check: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);
