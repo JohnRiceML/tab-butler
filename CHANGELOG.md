@@ -4,6 +4,14 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Dev hot-reload loop:** `npm run dev` watches `src/`, rebuilds on save, and bumps a
+  `dist/dev-reload.json` beacon; the service worker (only when that beacon exists) polls it,
+  reloads the extension on a bump, and refreshes open X tabs on the way back up — removing both
+  manual dev steps (the chrome://extensions reload click and the per-tab refresh). Distributable
+  `npm run build` deletes the beacon and `check:dist` fails any dist/ still carrying one, so
+  watch-mode plumbing can never ship. SW-side behavior needs a one-time manual smoke test
+  (build-side halves are verified: watch writes the beacon, build strips it).
+
 - **Clone-and-run maintainer path:** added root `setup`, `test`, `build`, and
   `verify` commands; a deterministic runner for all zero-cost suites; MV3 build
   artifact validation; a Node 20 baseline; a GitHub Actions verification gate;

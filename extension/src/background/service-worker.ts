@@ -77,6 +77,54 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => void seedFromLocalFile());
 
+/* ---------- dev hot-reload (unpacked watch-mode builds ONLY) ----------
+ * `npm run dev` (build.mjs --watch) writes dist/dev-reload.json with a fresh id on every
+ * successful rebuild; a distributable `npm run build` DELETES that file (check-dist enforces
+ * absence). So outside a dev build the first fetch 404s and this whole block stays inert —
+ * no polling, no behavior change. In a dev build: poll the beacon (unpacked extensions serve
+ * runtime.getURL resources from disk, so the fetch sees the new file without a reload), and on
+ * a bump mark a pending flag + chrome.runtime.reload(); the FRESH worker sees the flag and
+ * refreshes open X tabs, replacing the orphaned content script (whose global
+ * context-invalidated catch-all has already torn it down quietly). Together that removes both
+ * manual dev steps: the chrome://extensions reload click AND the per-tab refresh. */
+const DEV_RELOAD_URL = chrome.runtime.getURL("dev-reload.json");
+async function devReloadId(): Promise<number | null> {
+  try {
+    const r = await fetch(`${DEV_RELOAD_URL}?t=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { id?: number };
+    return typeof j.id === "number" ? j.id : null;
+  } catch {
+    return null;
+  }
+}
+async function devHotReloadInit(): Promise<void> {
+  // Finish the previous cycle first: if the old worker queued a reload, refresh X tabs now so
+  // the new content script takes over. Runs before the beacon check so the flag can't strand.
+  try {
+    const flag = (await chrome.storage.local.get("devReloadPending")) as { devReloadPending?: boolean };
+    if (flag.devReloadPending) {
+      await chrome.storage.local.remove("devReloadPending");
+      const tabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
+      for (const t of tabs) if (t.id != null) void chrome.tabs.reload(t.id);
+      console.log(`[goobi dev] hot-reloaded; refreshed ${tabs.length} X tab(s)`);
+    }
+  } catch { /* storage/tabs unavailable — never let dev plumbing break the worker */ }
+  const first = await devReloadId();
+  if (first == null) return; // not a watch-mode build — stay inert forever
+  let last = first;
+  setInterval(() => {
+    void devReloadId().then(async (id) => {
+      if (id != null && id !== last) {
+        last = id;
+        await chrome.storage.local.set({ devReloadPending: true });
+        chrome.runtime.reload();
+      }
+    });
+  }, 1000);
+}
+void devHotReloadInit();
+
 // Clicking the toolbar icon opens Tab Butler as a right-edge, full-height side
 // panel (a drawer) instead of a small popup. Idempotent + persists across sessions.
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => { /* older Chrome without sidePanel */ });

@@ -30,8 +30,15 @@ From the repository root:
 npm run setup       # locked dependency install in extension/
 npm run verify      # typecheck + all unit suites + build + dist validation
 npm test            # all zero-cost extension test suites
-npm run build       # rebuild extension/dist/
+npm run build       # rebuild extension/dist/ (distributable — strips the dev beacon)
+npm run dev         # watch mode: rebuild on save + hot-reload the loaded extension + refresh open X tabs
 ```
+
+Dev loop: load `extension/dist/` unpacked ONCE, then `npm run dev` — every save rebuilds and the
+extension reloads itself (the service worker polls `dist/dev-reload.json`, which only exists in
+watch builds) and refreshes open X tabs so the fresh content script takes over. When done,
+Ctrl-C and run `npm run build`: it deletes the beacon, and `check:dist` fails any dist/ that
+still carries one.
 
 From `extension/`, the equivalent commands are available directly. The deterministic
 test runner includes every `scripts/test-*.mjs` file and intentionally excludes

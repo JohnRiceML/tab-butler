@@ -9,6 +9,7 @@
   "scripts": {
     "setup": "npm --prefix extension ci",
     "build": "npm --prefix extension run build",
+    "dev": "npm --prefix extension run dev",
     "test": "npm --prefix extension test",
     "typecheck": "npm --prefix extension run typecheck",
     "verify": "npm --prefix extension run verify"

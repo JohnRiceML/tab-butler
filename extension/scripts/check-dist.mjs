@@ -26,6 +26,11 @@ if (!manifest.content_scripts?.some((entry) => entry.js?.includes("x-copilot.js"
 const manifestText = JSON.stringify(manifest);
 if (/YOUR-PROXY|localhost|127\.0\.0\.1/i.test(manifestText)) failures.push("development or placeholder hosts remain in the shipping manifest");
 
+// The dev hot-reload beacon must never ship: its presence is what arms the service worker's
+// reload poller. `node build.mjs` (no --watch) deletes it; a leftover means dist/ was last
+// produced by watch mode — rebuild before distributing.
+if (existsSync(join(dist, "dev-reload.json"))) failures.push("dev-reload.json (watch-mode hot-reload beacon) is present — run `npm run build` to produce a distributable dist/");
+
 if (failures.length) {
   for (const failure of failures) console.error(`Build check failed: ${failure}`);
   process.exit(1);
