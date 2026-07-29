@@ -5,24 +5,24 @@
 **Surface:** Ambient on x.com, inside the Goobi copilot dock. It renders in the dock header (`renderDock`), directly under the title/pace-chip row and above the relationship panels, only when the dock is open (not the minimized launcher pill). It is a passive readout — there are no controls.
 
 ## What it does for the user
-It shows a single colored progress bar with a mood label ("Cold start" → "Warming up" → "In flow" → "In the zone") and a one-line coaching cue, reflecting how consistent and sustainable your replying/posting has been today. Crucially it *peaks at a healthy daily target and then saturates* — doing more never scores higher — and if you cross X's automation line it flips red to "Too hot — ease off" with a *lower* score. Beneath the meter it also shows a neutral factual line of real X-reported views on posts you shipped today, kept visually separate so a vanity metric never drives the discipline score.
+It shows a single colored progress bar with a mood label ("Cold start" → "Warming up" → "In flow" → "In the zone") and a one-line coaching cue, reflecting how consistent and sustainable your replying/posting has been today. Crucially it *peaks at a healthy daily target and then saturates* — doing more never scores higher — and if you cross Goobi's conservative pause line it flips red to "Too hot — ease off" with a *lower* score. Beneath the meter it also shows a neutral factual line of real X-reported views on posts you shipped today, kept visually separate so a vanity metric never drives the discipline score.
 
 ## How the user uses it
 1. The user replies through Goobi and/or marks post ideas as "posted" over the course of a day.
 2. They click the Goobi launcher pill to open the dock (this also kicks off a background stats refresh).
 3. They see the **Today strip** (tiered 2026-07-08 — the old six stacked equal-weight lines buried the reply queue): **row 1** is a compact summary — mini fill bar (width = score%, color = state) + colored state label + today's posts/views + the chain, with a ▸ caret (keyboard-accessible, aria-expanded); **row 2** is a single "next best move" coach line chosen by deterministic priority — **safety always wins the slot** (ease-off callout / caution cue), then the daily-shape nudge, then the algo/measured callout. The caret expands the full detail: momentum cue, daily shape, the 14-day activity dots + full chain, and the callout — every tooltip and evidence label intact (nothing was deleted, only tiered).
-4. If they idle for a while after building momentum, the (expanded) cue softens to "Cooling off" (tapering). If they pile up replies past ~20/hr the state label + coach line turn amber ("ease off the throttle a touch"); past ~30/hr they turn red "Too hot — ease off" and the score drops — visible even collapsed, since the label is in row 1 and safety owns row 2.
+4. If they idle for a while after building momentum, the (expanded) cue softens to "Cooling off" (tapering). At Goobi's 6/hr caution line the state label + coach line turn amber; at the 10/hr pause line they turn red "Too hot — ease off" and the score drops. These are conservative product guardrails, not claimed X limits.
 5. In the summary row, when own-post data is available, they read a plain "N posts · X views" fact (or "no posts yet").
 
 ## How it works
 **Trigger / render.** The strip is built inside `x-copilot.ts:renderDock` (the `mom` block, ~lines 3057–3086), re-run on every dock render. It composes a `MomentumInput` and calls `computeMomentum` from `lib/momentum.ts`, then paints `m.score` (bar width), `m.color`, `m.label`, `m.cue`; `state === "peak"` adds a box-shadow glow.
 
 **Inputs (all local, no API for the score itself):**
-- `repliesToday()` — `replyLog.daily[dayKey(now)]` (replies inserted through Goobi today; resets at local midnight).
+- `repliesToday()` — `replyLog.daily[dayKey(now)]` (successful Like + insert attempts and explicitly confirmed copy/open replies today; resets at local midnight).
 - `postedToday()` — count of `ideaQueue` items with `status === "posted"` and `postedAt` dated today.
 - `replyStreak()` — consecutive days (anchored on today, or yesterday if today is still empty) with ≥1 reply, from `replyLog.daily`.
 - `minsSinceLast` — minutes since the max of last reply time (`replyLog.times`) and last post (`ideaQueue[].postedAt`); `9999` if never.
-- `repLevel` — `reputationStatus(repliesLastHour).level` (`healthy` < 20 / `caution` 20–29 / `easeoff` ≥ 30), the *same* `stt` already computed for the dock's pace chip, so the two can never disagree.
+- `repLevel` — `reputationStatus(repliesLastHour).level` (`healthy` < 6 / `caution` 6–9 / `easeoff` ≥ 10), the *same* `stt` already computed for the dock's pace chip, so the two can never disagree.
 
 **Scoring math (`momentum.ts:computeMomentum`, pure):**
 `raw = volume + posts + streak + live`, where `volume = 55·min(repliesToday/8, 1)` (saturates at `PACE_TARGET = 8`), `posts = min(postedToday,2)·9` (0–18), `streak = min(replyStreak·4, 20)`, `live = 7·0.5^(minsSinceLast/45)` (decays while idle). Then the safety override: `easeoff` → forces `overheating`, score capped ≤ 60, red `#d6604a`; `caution` → score capped ≤ 74, amber `#e89a3c`, "ease off the throttle" cue; otherwise score is `min(raw,100)` bucketed into `cold`(≤14)/`warming`(≤44)/`inflow`(≤74)/`peak`, and a `warming`/`inflow` state with `minsSinceLast > 25` is relabeled `cooling`.
@@ -41,7 +41,7 @@ It shows a single colored progress bar with a mood label ("Cold start" → "Warm
 ## Key files
 - `src/lib/momentum.ts` — pure `computeMomentum` + the `COPY` table, `PACE_TARGET`/bonus/streak/recency constants, and the safety override. The single source of the score math, copy, and colors.
 - `src/content/x-copilot.ts` — the strip in `renderDock` (~3057), the input helpers `repliesToday` (716), `replyStreak` (1644), `postedToday` (2145), `ownViewsToday` (2138); the stats pipeline `refreshOwnStats`/`fetchOwnData`/`ownStats` (2102–2135); dock-open trigger in the launcher `onclick` (3002).
-- `src/lib/reply-hygiene.ts` — `reputationStatus` (thresholds: `REPLY_SOFT_PER_HOUR = 20`, `REPLY_HARD_PER_HOUR = 30`), the shared safety source of truth.
+- `src/lib/reply-hygiene.ts` — `reputationStatus` (conservative thresholds: `REPLY_SOFT_PER_HOUR = 6`, `REPLY_HARD_PER_HOUR = 10`), the shared safety source of truth.
 - `src/lib/twttr.ts` — `OwnPost` shape + `pickOwnPostsWithStats` (parses real views/postedAt from the X-data response).
 - `scripts/test-momentum.mjs` — unit tests for `computeMomentum`.
 

@@ -6,8 +6,6 @@
   "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history", "favicon", "sidePanel"],
   "host_permissions": [
     "https://api.anthropic.com/*",
-    "http://localhost:3210/*",
-    "https://YOUR-PROXY.vercel.app/*",
     "https://*.p.rapidapi.com/*"
   ],
   "background": {

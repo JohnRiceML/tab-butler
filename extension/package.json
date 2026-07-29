@@ -2,15 +2,21 @@
   "name": "tab-butler-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "Tab Butler — MV3 Chrome/Edge extension. Local-first tab hygiene with an opt-in Claude smart layer.",
+  "description": "Goobi — MV3 X reply copilot and local-first tab manager with an opt-in Claude layer.",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "node build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "verify": "npm run typecheck && npm test && npm run build && npm run check:dist"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.6.0"
   }
 }

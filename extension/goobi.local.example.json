@@ -6,6 +6,8 @@
   "followers": 0,
   "niche": "AI SaaS, indie founders, MRR; posts I can add a specific build lesson to",
   "voice": "Paste 3-6 replies you actually wrote, one per line. Or leave \"\" and use the panel's Learn my voice.",
+  "soul": "# What I believe\n-\n\n# What I have earned the right to talk about\n-\n\n# Themes I keep returning to\n-\n\n# Never sound like\n-",
+  "dailyGoals": { "replies": 10, "posts": 1, "dms": 2 },
   "products": [
     { "name": "", "url": "https://yourproduct.com", "blurb": "one-liner: what it does, who it's for" }
   ],

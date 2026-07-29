@@ -49,6 +49,12 @@ export const TWTTR_BUDGET = {
 export const AUTHOR_REACH_TTL_MS = TWTTR_CLASS.followers.ttl; // 24h
 export const HEAVY_HITTER_TTL_MS = 7 * 24 * 3_600_000;
 
+/** The content script may request only endpoints whose response shape is fixture-tested in this
+ * repository. This keeps a compromised page/content-script path from turning the fixed RapidAPI
+ * host into an arbitrary endpoint broker. Expand only with a parser, policy test, and live spike. */
+export const TWTTR_ALLOWED_PATHS = new Set(["user", "search-v3", "user-replies-v2"]);
+export function allowedTwttrPath(path: string): boolean { return TWTTR_ALLOWED_PATHS.has(path.replace(/^\/+/, "").toLowerCase()); }
+
 export function classForPath(path: string): TwttrClass {
   const p = path.replace(/^\//, "").toLowerCase();
   if (p.startsWith("user-tweets") || p.startsWith("user-replies") || p.startsWith("user-media")) return "timeline";

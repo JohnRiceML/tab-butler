@@ -45,6 +45,19 @@ ok(/deboosts aggressive replies/.test(D), "reply draft keeps the civility / anti
 ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the funnel step that makes follows)");
 ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the value paragraph's 'engage the specific claim' push was REVERTED — measured −0.2 voiceMatch for no grade/value gain, drafter was already at ceiling)");
 
+// ---- X_SCORE_SYSTEM: observed relationship context ----
+const XS = m.X_SCORE_SYSTEM;
+ok(/DIRECT COMMENT ON THE USER'S OWN POST/.test(XS) && /warm inbound conversation/.test(XS), "reply scorer treats comments on the user's post as first-class warm inbound context");
+ok(/obvious spam, abuse, generic link drops, or bot bait/.test(XS), "warm inbound scoring still rejects abusive and automated comments");
+
+// ---- DM_DRAFT_SYSTEM: consent, specificity, and manual-send boundaries ----
+const DM = m.DM_DRAFT_SYSTEM;
+ok(/ONE thoughtful X Direct Message/.test(DM) && /send manually/.test(DM), "DM prompt stays one-message and manual-send only");
+ok(/Never invent familiarity/.test(DM) && /recipient intent/.test(DM), "DM prompt cannot manufacture relationship or buying intent");
+ok(/One clear ask maximum/.test(DM) && /easy to decline/.test(DM), "DM prompt keeps a single low-pressure ask");
+ok(/one unanswered follow-up maximum/i.test(DM) && /add new value/i.test(DM), "DM prompt keeps the one-follow-up, new-value rule");
+ok(/Never propose a link swap/.test(DM) && /Never invent budget/.test(DM), "DM commercial angles preserve backlink and sponsor honesty guards");
+
 // ---- POST_IDEA_REWRITE_SYSTEM: mirrors the tone gate so a rewrite can't undo it ----
 ok(/constructive/i.test(m.POST_IDEA_REWRITE_SYSTEM) && /(dunk|sneer)/i.test(m.POST_IDEA_REWRITE_SYSTEM), "rewrite prompt mirrors the constructive-tone rule");
 

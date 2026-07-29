@@ -13,6 +13,8 @@
 
 export interface OwnPostStat { id: string; text?: string; views?: number; likes?: number; reposts?: number }
 export interface ProfileState {
+  /** Account that was actually inspected; prevents profile advice leaking across X accounts. */
+  ownerHandle?: string;
   pinnedId?: string;
   pinKnown?: boolean /* a MISSING pin label is only trustworthy on an English UI — false → stay silent on pin claims */;
   bioLen?: number;

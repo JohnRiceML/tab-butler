@@ -6,7 +6,7 @@
  * unit-tested (scripts/test-momentum.mjs).
  *
  * The keystone: it is structurally incapable of rewarding unsafe volume. The score
- * SATURATES at a healthy daily target, and crossing the ease-off line (≥30 replies/hr,
+ * SATURATES at a healthy daily target, and crossing Goobi's conservative ease-off line,
  * via reputationStatus) flips it to "overheating" — red, and LOWER, never "max". It reads
  * its safety verdict from the same reputationStatus() the dock's pace chip + Goobi's
  * "worn" mood read, so the two can never contradict.

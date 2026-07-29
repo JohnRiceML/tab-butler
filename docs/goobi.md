@@ -41,7 +41,7 @@ a timer or lets one animation bleed into the next.
 | `cheer` | `^‿^` + shimmy | `g-tada` | streak / welcome-back / pet |
 | `trick` | `^‿^` + a **random** show-off move from the pool (dance/spin/flip/jump/bounce/wiggle/tada/slide/wave, dance-weighted) via `GoobiHandle.trick()` | (varies) | playground: pet/feed once he's "ready" (happy) → fresh move each time |
 | `love` | red heart eyes + smitten bounce | `g-love` | the reply reaction (after cheer) |
-| `worn` | dizzy X-eyes, body turns red | `g-wobble` | ease-off (≥30 replies/hr) |
+| `worn` | dizzy X-eyes, body turns red | `g-wobble` | Goobi ease-off guard (≥10 confirmed replies/hr) |
 
 The playground idle (`playful`) cycles bigger moves: jump, dance, bounce, wiggle,
 tada, heartbeat (g-jump / g-dance + the rest), more frequently.
@@ -55,7 +55,7 @@ Driven by `goobiMood()` in `x-copilot.ts`, in precedence order:
 3. **Find spots** running → `searching`.
 4. **Analyzing** — `inFlight.size > 0` (Claude scoring a batch) → `thinking`.
 5. **Just rescanned** (`goobiSearchUntil` window) → `searching`.
-6. **Ease-off** — `repliesLastHour() ≥ REPLY_HARD_PER_HOUR` (30) → `worn`.
+6. **Ease-off** — `repliesLastHour() ≥ REPLY_HARD_PER_HOUR` (10, a conservative Goobi guardrail rather than an X limit) → `worn`.
 7. **Posts waiting** (`opps.size > 0`) → `idle`, else → `sleeping`.
 
 Working-state flips (search/analyze/draft) update Goobi **in place** via

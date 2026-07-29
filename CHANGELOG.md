@@ -2,6 +2,111 @@
 
 Notable changes + the phase-transition record. The day-to-day lives in git history.
 
+## Unreleased
+
+- **Clone-and-run maintainer path:** added root `setup`, `test`, `build`, and
+  `verify` commands; a deterministic runner for all zero-cost suites; MV3 build
+  artifact validation; a Node 20 baseline; a GitHub Actions verification gate;
+  and a maintainer handoff/smoke-test runbook. A dependency upgrade also clears
+  the prior esbuild development-server advisory. The full path was verified from
+  a clean temporary copy with no existing `node_modules` or `dist` directory.
+- **Comments on your posts are first-class reply context:** Goobi now detects X's
+  visible `Replying to @you` relationship, labels the feed overlay and reply card
+  `Comment on your post`, gives genuine comments a dedicated warm-inbound lane, and
+  passes that relationship into both Haiku scoring and Sonnet drafting. Same-author
+  warnings remain visible but are softened for a real ongoing conversation. The
+  Comments workspace now distinguishes direct comments from mentions on every row.
+- **Default-on Like + insert reply:** restored the user-clicked workflow that likes
+  the selected post and fills its empty X reply composer in one verified operation.
+  A visible side-panel setting switches to copy + open. Occupied/unavailable composers
+  fall back safely and nothing auto-submits. A successful fill now records the assisted
+  attempt immediately, closes Goobi's panel, turns the feed green, removes the queue
+  card, and live-refreshes dock/side-panel totals and pace. Only copy/open fallback keeps
+  the posted-confirmation screen.
+- **Top-level daily goals:** added an always-visible scorecard for verified Replies,
+  Posts, and unique people manually marked as DM'd. Goals are editable, locally persisted,
+  can be disabled individually, route directly to their workspace, and use conservative
+  defaults/caps. Existing account-safety and DM pacing gates always override volume goals.
+- **User-owned SOUL.md:** added a markdown creative brief for beliefs, earned experience,
+  recurring themes, proof, desired reader feeling, and “never sound like” boundaries.
+  It stays separate from learned voice (substance vs style), includes an explicit starter
+  template, is capped/sanitized locally, and now guides reply drafts, post generation,
+  quality passes, and idea rewrites. It is labeled as identity context rather than evidence,
+  cannot justify invented personal facts, and is intentionally excluded from DM drafting.
+- **Reply-card compact/expanded redesign:** replaced the dense always-expanded card and
+  detached right-hand “Best move” column with a single scannable row: author, growth lane,
+  strength, age, one-line post preview, Draft, and disclosure. Expanding one card in place
+  reveals the full post, a readable Why-this-is-worth-your-time block, three visual decision
+  signals, confidence/caution context, and Open / Follow / Plan DM / Mark replied / Skip.
+  Expansion is single-open and keyboard accessible, so the queue remains easy to triage.
+- **In-post recommendation UX:** replaced the opaque percentage badge and faint `+ Add`
+  shortcut with a compact, expandable decision overlay on every scanned post. Surfaced
+  posts now name the growth lane and strength, then disclose Why now, separate Reach /
+  Relationship / Community signals, evidence confidence, cautions, and Draft / Open /
+  Mark replied / Skip actions. Passed posts explain the content-fit reason and offer Add
+  to queue, Draft anyway, or Open. The component numbers are labeled as decision signals,
+  never reach probabilities. The overlay is single-open, keyboard dismissible, and keeps
+  mutation-observer writes idempotent for X's virtualized feed. An open card temporarily
+  elevates both its post and X timeline cell, then restores their styles on close, so later
+  timeline rows cannot paint over or clip its actions.
+- **Warm comments promoted above cold Targets:** the tested Tend-your-threads queue
+  is now a first-class **Comments** workspace with its own open count, full freshest-first
+  queue, reply-history completion, manual done, and an honest notifications-page empty
+  state. Targets left the primary navigation and remains available under Replies →
+  **Find people** as secondary discovery. The Relationships accordion now contains only
+  Circle and Supporters analytics, removing the duplicate buried Threads entry.
+- **Fifth dock mode — account Growth loop:** added one account-scoped 14-day
+  reason-to-follow experiment across the profile, originals, and replies. Five concrete
+  strategy bets provide a profile/post/reply playbook; the active bet now guides three
+  of five generated post ideas while two remain exploratory. The loop compares follower
+  pace, views/original, and engagement/original with the immediately preceding matched
+  window, records collect/double-down/tighten/switch decisions, and keeps completed
+  evidence in history. It reuses existing follower, own-post, reply-outcome, and local
+  profile data, so there is no new API endpoint or polling cost. Thin-data gates and
+  explicit correlation-not-causation copy prevent fake profile-click attribution.
+- **External-test hardening:** zero-view posts remain in experiment denominators;
+  strategy verdicts require recorded execution as well as comparable outcomes; profile
+  findings are account-bound; handle/session mismatches block capture; starting without
+  a persistent owner is disabled; ending a live test requires confirmation; history
+  exposes dates, execution counts, and evidence without hover. Removed the parked proxy
+  and localhost host permissions from the shipping manifest, and Smart mode now honestly
+  requires a locally stored Anthropic key.
+- **Reply recommendations rebuilt around the real decision:** Best no longer presents one
+  opaque percentage as if it were a probability. A new pure, tested policy separately scores
+  **Keep it going**, **Build community**, and **Earn reach**, using relevance, freshness,
+  observed thread room, size-scaled reachable audience, exact completed exchanges, measured
+  engagement-back, niche-peer evidence, and recent-author diversity. Missing data is middling
+  and disclosed, not silently ideal; mega accounts get a meaningful opportunity-cost cut; a
+  warm relationship cannot rescue a poor-fit post. The row now explains “Why now” and exposes
+  the three component scores under ⓘ. Also corrected the conversation-dedup overclaim (reply
+  count is a labeled heuristic, not a universal one-slot rule) and fixed RapidAPI enrichment so
+  search candidates with a cached follower count still fetch missing following/bio evidence.
+- **Fourth dock mode — DM workspace:** added a per-account, local relationship pipeline
+  for Sponsor, Backlink, Connect, Co-market, Customer, and Partner conversations.
+  It ranks exact public relationships ahead of cold Targets, uses the proven RapidAPI
+  `/user` and `search-v3` endpoints only for explicit public enrichment, and adds a
+  separate Sonnet DM prompt. Drafts stay editable; Copy/Open never count as sending;
+  delivery, replies, follow-ups, and outcomes are recorded only when the user marks them.
+  Includes one-follow-up policy, conservative marked-send pacing, near-duplicate blocking,
+  cross-tab stable-ID merges, deletion tombstones/private-text redaction, and 30 pure assertions plus prompt guards.
+- **KISS DM intelligence:** added one inspectable Next move that prioritizes real
+  conversations over follow-ups and new outreach, plus a compact self-reported funnel.
+  Intent/product/warmth are snapshotted when a send is marked, so later edits cannot
+  rewrite history. Angle signals remain display-only, require at least three first
+  touches, and always show the numerator/denominator. No new API or model calls.
+  People-source learning now separately measures exact relationships, Targets,
+  reply spots, manual research, Circle, and completed Threads. Candidate cards expose
+  their relevant cohort sample; a source needs five first touches before Goobi names
+  it the clearest people signal. This remains observational and never auto-ranks.
+
+- **X first-run UX:** the side panel now opens on the product's primary X surface,
+  puts the required Anthropic connection in that setup path, and gives new users a
+  clear Connect Claude → Set your focus → Add your voice sequence. The legacy
+  tab manager's Claude toggle moved back into its own settings so it no longer looks
+  like a global copilot control. Optional products/defaults, third-party X-data
+  enrichment, progress, and diagnostics are progressively disclosed. Also fixed the
+  malformed RapidAPI settings container that nested the handle controls inside it.
+
 ## Phase: X reply copilot + Goobi — through 2026-06-23
 
 The product pivoted from **Tab Butler** (a tab manager) to **Goobi**, an X/Twitter
@@ -708,8 +813,6 @@ to read" into "ship these 2, fix this 1." Gate: tsc + build; 16/16 suites (promp
 
 ## Before store submission
 
-- **Remove/replace the placeholder host** `https://YOUR-PROXY.vercel.app/*` in
-  `manifest.json` (invalid → store warning).
 - **Post a privacy policy** covering the X **post text** the copilot sends to Claude,
   and keep Claude behind the explicit opt-in (limited-use compliance).
 - **Managed proxy is non-functional**: `claude-client.ts` ships a placeholder

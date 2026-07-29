@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr-policy.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { classForPath, degradeMode, canFetch, monthKeyOf, TWTTR_CLASS } = mod;
+const { classForPath, degradeMode, canFetch, monthKeyOf, TWTTR_CLASS, allowedTwttrPath } = mod;
 
 let pass = 0, fail = 0;
 const eq = (a, b, l) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; else { fail++; console.error("  FAIL:", l, "got", JSON.stringify(a), "want", JSON.stringify(b)); } };
@@ -31,6 +31,8 @@ eq(classForPath("lists"), "other", "unknown -> other");
 
 eq(TWTTR_CLASS.user.tier, "cheap", "user is cheap");
 eq(TWTTR_CLASS.search.tier, "expensive", "search is expensive");
+ok(allowedTwttrPath("user") && allowedTwttrPath("/search-v3") && allowedTwttrPath("user-replies-v2"), "only repository-proven endpoints are allowlisted");
+ok(!allowedTwttrPath("followers") && !allowedTwttrPath("user-likes") && !allowedTwttrPath("https://example.com"), "unproven or arbitrary endpoints are rejected");
 
 // degradeMode thresholds (0.70 / 0.85 / 0.95)
 eq(degradeMode(0), "normal", "0 -> normal");

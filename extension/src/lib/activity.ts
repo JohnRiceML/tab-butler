@@ -60,7 +60,7 @@ export function pickCallout(ctx: {
   freeTier?: boolean; // true only when the user has SET their tier to free (unset = unknown = silence)
 }): Callout {
   if (ctx.easeoff) return {
-    text: "Ease off — past ~30 replies/hr reads as automation, and those penalties stick to the account. Goobi paused scanning for new spots (⟳ Rescan overrides).",
+    text: "Ease off — Goobi's conservative hourly guard is reached. Scanning is paused so you can take a real break (⟳ Rescan overrides).",
     why: "Volume/burst heuristics are the corroborated spam trigger class (2026 shadowban guides); the chain is never worth tripping them.",
     kind: "prior",
   };

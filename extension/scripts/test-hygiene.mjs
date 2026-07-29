@@ -38,21 +38,21 @@ ok(isDuplicateReply(normalizeReply("totally unrelated fresh reply here"), recent
 ok(isDuplicateReply("", recent) === false, "empty not flagged");
 
 // pickReplyNudge priority: duplicate > hard volume > soft volume > repeat author > none
-ok(/copy-pasted/.test(pickReplyNudge({ duplicate: true, repliesThisHour: 35, repeatAuthor: "x" })), "duplicate wins");
-ok(/automated/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 30, repeatAuthor: "x" })), "hard volume at 30");
-ok(/automated/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 41, repeatAuthor: null })), "hard volume above 30");
-ok(/pace yourself/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 21, repeatAuthor: null })), "soft nudge at 21");
-eq(pickReplyNudge({ duplicate: false, repliesThisHour: 25, repeatAuthor: null }), null, "22-29 stays quiet (no nag)");
+ok(/copy-pasted/.test(pickReplyNudge({ duplicate: true, repliesThisHour: 12, repeatAuthor: "x" })), "duplicate wins");
+ok(/guard/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 10, repeatAuthor: "x" })), "hard volume at 10");
+ok(/guard/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 15, repeatAuthor: null })), "hard volume above 10");
+ok(/slow down/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 6, repeatAuthor: null })), "soft nudge at 6");
+eq(pickReplyNudge({ duplicate: false, repliesThisHour: 8, repeatAuthor: null }), null, "7-9 stays quiet (no nag)");
 ok(/@bob/.test(pickReplyNudge({ duplicate: false, repliesThisHour: 5, repeatAuthor: "bob" })), "repeat author when calm");
 eq(pickReplyNudge({ duplicate: false, repliesThisHour: 5, repeatAuthor: null }), null, "no nudge when all clear");
 
-// reputationStatus: healthy < 20, caution 20-29, easeoff >= 30 (boundaries align with the nudges)
+// reputationStatus: healthy < 6, caution 6-9, easeoff >= 10 (conservative product guardrails)
 eq(reputationStatus(0).level, "healthy", "0/hr healthy");
-eq(reputationStatus(19).level, "healthy", "19/hr healthy");
-eq(reputationStatus(20).level, "caution", "20/hr caution (soft line)");
-eq(reputationStatus(29).level, "caution", "29/hr caution");
-eq(reputationStatus(30).level, "easeoff", "30/hr easeoff (hard line)");
-eq(reputationStatus(45).level, "easeoff", "45/hr easeoff");
+eq(reputationStatus(5).level, "healthy", "5/hr healthy");
+eq(reputationStatus(6).level, "caution", "6/hr caution (soft line)");
+eq(reputationStatus(9).level, "caution", "9/hr caution");
+eq(reputationStatus(10).level, "easeoff", "10/hr easeoff (hard line)");
+eq(reputationStatus(15).level, "easeoff", "15/hr easeoff");
 
 // replyQualityWarning: fires on empty praise / too-short / emoji-only, clears for a real add-on
 ok(replyQualityWarning("🔥🔥") !== null, "emoji-only reply is flagged");

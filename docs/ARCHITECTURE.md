@@ -28,7 +28,7 @@ Claude Code. See [SYSTEM.md](SYSTEM.md) for the file-level map and
 |---|---|---|---|
 | Content script | MV3, TS, esbuild | **The X copilot**: scan → score → badge → draft, the always-on dock, Goobi + playground | v1 |
 | Service worker | MV3 background, ES module | Broker for Claude + the Twttr (RapidAPI) provider; tab-manager features (idle-archive alarm, grouping) | v1 |
-| Side panel | `chrome.sidePanel` | Settings: BYO key, voice capture, products, niche, account-safety, the side-panel playground | v1 |
+| Side panel | `chrome.sidePanel` | Settings: BYO key, voice capture, SOUL.md, daily goals, products, niche, account-safety, the side-panel playground | v1 |
 | CLI | Zero-dep Node | **Dev servers**: `ls` / `kill <port>` / `clean` (Claude picks stale ones) | v1 |
 | Proxy | Next.js route | **Parked.** Optional hosted Claude tier for a future paid plan; not on the live path | later |
 
@@ -43,11 +43,12 @@ reach × reply-pileup × community-tier (freshness dominates — the first ~15 m
 window). Reach comes from best-effort, budgeted **Twttr** (`twitter241` on RapidAPI)
 `/user` lookups for follower/following/bio.
 
-Drafting calls Claude (**Sonnet**) with the user's saved *voice*, the post, an
-optional angle/product, and a free-text *steer*. The result is typed once into X's
-reply box (DraftJS), the post is liked, and the reply is logged. The reply log drives
-today's count, the rate/reputation guards, the "✓ commented" badge, and the
-playground treats.
+Drafting calls Claude (**Sonnet**) with the user's saved *voice* and user-authored
+*SOUL.md*, the post, an optional angle/product, and a free-text *steer*. The result
+is copied to the clipboard and the exact post opens in a new tab. The user pastes,
+reviews, and posts it manually. A successful Like + insert records an unconfirmed attempt immediately; copy/open fallback records only after explicit confirmation.
+The reply log drives today's count, the rate/reputation guards, the "✓ commented"
+badge, and the playground treats.
 
 **Hardening:** id-dedup + a `seen` cache + per-session call caps for X's
 virtualization; a clean `teardown()` on extension-context invalidation; `trapKeys`
@@ -61,14 +62,15 @@ the two surfaces differ, and this matters for Chrome Web Store compliance:
 | Surface | What goes to Claude | When |
 |---|---|---|
 | **X copilot — scoring** | The **post text** + author handle of timeline posts | Automatically as you scroll, once the copilot is enabled + a key is set |
-| **X copilot — drafting** | The post text, your saved voice, optional quoted-tweet context + product | On demand when you click Draft |
+| **X copilot — drafting** | The post text, your saved voice and SOUL.md, optional quoted-tweet context + product | On demand when you click Draft |
 | **X copilot — reach** | Author **handles** to the Twttr/RapidAPI provider | Best-effort enrichment |
 | **Tab manager** | Tab **id/title/url/idle** only — **never page content** (except the active tab on an explicit "summarize/file this") | When the smart tier is opted in |
 
 So the **tab manager's** "never page content" guarantee holds, but the **X copilot
 sends post text to Claude** — that's inherent to scoring/drafting. The store
 limited-use disclosures + posted privacy policy must cover the X post text, and
-Claude use stays gated behind an explicit opt-in (`smartEnabled` / a set key). Keys
+Claude tab features stay gated behind `smartEnabled` plus a key; X processing also
+requires the versioned in-product data disclosure acceptance. Keys
 live in `chrome.storage` / the service worker — never bundled or placed on the page.
 
 ## Claude integration
@@ -88,9 +90,9 @@ live in `chrome.storage` / the service worker — never bundled or placed on the
 
 `tabs`, `tabGroups`, `alarms`, `idle`, `storage`, `sessions`, `bookmarks`,
 `system.memory`, `history`, `favicon`, `sidePanel`; host permissions
-`api.anthropic.com`, `localhost:3210` (dev), `*.p.rapidapi.com` (Twttr), and a
-**placeholder** `YOUR-PROXY.vercel.app` that must be removed or replaced before store
-submission. The `tabs`/`tabGroups`/`history`/`system.memory`/`bookmarks` set serves
+`api.anthropic.com` and `*.p.rapidapi.com` (Twttr). The parked managed proxy and
+localhost are intentionally absent from the shipping manifest. The
+`tabs`/`tabGroups`/`history`/`system.memory`/`bookmarks` set serves
 the tab-manager surface; `favicon` + `sidePanel` serve the copilot UI.
 
 ## The honest RAM caveat (tab manager)

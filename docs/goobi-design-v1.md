@@ -17,7 +17,7 @@ Two grounding files this spec maps to, exactly as-is:
 - Animation keys: the `STATES` object in `mascot-lab.html` (every key below is one of these — no new art required for v1).
 - Signals: `reputationStatus` (`reply-hygiene.ts`), `replyLog`/`repliesToday()`/`recordSentReply` (`x-copilot.ts`), `getData()` mem%/idleCount (`popup.ts`).
 
-Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59,46)`) only when genuinely unwell. We reuse that exactly: **the only thing that reddens Goobi is the ease-off pace** — red = "your account is near X's automation line," nothing else. This keeps red meaningful.
+Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59,46)`) only when genuinely unwell. We reuse that exactly: **the only thing that reddens Goobi is the ease-off pace** — red = "you reached Goobi's conservative hourly guard," nothing else. This keeps red meaningful without pretending X publishes a safe line.
 
 ---
 
@@ -26,17 +26,17 @@ Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59
 Every row maps a REAL, already-computed value to a mascot-lab animation key. "NEW" flags a signal that needs instrumenting before that row can ship (deferred to v2 — see §5).
 
 ### A. X reply pace — `reputationStatus(repliesThisHour)` (`reply-hygiene.ts`)
-This is the spine. Thresholds are X's, already in the code (`REPLY_SOFT_PER_HOUR=20`, `REPLY_HARD_PER_HOUR=30`).
+This is the spine. Thresholds are conservative Goobi product guardrails, not X limits (`REPLY_SOFT_PER_HOUR=6`, `REPLY_HARD_PER_HOUR=10`); X publishes no guaranteed safe hourly reply rate.
 
 | Real signal & threshold | Goobi mood | Animation key(s) | Why (honest-mirror) |
 |---|---|---|---|
 | `repliesThisHour < 20` → `healthy` | Content / calm | `idle`, `breathe`, `blink`, `float` | "You're pacing like a person." The default good state. |
-| `repliesThisHour 20–29` → `caution` | Mildly woozy, slowing down | `sleepy`, `sway` | Visibly easing — eyelids drop. NOT alarmed; a gentle "let's slow down." |
+| `repliesThisHour 6–9` → `caution` | Mildly woozy, slowing down | `sleepy`, `sway` | Visibly easing — eyelids drop. NOT alarmed; a gentle "let's slow down." |
 | `repliesThisHour ≥ 30` → `easeoff` | Worn out, needs a rest (+ red tint) | `dizzy` (idle), `panic` only on the *crossing beat* | The "Goobi looks exhausted — give it a rest" moment. Red body via the existing heat lerp. |
 | **You then PAUSE while at caution/easeoff** (`setPaused(true)`) | **Proud / relieved** | `love` → settle to `sleep` | THE anti-dark-pattern keystone: the happiest pace-related reaction is earned by *stopping*, not replying. |
 
 ### B. Replies sent today + streak — `replyLog.daily` / `repliesToday()` / `recordSentReply`
-Counted on Insert, "✓ Commented", or clipboard-fallback. A reply is a *small* positive, deliberately quieter than a tidy-up or a pause, so Goobi never reads as "feed me more replies."
+Counted after a successful Like + insert attempt, explicit posted/replied confirmation, or provider verification. Copy/open alone does not count. A reply attempt is a *small* positive, deliberately quieter than a tidy-up or a pause, so Goobi never reads as "feed me more replies."
 
 | Real signal & threshold | Goobi mood | Animation key(s) | Why |
 |---|---|---|---|
@@ -78,7 +78,7 @@ Goobi resolves ONE mood per render from the live signals, using a fixed **preced
 1. **Paused-and-proud** (transient, ~6s after `setPaused(true)` while pace was caution/easeoff) → `love`→`sleep`.
    *Outranks everything*: pausing when hot is the single best thing the user can do, so it must beat a happy streak, a fresh reply, everything.
 2. **Ease-off** (`repliesThisHour ≥ 30`) → `dizzy` + red. The safety signal outranks all positive states — you can't be "happy" while your account is at risk. (A happy streak does NOT override this; that's the key anti-dark-pattern guard.)
-3. **Caution** (`repliesThisHour 20–29`) → `sleepy`.
+3. **Caution** (`repliesThisHour 6–9`) → `sleepy`.
 4. **Overwhelmed** (`mem.pct > 85` OR `idleCount ≥ 25`) → `shake`→`dizzy`.
 5. **Neglect-asleep** (`lastOpenedAt` ≥ 2d) → `sleep`. (Below tool-state so a freshly-opened cluttered/hot session still reads correctly; neglect only surfaces once nothing more urgent is true.)
 6. **Transient reaction beats** (one-shots from §3: reply-counted `happy`, tidy-up `cheer`, first-reply `wave`, return-from-neglect `wave`→`happy`). These play for their duration, then fall back to the ambient mood.
@@ -102,8 +102,8 @@ Each beat names the trigger (real code hook), Goobi's reaction (animation key), 
 
 | Beat | Trigger (existing hook) | Goobi does | Rule honored |
 |---|---|---|---|
-| **Reply inserted** | `recordSentReply` fires (Insert/Commented/clipboard) AND pace `healthy` | `happy` one-shot (~1.4s) → ambient | Earned + calm; small so it never reads as "do it again." |
-| **Reply inserted while hot** | same, but pace `caution`/`easeoff` | **No celebration** — holds `sleepy`/`dizzy` | Refuses to reward volume past the safe line. |
+| **Reply confirmed** | `recordSentReply` fires after posted/replied confirmation AND pace `healthy` | `happy` one-shot (~1.4s) → ambient | Earned + calm; small so it never reads as "do it again." |
+| **Reply confirmed while hot** | same, but pace `caution`/`easeoff` | **No celebration** — holds `sleepy`/`dizzy` | Refuses to reward volume past the safe line. |
 | **Hitting ease-off** | `repliesThisHour` crosses 30 | `panic` for ~1.5s (the crossing beat) → settle to `dizzy` + red | Honest alarm at the line, then a steady tired hold (not endless panic). |
 | **Pausing** | `setPaused(true)` while caution/easeoff | `love` → `sleep` ("good, rest now") | The healthiest action gets the warmest reaction. Tenet 1 keystone. |
 | **Tidy-up** | tabs archived (`reclaim`/`apply-rec`, `archivedCount` rose) | `cheer` one-shot, shadow `dance` | Reward lands on the genuinely useful action. |
@@ -124,19 +124,19 @@ Short, warm, lowercase-friendly, never naggy. One line per beat; rotate within a
 - "nice and steady. this is the pace that keeps your reach safe."
 - "all calm here. you're replying like a person, not a bot."
 
-**Caution (20–29/hr)**
+**Caution (6–9/hr)**
 - "let's ease up a touch — you're getting close to x's pace line."
 - "good momentum. maybe space the next few out a bit?"
 
-**Ease-off (≥30/hr)**
-- "okay, i'm wiped — and your account's near x's automation line. let's take a breather."
+**Ease-off (≥10/hr)**
+- "okay, i'm wiped — that's enough replies for this hour. let's take a real breather."
 - "time to rest. nothing good happens past 30 an hour."
 
 **Pausing (the proud beat)**
 - "good call. resting now — your reach thanks you."
 - "this is the smart move. i'll be here when you're back."
 
-**Reply inserted (healthy)**
+**Reply confirmed (healthy)**
 - "nice one. that one's worth posting."
 - "good reply. paced just right."
 
@@ -174,7 +174,7 @@ Short, warm, lowercase-friendly, never naggy. One line per beat; rotate within a
 
 v1 mood set (6 moods + reaction beats):
 1. **Content** — pace healthy + tabs tidy → `idle`/`breathe`/`blink`/`float` (ambient rotation).
-2. **Easing** (caution) — `repliesThisHour 20–29` → `sleepy`/`sway`.
+2. **Easing** (caution) — `repliesThisHour 6–9` → `sleepy`/`sway`.
 3. **Worn out** (ease-off) — `repliesThisHour ≥ 30` → `dizzy` + red, `panic` on the crossing beat.
 4. **Proud-to-pause** — `setPaused` while hot → `love`→`sleep`. *(highest precedence)*
 5. **Buried** — `mem.pct > 85` OR `idleCount ≥ 25` → `shake`→`dizzy`.

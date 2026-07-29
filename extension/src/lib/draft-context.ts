@@ -15,6 +15,7 @@ export interface DraftContextIn {
   reason?: string;      // the scorer's ≤6-word "why this post is worth a reply"
   category?: string;    // the scorer's angle read (value/ask/connect/…)
   authorLine?: string;  // one honest line about the author from cached data ("@x · ~4.2K followers · a two-way niche peer")
+  threadLine?: string;  // direct-thread context (for example: this is a comment on the user's own post)
   measuredLine?: string; // stage 2 (gated on the live eval): the user's measured-best angle line
 }
 
@@ -24,6 +25,7 @@ export function buildDraftContext(c: DraftContextIn): string {
   const lines: string[] = [];
   if (c.niche?.trim()) lines.push(`The user's niche / what they care about: ${c.niche.trim()}`);
   if (c.authorLine?.trim()) lines.push(`About the post's author: ${c.authorLine.trim()}`);
+  if (c.threadLine?.trim()) lines.push(`Conversation relationship: ${c.threadLine.trim()}`);
   if (c.reason?.trim() || c.category?.trim()) {
     const why = [c.reason?.trim(), c.category?.trim() ? `angle: ${c.category.trim()}` : ""].filter(Boolean).join(" — ");
     lines.push(`Why this post was flagged as reply-worthy: ${why}`);

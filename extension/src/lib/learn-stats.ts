@@ -47,7 +47,30 @@ export interface LearnReply {
   followers?: number;
   norm?: string;        // normalized reply text (for match-back)
   snippet?: string;
-  outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; authorReplied?: boolean };
+  confirmedAt?: number; // actual reply found through RapidAPI, or explicitly confirmed by the user
+  confirmation?: "rapidapi" | "manual";
+  outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; tweetId?: string; authorReplied?: boolean; frozen?: boolean };
+}
+
+/** A reply is confirmed only when the RapidAPI match-back found the actual X reply
+ * (current records carry confirmedAt/tweetId; older measured records carry counts),
+ * or when the user explicitly marked the post commented. An insertion alone is not proof. */
+export function isConfirmedReply(r: LearnReply): boolean {
+  return r.confirmedAt != null || r.confirmation === "manual" || r.outcome?.tweetId != null
+    || r.outcome?.likes != null || r.outcome?.replies != null;
+}
+
+export interface ReplyVerificationSummary { attempted: number; confirmed: number; pending: number; }
+/** Summarize a time window without turning stale/unmatchable attempts into an eternal queue.
+ * `pending` is limited to records carrying reply text and still inside the 72h match window. */
+export function replyVerificationSummary(sent: LearnReply[], since: number, now: number): ReplyVerificationSummary {
+  const rows = sent.filter((r) => r.at >= since && r.at <= now);
+  let confirmed = 0, pending = 0;
+  for (const r of rows) {
+    if (isConfirmedReply(r)) confirmed++;
+    else if (now - r.at <= MATCH_WINDOW_MS && !!(r.norm || r.snippet)) pending++;
+  }
+  return { attempted: rows.length, confirmed, pending };
 }
 export interface OwnStat { id: string; views?: number; likes?: number; reposts?: number; replies?: number; }
 export interface PostMetrics { views: number; likes: number; reposts: number; replies: number; }
@@ -97,14 +120,16 @@ export interface AggResult { accounts: Record<string, AccountAgg>; muInvest: num
 /** A join-only outcome (authorReplied, no numbers) is NOT a measured engagement result — fit
  *  consumers must require real counts or "author engaged back" scores as the worst outcome. */
 const hasMeasuredCounts = (o?: { likes?: number; replies?: number }): boolean => o != null && (o.likes != null || o.replies != null);
+const canonicalHandle = (h: string | undefined): string => (h || "").replace(/^@+/, "").trim().toLowerCase();
 
 export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
   const byAuthor = new Map<string, LearnReply[]>();
   let unattributed = 0, attributed = 0;
   for (const r of sent) {
-    if (!r.author) { unattributed++; continue; }
+    const handle = canonicalHandle(r.author);
+    if (!handle) { unattributed++; continue; }
     attributed++;
-    (byAuthor.get(r.author) ?? byAuthor.set(r.author, []).get(r.author)!).push(r);
+    (byAuthor.get(handle) ?? byAuthor.set(handle, []).get(handle)!).push(r);
   }
   // global means (within each tier) for shrinkage
   let gw = 0, gwv = 0, gwo = 0, gwf = 0;
@@ -398,9 +423,17 @@ export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
 }
 
 /* ---------- closing the loop: measured outcomes → RANKING ---------- */
-export const LEARN_MULT_MIN = 0.85;  // a proven-weak account can be demoted this far, no further
-export const LEARN_MULT_MAX = 1.20;  // a proven-strong account can be lifted this far, no further
-export const LEARN_MULT_TILT = 0.25; // sensitivity: fraction of the raw score/mean ratio that reaches the multiplier
+export const LEARN_MULT_MIN = 0.90;  // experimental rank-only clamp; never let learning dominate fit/freshness
+export const LEARN_MULT_MAX = 1.10;
+export const LEARN_MULT_TILT = 0.15;
+
+/** Behavior-changing learning accepts only settled, RapidAPI-proven, fully contextual rows.
+ * Provisional/manual/unknown-reach data remains visible in diagnostics but cannot reorder work. */
+export function isActionGradeReply(r: LearnReply): boolean {
+  const o = r.outcome;
+  return !!canonicalHandle(r.author) && Number.isFinite(r.score) && (r.followers ?? 0) > 0
+    && !!o?.frozen && (r.confirmation === "rapidapi" || !!o.tweetId) && hasMeasuredCounts(o);
+}
 
 /** Per-account RANKING multipliers from MEASURED outcomes — the ranking half of the closed loop.
  *  Gated on the fitCorr "is stage-1 fit even predictive for this user?" test: if their own ranking
@@ -410,9 +443,10 @@ export const LEARN_MULT_TILT = 0.25; // sensitivity: fraction of the raw score/m
  *  [MIN,MAX]. Accounts with no SETTLED measured score are omitted → the caller reads them as a
  *  neutral 1.0 (thin data never zeroes an opportunity). Pure; caller precomputes it once per render. */
 export function accountRankMultipliers(sent: LearnReply[], now: number): { applied: boolean; mult: Record<string, number> } {
-  const fl = learnFeatures(sent, now);
-  if (fl.fitCorr == null || fl.fitCorr <= 0) return { applied: false, mult: {} };
-  const agg = aggregateAccounts(sent, now);
+  const eligible = sent.filter(isActionGradeReply);
+  const fl = learnFeatures(eligible, now);
+  if (fl.fitCorr == null || fl.fitCorr < 0.2) return { applied: false, mult: {} };
+  const agg = aggregateAccounts(eligible, now);
   if (!(agg.muObs > 0)) return { applied: false, mult: {} };
   const mult: Record<string, number> = {};
   for (const a of Object.values(agg.accounts)) {
@@ -457,4 +491,3 @@ export function fillAuthorReplied(inbound: InboundEvent[], sent: LearnReply[]): 
   }
   return marked;
 }
-

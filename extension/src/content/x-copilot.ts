@@ -4,17 +4,25 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
 import { profileCheck, analyzeBio, type ProfileState } from "../lib/profile-check";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, accountRankMultipliers, fillAuthorReplied, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, accountRankMultipliers, fillAuthorReplied, isConfirmedReply, replyVerificationSummary, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, gradedSurface, surfaceLabel, surfaceMult, slotOdds, type TargetStore } from "../lib/targets";
-import { rankThreads, type InboundLite } from "../lib/threads";
+import { reconcileIdeaPublications, type IdeaPublication } from "../lib/idea-outcomes";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, type TargetStore } from "../lib/targets";
+import { rankThreads, TEND_WINDOW_MS, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
 import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
 import { builderTier } from "../lib/community";
+import { freshOpportunityMetricStore, observeMany, momentumFor, applyMomentum, adjustedTargetTime, mergeOpportunityMetricStores, pruneStore as pruneOpportunityMetrics, type OpportunityMetricStore } from "../lib/opportunity-momentum";
+import { connectionEvidence, foldCompletedExchanges, freshRelationshipMemory, mergeRelationshipMemory, pruneRelationshipMemory, type RelationshipMemoryStore } from "../lib/relationship-memory";
+import { recommendReply, repeatAuthorWarning, replyFreshness, type ReplyRecommendation } from "../lib/reply-recommendation";
+import { GROWTH_STRATEGIES, GROWTH_WINDOW_DAYS, activeGrowthExperiment, captureGrowthSnapshot, evaluateGrowthExperiment, finishGrowthExperiment, freshGrowthStore, growthStrategy, mergeGrowthStores, recommendedGrowthStrategy, seedFollowerSnapshot, settleGrowthExperiments, startGrowthExperiment, summarizeGrowthWindow, type GrowthExperiment, type GrowthStore, type GrowthStrategyId, type TaggedGrowthAction } from "../lib/growth-loop";
+import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDraftDm, canMarkDmSend, canMoveDmReady, dmPacingStatus, dueFollowUps, findDmDuplicate, followUpCount, freshDmStore, markDmReplied, markDmSent, mergeDmStores, pruneDmStore, rankDmSuggestions, redactDmTouch, removeDmCandidate, removeDmContext, sortDmCandidates, updateDmCandidate, type DmCandidate, type DmContextKind, type DmIntent, type DmPhase, type DmStore, type DmSuggestionInput } from "../lib/dm-workspace";
+import { candidateDmSignal, deriveDmMetrics, rankDmNextActions } from "../lib/dm-intelligence";
+import { DEFAULT_DAILY_GOALS, dailyGoalPercent, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
 import type { ProductItem } from "../lib/types";
 
 /**
@@ -46,15 +54,18 @@ let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
+let xReplyInsertOn = true; // default on: a user click likes the post + fills X's composer; false uses copy/open
 let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until the backtest proves the signal predicts; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
 let debugOn = false;      // dev-only: exposes window.__goobiExport() for backtesting. No product effect.
 
 /** Twttr (X-data API) enrichment, all read-only + best-effort. */
 let xNiche = "";              // the niche query "Find spots" searches X for
 let premiumTier = "";         // "", "free", "premium", "premium+" — an honest covariate, never a score input
+let dailyGoals: DailyGoals = DEFAULT_DAILY_GOALS;
 let profileState: ProfileState | undefined; // own-profile harvest (pinned id + bio length), $0
 let myFollowers = 0;          // the user's own follower count, for the reach sweet-spot
 let twttrUnconfigured = false; // once the SW reports no key/host, stop trying until settings change
+let growthStore: GrowthStore = freshGrowthStore(""); // account-level strategy experiments + outcome windows
 
 /** product host -> favicon data URL ("" = known no-favicon). Resolved by the SW
  *  from Chrome's built-in `_favicon` cache (no network, no CORS) and inlined as a
@@ -119,15 +130,23 @@ function productContext(product?: ProductItem): string | undefined {
 }
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[] }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; isReplyToOwnPost?: boolean }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
 const opps = new Map<string, Opp>();
+let opportunityMetrics: OpportunityMetricStore = freshOpportunityMetricStore();
+function observeOpportunityTweets(posts: Array<{ id: string; postedAt?: number; likes?: number; replies?: number; reposts?: number; views?: number }>): void {
+  const next = observeMany(opportunityMetrics, posts, Date.now());
+  opportunityMetrics = next.store;
+  if (next.changed) safeSet({ [CONFIG.X_OPPORTUNITY_METRICS_KEY]: opportunityMetrics });
+}
+function opportunityMomentum(id: string, now = Date.now()) { return momentumFor(opportunityMetrics.tracks[id], now); }
 let dockOpen = false;
 let dockFilter = "";
+const expandedReplyCards = new Set<string>(); // one reply card at a time exposes evidence + secondary actions
 
-interface Queued { id: string; author: string; text: string; el: HTMLElement; }
+interface Queued { id: string; author: string; text: string; el: HTMLElement; isReplyToOwnPost: boolean; }
 const queue: Queued[] = [];
 /** Posts sent to Claude and awaiting a score — guards against re-queueing the
  *  same post during the request window (e.g. a Rescan mid-flight). */
@@ -173,7 +192,7 @@ function teardown(): void {
   try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
   try { stopIdeasGoobi(); } catch { /* ignore */ }
   try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
-  try { dismissPanel(); } catch { /* ignore */ }
+  try { dismissPanel(true); } catch { /* ignore */ }
 }
 
 /** Belt-and-suspenders for the orphaned-content-script race: when the extension is reloaded while
@@ -219,6 +238,28 @@ function isPromoted(el: HTMLElement): boolean {
 function getSelf(): string {
   const a = document.querySelector<HTMLAnchorElement>('[data-testid="AppTabBar_Profile_Link"]');
   return (a?.getAttribute("href") || "").replace(/^\//, "").toLowerCase();
+}
+
+/** Whether X explicitly renders this outer post as "Replying to @me". This is deliberately
+ * structural and conservative: an @mention inside the tweet body or author header must never be
+ * mistaken for a comment on the user's post. X does not expose the parent status id in feed DOM,
+ * so the visible reply-context row is the strongest honest signal available without an API call. */
+function isReplyToOwnPost(el: HTMLElement, handle = selfHandle || getSelf()): boolean {
+  const self = handle.replace(/^@+/, "").toLowerCase();
+  if (!self) return false;
+  const ownPath = `/${self}`;
+  const links = Array.from(el.querySelectorAll<HTMLAnchorElement>('a[href]')).filter((a) => {
+    const path = (a.getAttribute("href") || "").split(/[?#]/, 1)[0].replace(/\/$/, "").toLowerCase();
+    return path === ownPath && !a.closest('[data-testid="User-Name"], [data-testid="tweetText"], [data-testid="Tweet-User-Avatar"], [data-testid^="UserAvatar-Container"]');
+  });
+  for (const link of links) {
+    let node: HTMLElement | null = link.parentElement;
+    for (let depth = 0; node && node !== el && depth < 5; depth++, node = node.parentElement) {
+      const label = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (label.length <= 160 && /\breplying to\b/i.test(label)) return true;
+    }
+  }
+  return false;
 }
 
 /** The OUTER author's display name (not the @handle) — skip the quoted tweet's. */
@@ -376,7 +417,7 @@ function harvestOwnProfile(): void {
   if (articles.length < 3) {
     // Timeline too thin to trust pin detection (tiny account / still loading) — leave the pin fields
     // untouched, but the header signals above are valid regardless.
-    profileState = { ...(profileState ?? { at: 0 }), ...extras, at: Date.now() };
+    profileState = { ...(profileState ?? { at: 0 }), ...extras, ownerHandle: selfHandle, at: Date.now() };
     safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
     profileHarvestAt = Date.now();
     return;
@@ -391,7 +432,7 @@ function harvestOwnProfile(): void {
   // the regex never matches and a false "no pinned post" claim would break the honest mirror.
   // A FOUND pin is trustworthy in any case (the regex matched).
   const pinKnown = pinnedId != null || (document.documentElement.lang || "").toLowerCase().startsWith("en");
-  profileState = { ...(profileState ?? { at: 0 }), ...extras, pinnedId, pinKnown, at: Date.now() };
+  profileState = { ...(profileState ?? { at: 0 }), ...extras, ownerHandle: selfHandle, pinnedId, pinKnown, at: Date.now() };
   safeSet({ [CONFIG.X_PROFILE_KEY]: profileState });
 }
 
@@ -421,6 +462,12 @@ function scan() {
     const cached = seen.get(info.id);
     if (cached) {
       const o = opps.get(info.id);
+      // X sometimes paints the lightweight reply-context row after the tweet text. Upgrade a
+      // cached item as soon as that evidence appears so virtualization cannot freeze a cold read.
+      if (!cached.isReplyToOwnPost && isReplyToOwnPost(el)) {
+        cached.isReplyToOwnPost = true;
+        if (o) o.isReplyToOwnPost = true;
+      }
       if (commentedIds.has(info.id)) badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); // replied → green badge, not in the dock
       else if (o) {
         // Surfaced — refresh counts from the LIVE node X just re-rendered, so pileup/buried and the
@@ -444,7 +491,7 @@ function scan() {
     const text = outerText(el);
     if (!text) return; // media-only / not painted yet — re-evaluated next pass
     el.dataset.tbx = "q";
-    queue.push({ id: info.id, author: info.author, text: text.slice(0, 400), el });
+    queue.push({ id: info.id, author: info.author, text: text.slice(0, 400), el, isReplyToOwnPost: isReplyToOwnPost(el) });
   });
   scheduleFlush();
 }
@@ -462,7 +509,12 @@ async function flush() {
   if (!batch.length) return;
   scoreCalls++;
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined, verified: b.el.isConnected ? isVerified(b.el) : undefined }));
-  const posts = batch.map((b, i) => ({ i, author: b.author, text: b.text })); // content/fit only; timing+reach handled live by effectiveScore
+  const posts = batch.map((b, i) => ({
+    i, author: b.author, text: b.text,
+    // This observed relationship belongs in content-fit scoring: it distinguishes warm inbound
+    // conversation from a cold reply spot. Timing + reach still remain live local signals.
+    meta: b.isReplyToOwnPost ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined,
+  }));
   batch.forEach((b) => inFlight.add(b.id));
   refreshGoobi(); // Goobi concentrates while Claude analyzes the batch
   const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({
@@ -489,13 +541,13 @@ async function flush() {
       ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
       : undefined;
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category, products });
+    seen.set(b.id, { score: s.score, reason, category, products, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
     if (commentedIds.has(b.id)) {
       // Already replied to it — never surface it in the dock; keep only the green "✓ Commented" badge.
       if (opps.delete(b.id)) changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
-    } else if (s.score >= THRESHOLD) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified });
+    } else if (s.score >= (b.isReplyToOwnPost ? 0.4 : THRESHOLD)) {
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
@@ -508,7 +560,10 @@ async function flush() {
       } else {
         // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
         if (opps.delete(b.id)) changed = true;
-        if (b.el.isConnected) b.el.querySelector("[data-tbx-badge]")?.remove();
+        if (b.el.isConnected) {
+          clearPostOverlay(b.el);
+          addButton(b.el);
+        }
       }
     }
   }
@@ -575,10 +630,27 @@ async function findSpots() {
       return;
     }
     if (!selfHandle) selfHandle = getSelf();
-    const found = pickDiscoveryTweets(search.data, 18)
-      .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle)
-      .filter((t) => !opps.has(t.id) && !seen.has(t.id));
-    if (!found.length) { toast("No new posts found for your niche right now."); return; }
+    const discovered = pickDiscoveryTweets(search.data, 18)
+      .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle);
+    if (!discovered.length) { toast("X returned no usable posts for this niche right now."); return; }
+    let refreshed = 0;
+    observeOpportunityTweets(discovered); // repeated searches become measured velocity; no extra API/Claude call
+    for (const t of discovered) {
+      const existing = opps.get(t.id);
+      if (existing) {
+        const nextMetrics = { postedAt: t.postedAt ?? existing.postedAt, likes: t.likes ?? existing.likes, replies: t.replies ?? existing.replies, reposts: t.reposts ?? existing.reposts, views: t.views ?? existing.views };
+        if (nextMetrics.postedAt !== existing.postedAt || nextMetrics.likes !== existing.likes || nextMetrics.replies !== existing.replies || nextMetrics.reposts !== existing.reposts || nextMetrics.views !== existing.views) refreshed++;
+        Object.assign(existing, nextMetrics);
+      }
+    }
+    const found = discovered.filter((t) => !opps.has(t.id) && !seen.has(t.id));
+    if (!found.length) {
+      const rising = discovered.filter((t) => opps.has(t.id) && t.postedAt != null && Date.now() - t.postedAt <= 2 * HOUR_MS && slotOdds(t.replies) > 0.45 && (opportunityMomentum(t.id)?.score ?? 0) >= 0.25).length;
+      toast(refreshed
+        ? `Refreshed ${refreshed} ${refreshed === 1 ? "spot" : "spots"}${rising ? ` · ${rising} picking up` : ""}. No new matches this time.`
+        : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
+      return;
+    }
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
     const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({ type: "SCORE_POSTS", posts });
     if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
@@ -594,19 +666,23 @@ async function findSpots() {
         : undefined;
       seen.set(t.id, { score: s.score, reason, category, products });
       if (s.score >= THRESHOLD) {
-        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, postedAt: t.postedAt, likes: t.likes, replies: t.replies, avatar: t.avatar, name: t.name, followers: t.followers, source: "search" });
-        if (t.author && t.followers != null) { authorReach.set(t.author.toLowerCase(), { followers: t.followers, at: Date.now() }); schedulePersistReach(); } // search already told us the author's reach
+        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: "search" });
+        if (t.author && t.followers != null) {
+          const key = t.author.toLowerCase();
+          authorReach.set(key, { ...authorReach.get(key), followers: t.followers, at: Date.now(), failed: false });
+          schedulePersistReach();
+        } // search gives reach; preserve richer profile evidence if it was already fetched
         added++;
       }
     }
-    toast(added ? `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.` : "Searched, but nothing scored high enough to surface.");
+    toast(added ? `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.` : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
   } finally {
     findingSpots = false;
     renderDock();
   }
 }
 
-/* ---------- badge (idempotent; survives X re-renders via cache re-apply) ---------- */
+/* ---------- in-post decision overlay (idempotent; survives X re-renders) ---------- */
 
 /** Validate a model-returned category against the known angle ids. */
 function catId(id?: string): string | undefined {
@@ -623,77 +699,298 @@ function catSummary(): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, c]) => `${c} ${catLabel(id)}`).join(" · ");
 }
 
-function badge(el: HTMLElement, reason: string, category?: string, score?: number) {
-  // The badge mirrors the dock card (reply-fit score % + category tag) and flips to a
-  // green "✓ Commented" call-out once you've replied to this post.
-  const id = statusInfo(el)?.id;
-  const done = !!id && commentedIds.has(id);
-  const pct = score != null ? Math.round(Math.max(0, Math.min(1, score)) * 100) : null;
-  const core = pct != null ? `${pct}% · ${catLabel(category)}` : catLabel(category);
-  const label = done ? `✓ Commented · ${core}` : `✦ ${core}`;
-  const tip = (done ? "You've replied to this post. " : "") + (pct != null ? `${scoreVerdict(score!).label} reply fit (${pct}%) — ` : "") + reason;
-  const bg = done ? DONE : ACCENT;
-  const fg = done ? DONE_INK : INK;
-  const existing = el.querySelector<HTMLElement>("[data-tbx-badge]");
-  if (existing) {
-    // Already badged — keep the label/colors current (category re-classified on a
-    // Rescan, score drifts, or you just commented), so it never shows a stale value.
-    // CRITICAL: only WRITE when the value actually changed. `bodyObs` watches
-    // {childList, subtree} on <body>, and these badges live inside articles; an
-    // unconditional `textContent = label` recreates the text node every pass — a
-    // childList mutation that retriggers requestScan → scan → badge → mutation, a
-    // ~60fps feedback loop. On a normal feed it's a few badges (tolerable); right
-    // after you post a reply X re-renders the whole thread (many articles) while
-    // Goobi's celebration + the dock re-render land in the same frames, and the
-    // compounded per-frame work saturates the main thread until the tab crashes.
-    if (existing.textContent !== label) existing.textContent = label;
-    if (existing.title !== tip) existing.title = tip;
-    if (existing.style.background !== bg) existing.style.background = bg;
-    if (existing.style.color !== fg) existing.style.color = fg;
-    if (el.style.borderLeftColor !== bg) el.style.borderLeftColor = bg;
-    return;
-  }
-  el.querySelector("[data-tbx-add]")?.remove(); // surfacing replaces the faint "+ Add" affordance
-  el.style.borderLeft = `3px solid ${bg}`;
-  el.style.borderTopLeftRadius = "4px";
-  el.style.borderBottomLeftRadius = "4px";
-  if (getComputedStyle(el).position === "static") el.style.position = "relative";
-
-  const b = document.createElement("button");
-  b.setAttribute("data-tbx-badge", "1");
-  b.textContent = label;
-  b.title = tip;
-  Object.assign(b.style, {
-    position: "absolute", top: "10px", right: "60px", zIndex: "9999",
-    background: bg, color: fg, border: "0", borderRadius: "999px",
-    font: "600 11px -apple-system, system-ui, sans-serif", padding: "3px 10px", cursor: "pointer",
-  } as Partial<CSSStyleDeclaration>);
-  b.addEventListener("click", (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    void openDraftFromEl(el);
-  });
-  el.appendChild(b);
+type PostOverlayKind = "surfaced" | "passed";
+interface PostOverlayModel {
+  kind: PostOverlayKind;
+  id: string;
+  author: string;
+  reason: string;
+  category?: string;
+  score?: number;
+  done: boolean;
+  opp?: Opp;
+  recommendation?: ReplyRecommendation;
+  isReplyToOwnPost?: boolean;
 }
 
-/** A faint "+ Add" affordance on a post the scorer saw but didn't surface (below
- *  THRESHOLD). Lets you override the system and pull it into the dock + score it. */
-function addButton(el: HTMLElement) {
-  if (el.querySelector("[data-tbx-badge]") || el.querySelector("[data-tbx-add]")) return; // already surfaced or already offered
-  if (getComputedStyle(el).position === "static") el.style.position = "relative";
-  const a = document.createElement("button");
-  a.setAttribute("data-tbx-add", "1");
-  a.textContent = "+ Add";
-  a.title = "Goobi passed on this one — add it anyway to score it and pull it into your reply list.";
-  Object.assign(a.style, {
-    position: "absolute", top: "10px", right: "60px", zIndex: "9998",
-    background: "transparent", color: "#8c7d68", border: "1px solid rgba(214,154,92,.45)", borderRadius: "999px",
-    font: "600 11px -apple-system, system-ui, sans-serif", padding: "2px 9px", cursor: "pointer", opacity: "0.5",
+const postOverlayModels = new WeakMap<HTMLElement, PostOverlayModel>();
+const postOriginalBorders = new WeakMap<HTMLElement, { left: string; topRadius: string; bottomRadius: string }>();
+const postOpenLayers = new WeakMap<HTMLElement, Array<{ el: HTMLElement; position: string; zIndex: string; overflow: string }>>();
+let activePostOverlay: HTMLElement | null = null;
+let postOverlayOutsideBound = false;
+
+function stopPostAction(e: Event): void { e.stopPropagation(); e.preventDefault(); }
+
+function elevateOpenPost(host: HTMLElement, article: HTMLElement): void {
+  if (postOpenLayers.has(host)) return;
+  const cell = article.closest<HTMLElement>('[data-testid="cellInnerDiv"]');
+  const layers = [...new Set([cell, article].filter((node): node is HTMLElement => !!node))].map((el) => ({
+    el, position: el.style.position, zIndex: el.style.zIndex, overflow: el.style.overflow,
+  }));
+  postOpenLayers.set(host, layers);
+  for (const layer of layers) {
+    if (getComputedStyle(layer.el).position === "static") layer.el.style.position = "relative";
+    layer.el.style.zIndex = "2147483000";
+    layer.el.style.overflow = "visible";
+  }
+}
+
+function restoreOpenPost(host: HTMLElement): void {
+  const layers = postOpenLayers.get(host); if (!layers) return;
+  for (const layer of layers) {
+    layer.el.style.position = layer.position;
+    layer.el.style.zIndex = layer.zIndex;
+    layer.el.style.overflow = layer.overflow;
+  }
+  postOpenLayers.delete(host);
+}
+
+function closePostOverlay(host?: HTMLElement | null): void {
+  const target = host || activePostOverlay;
+  if (!target) return;
+  const pop = target.querySelector<HTMLElement>("[data-tbx-pop]");
+  const pill = target.querySelector<HTMLElement>("[data-tbx-pill]");
+  if (pop && !pop.hidden) pop.hidden = true;
+  if (pill?.getAttribute("aria-expanded") !== "false") pill?.setAttribute("aria-expanded", "false");
+  restoreOpenPost(target);
+  if (activePostOverlay === target) activePostOverlay = null;
+}
+
+function clearPostOverlay(el: HTMLElement): void {
+  const badgeHost = el.querySelector<HTMLElement>("[data-tbx-badge]");
+  const addHost = el.querySelector<HTMLElement>("[data-tbx-add]");
+  if (badgeHost === activePostOverlay) closePostOverlay(badgeHost);
+  if (addHost === activePostOverlay) closePostOverlay(addHost);
+  badgeHost?.remove(); addHost?.remove();
+  postOverlayModels.delete(el);
+  const original = postOriginalBorders.get(el);
+  if (original) {
+    el.style.borderLeft = original.left;
+    el.style.borderTopLeftRadius = original.topRadius;
+    el.style.borderBottomLeftRadius = original.bottomRadius;
+    postOriginalBorders.delete(el);
+  }
+}
+
+function postOverlayColor(model: PostOverlayModel): { bg: string; fg: string; border: string } {
+  if (model.done) return { bg: DONE, fg: DONE_INK, border: DONE };
+  if (model.kind === "passed") return { bg: "rgba(29,24,18,.94)", fg: "#b6a892", border: "rgba(214,154,92,.38)" };
+  if (model.recommendation?.authorRepeat) return { bg: "#e89a3c", fg: "#211406", border: "#e89a3c" };
+  if (model.recommendation?.lane === "inbound" || model.recommendation?.lane === "continue") return { bg: "#6fcf7f", fg: "#102016", border: "#6fcf7f" };
+  if (model.recommendation?.lane === "community") return { bg: "#5dcaa5", fg: "#0c2119", border: "#5dcaa5" };
+  return { bg: ACCENT, fg: INK, border: ACCENT };
+}
+
+function shortStrength(rec?: ReplyRecommendation): string {
+  return rec?.strength === "best next" ? "best" : rec?.strength === "good option" ? "good" : "later";
+}
+
+function postOverlayLabel(model: PostOverlayModel): string {
+  if (model.done) return "✓ Replied";
+  if (model.isReplyToOwnPost) return model.kind === "passed"
+    ? "↩ Your post · passed"
+    : `↩ Comment on your post · ${shortStrength(model.recommendation)}`;
+  if (model.kind === "passed") return "Goobi passed";
+  if (model.recommendation?.authorRepeat) return `↻ Replied ${model.recommendation.authorRepeat.label} · ${shortStrength(model.recommendation)}`;
+  return model.recommendation
+    ? `✦ ${model.recommendation.laneLabel} · ${shortStrength(model.recommendation)}`
+    : `✦ ${catLabel(model.category)}`;
+}
+
+function postOverlayAction(label: string, primary: boolean, run: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button"; button.textContent = label;
+  Object.assign(button.style, {
+    minHeight: "32px", padding: "6px 9px", borderRadius: "8px", cursor: "pointer",
+    border: primary ? "1px solid transparent" : "1px solid rgba(214,154,92,.24)",
+    background: primary ? ACCENT : "#221c15", color: primary ? INK : "#f3ead9",
+    font: "600 11px -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
   } as Partial<CSSStyleDeclaration>);
-  a.addEventListener("mouseenter", () => Object.assign(a.style, { opacity: "1", background: ACCENT, color: INK, borderColor: "transparent" }));
-  a.addEventListener("mouseleave", () => Object.assign(a.style, { opacity: "0.5", background: "transparent", color: "#8c7d68", borderColor: "rgba(214,154,92,.45)" }));
-  a.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); void addManual(el); });
-  el.appendChild(a);
+  button.addEventListener("click", (e) => { stopPostAction(e); run(); });
+  return button;
+}
+
+function postOverlayText(text: string, color = "#b6a892", size = "12px"): HTMLDivElement {
+  const div = document.createElement("div"); div.textContent = text;
+  Object.assign(div.style, { color, fontSize: size, lineHeight: "1.4" } as Partial<CSSStyleDeclaration>);
+  return div;
+}
+
+function postOverlayDetailKey(model: PostOverlayModel): string {
+  const rec = model.recommendation;
+  return JSON.stringify([
+    model.kind, model.id, model.reason, model.category, model.score, model.done,
+    model.isReplyToOwnPost,
+    rec?.lane, rec?.strength, rec?.confidence, rec?.discovery, rec?.relationship,
+    rec?.community, rec?.reasons, rec?.cautions, rec?.authorRepeat,
+  ]);
+}
+
+function renderPostOverlayDetails(el: HTMLElement, host: HTMLElement, model: PostOverlayModel): void {
+  const pop = host.querySelector<HTMLElement>("[data-tbx-pop]");
+  if (!pop) return;
+  pop.replaceChildren();
+
+  const header = document.createElement("div");
+  Object.assign(header.style, { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" });
+  const heading = document.createElement("div");
+  const title = document.createElement("div");
+  title.textContent = model.done ? "Reply recorded" : model.isReplyToOwnPost ? `Comment on your post · ${model.recommendation?.strength || (model.kind === "passed" ? "passed" : "recommended")}` : model.kind === "passed" ? "Not in your reply queue" : model.recommendation?.authorRepeat ? `Spread your replies · ${model.recommendation.strength}` : `${model.recommendation?.laneLabel || catLabel(model.category)} · ${model.recommendation?.strength || "recommended"}`;
+  Object.assign(title.style, { color: "#f7efe2", fontSize: "13px", fontWeight: "700", lineHeight: "1.3" });
+  const sub = postOverlayText(`@${model.author} · ${catLabel(model.category)}`, "#8c7d68", "11px");
+  sub.style.marginTop = "2px"; heading.append(title, sub);
+  const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.setAttribute("aria-label", "Close Goobi post details");
+  Object.assign(close.style, { width: "28px", height: "28px", border: "0", borderRadius: "7px", background: "transparent", color: "#b6a892", cursor: "pointer", fontSize: "18px", lineHeight: "1" });
+  close.addEventListener("click", (e) => { stopPostAction(e); closePostOverlay(host); });
+  header.append(heading, close); pop.append(header);
+
+  if (model.done) {
+    const done = postOverlayText("Goobi will leave this conversation out of your active reply queue.");
+    done.style.marginTop = "10px"; pop.append(done);
+  } else if (model.kind === "surfaced" && model.recommendation) {
+    const rec = model.recommendation;
+    if (model.isReplyToOwnPost) {
+      const inbound = postOverlayText("This is a direct comment on one of your posts. Goobi treats warm inbound conversation as more important than cold outreach.", "#9be5aa", "11.5px");
+      Object.assign(inbound.style, { marginTop: "10px", padding: "8px 9px", borderRadius: "8px", background: "rgba(111,207,127,.10)", border: "1px solid rgba(111,207,127,.28)" });
+      pop.append(inbound);
+    }
+    if (rec.authorRepeat) {
+      const warning = postOverlayText(model.isReplyToOwnPost
+        ? `You already replied to @${model.author} ${rec.authorRepeat.label}. Because they commented on your post, Goobi kept this important as an ongoing conversation. Reply only if you have something useful to add.`
+        : `You already replied to @${model.author} ${rec.authorRepeat.label}. Goobi lowered Reach, Relationship, and Community to help avoid a repeat-author spam pattern. Continue only for a real ongoing conversation.`, "#f0b66f", "11.5px");
+      Object.assign(warning.style, { marginTop: "10px", padding: "8px 9px", borderRadius: "8px", background: "rgba(232,154,60,.11)", border: "1px solid rgba(232,154,60,.3)" });
+      pop.append(warning);
+    }
+    const why = document.createElement("div"); why.style.marginTop = "11px";
+    const whyLabel = postOverlayText("WHY NOW", "#d69a5c", "10px"); whyLabel.style.fontWeight = "800"; whyLabel.style.letterSpacing = ".7px";
+    const uniqueReasons = [...new Set([model.reason, ...rec.reasons].filter(Boolean))];
+    const whyText = postOverlayText(uniqueReasons.join(" · ") || "Relevant conversation with room for a useful reply.", "#f3ead9"); whyText.style.marginTop = "3px";
+    why.append(whyLabel, whyText); pop.append(why);
+
+    const signals = document.createElement("div");
+    signals.title = "Decision signals, not predicted probabilities.";
+    Object.assign(signals.style, { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "5px", marginTop: "10px" });
+    ([['Reach', rec.discovery], ['Relationship', rec.relationship], ['Community', rec.community]] as Array<[string, number]>).forEach(([label, value]) => {
+      const cell = document.createElement("div");
+      Object.assign(cell.style, { padding: "6px 5px", borderRadius: "7px", background: "#221c15", border: "1px solid rgba(214,154,92,.13)", textAlign: "center" });
+      const valueEl = postOverlayText(`${Math.round(value * 100)}`, "#f7efe2", "12px"); valueEl.style.fontWeight = "800";
+      const labelEl = postOverlayText(label, "#8c7d68", "9px");
+      cell.append(valueEl, labelEl); signals.append(cell);
+    });
+    pop.append(signals);
+    const evidence = postOverlayText(`${rec.confidence}${rec.cautions[0] ? ` · ${rec.cautions[0]}` : ""}`, "#8c7d68", "10.5px");
+    evidence.style.marginTop = "7px"; pop.append(evidence);
+  } else {
+    const why = postOverlayText(`Goobi passed because: ${model.reason || "lower fit for your current growth priorities"}.`, "#d8c9b2");
+    why.style.marginTop = "11px"; pop.append(why);
+    if (model.score != null) {
+      const fit = postOverlayText(`Content-fit signal ${Math.round(Math.max(0, Math.min(1, model.score)) * 100)}/100 · not a reach prediction`, "#8c7d68", "10.5px");
+      fit.style.marginTop = "5px"; pop.append(fit);
+    }
+  }
+
+  const actions = document.createElement("div");
+  Object.assign(actions.style, { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "12px" });
+  const openThread = () => window.open(`https://x.com/${model.author}/status/${model.id}`, "_blank", "noopener");
+  if (model.done) {
+    actions.append(postOverlayAction("Open thread ↗", false, openThread));
+  } else if (model.kind === "surfaced") {
+    actions.append(
+      postOverlayAction("Draft reply", true, () => { closePostOverlay(host); void openDraftFromEl(el); }),
+      postOverlayAction("Open ↗", false, openThread),
+      postOverlayAction("Mark replied", false, () => {
+        const current = opps.get(model.id) || model.opp;
+        if (!current) { toast("That reply spot is no longer in your queue."); return; }
+        closePostOverlay(host); recordSentReply("", current, undefined, Date.now(), "manual");
+        badge(el, current.reason, current.category, model.score); toast("Marked as replied.");
+      }),
+      postOverlayAction("Skip", false, () => {
+        closePostOverlay(host); opps.delete(model.id); clearPostOverlay(el); addButton(el); renderDock(); toast("Removed from your reply queue.");
+      }),
+    );
+  } else {
+    actions.append(
+      postOverlayAction("Add to queue", true, () => { closePostOverlay(host); void addManual(el); }),
+      postOverlayAction("Draft anyway", false, () => { closePostOverlay(host); void openDraftFromEl(el); }),
+      postOverlayAction("Open ↗", false, openThread),
+    );
+  }
+  pop.append(actions);
+  host.dataset.tbxDetailsKey = postOverlayDetailKey(model);
+}
+
+function ensurePostOverlay(el: HTMLElement, model: PostOverlayModel): HTMLElement {
+  const desired = model.kind === "surfaced" ? "data-tbx-badge" : "data-tbx-add";
+  const other = model.kind === "surfaced" ? "data-tbx-add" : "data-tbx-badge";
+  const otherHost = el.querySelector<HTMLElement>(`[${other}]`);
+  if (otherHost === activePostOverlay) closePostOverlay(otherHost);
+  otherHost?.remove();
+  let host = el.querySelector<HTMLElement>(`[${desired}]`);
+  // Upgrade the old single-button treatment in place after an extension refresh.
+  if (host && (!host.querySelector("[data-tbx-pill]") || host.tagName === "BUTTON")) { host.remove(); host = null; }
+  if (!host) {
+    if (getComputedStyle(el).position === "static") el.style.position = "relative";
+    host = document.createElement("div"); host.setAttribute(desired, "1");
+    Object.assign(host.style, { position: "absolute", top: "10px", right: "60px", zIndex: "2147483600", fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif" } as Partial<CSSStyleDeclaration>);
+    const pill = document.createElement("button"); pill.type = "button"; pill.setAttribute("data-tbx-pill", "1"); pill.setAttribute("aria-expanded", "false");
+    Object.assign(pill.style, { borderRadius: "999px", padding: "4px 10px", cursor: "pointer", font: "700 11px -apple-system, BlinkMacSystemFont, system-ui, sans-serif", boxShadow: "0 2px 10px rgba(0,0,0,.18)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    const pop = document.createElement("div"); pop.setAttribute("data-tbx-pop", "1"); pop.hidden = true; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Goobi post recommendation details");
+    Object.assign(pop.style, { position: "absolute", top: "calc(100% + 7px)", right: "0", zIndex: "2147483647", width: "292px", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", padding: "12px", borderRadius: "12px", background: "#1d1812", color: "#f3ead9", border: "1px solid rgba(214,154,92,.24)", boxShadow: "0 14px 38px rgba(0,0,0,.48)", textAlign: "left" } as Partial<CSSStyleDeclaration>);
+    pill.addEventListener("click", (e) => {
+      stopPostAction(e);
+      const latest = postOverlayModels.get(el); if (!latest) return;
+      const opening = pop.hidden;
+      if (activePostOverlay && activePostOverlay !== host) closePostOverlay(activePostOverlay);
+      if (!opening) { closePostOverlay(host); return; }
+      elevateOpenPost(host!, el); renderPostOverlayDetails(el, host!, latest); pop.hidden = false; pill.setAttribute("aria-expanded", "true"); activePostOverlay = host;
+    });
+    host.addEventListener("click", (e) => e.stopPropagation());
+    host.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePostOverlay(host); pill.focus(); } });
+    host.append(pill, pop); el.append(host);
+  }
+  postOverlayModels.set(el, model);
+  if (!postOverlayOutsideBound) {
+    postOverlayOutsideBound = true;
+    document.addEventListener("click", (e) => { if (activePostOverlay && !activePostOverlay.contains(e.target as Node)) closePostOverlay(activePostOverlay); });
+  }
+  return host;
+}
+
+function paintPostOverlay(el: HTMLElement, model: PostOverlayModel): void {
+  const host = ensurePostOverlay(el, model);
+  const pill = host.querySelector<HTMLButtonElement>("[data-tbx-pill]"); if (!pill) return;
+  const colors = postOverlayColor(model); const label = postOverlayLabel(model);
+  const tip = model.done ? "Reply recorded. Open for details." : model.isReplyToOwnPost ? "Direct comment on one of your posts. Open Goobi's reasoning and actions." : model.recommendation?.authorRepeat ? `You replied to @${model.author} ${model.recommendation.authorRepeat.label}; Goobi lowered this spot's scores.` : "Open Goobi's reasoning and actions.";
+  // Only mutate values that changed: bodyObs watches these article descendants.
+  if (pill.textContent !== label) pill.textContent = label;
+  if (pill.title !== tip) pill.title = tip;
+  if (pill.style.background !== colors.bg) pill.style.background = colors.bg;
+  if (pill.style.color !== colors.fg) pill.style.color = colors.fg;
+  if (pill.style.border !== `1px solid ${colors.border}`) pill.style.border = `1px solid ${colors.border}`;
+  const opacity = model.kind === "passed" ? "0.72" : "1";
+  if (pill.style.opacity !== opacity) pill.style.opacity = opacity;
+  if (model.kind === "surfaced") {
+    if (!postOriginalBorders.has(el)) postOriginalBorders.set(el, { left: el.style.borderLeft, topRadius: el.style.borderTopLeftRadius, bottomRadius: el.style.borderBottomLeftRadius });
+    const left = `3px solid ${colors.border}`;
+    if (el.style.borderLeft !== left) el.style.borderLeft = left;
+    if (el.style.borderTopLeftRadius !== "4px") el.style.borderTopLeftRadius = "4px";
+    if (el.style.borderBottomLeftRadius !== "4px") el.style.borderBottomLeftRadius = "4px";
+  }
+  if (activePostOverlay === host && host.dataset.tbxDetailsKey !== postOverlayDetailKey(model)) renderPostOverlayDetails(el, host, model);
+}
+
+function badge(el: HTMLElement, reason: string, category?: string, score?: number) {
+  const info = statusInfo(el); if (!info) return;
+  const opp = opps.get(info.id);
+  paintPostOverlay(el, { kind: "surfaced", id: info.id, author: info.author, reason, category, score, done: commentedIds.has(info.id), opp, recommendation: opp ? recommendationFor(opp) : undefined, isReplyToOwnPost: opp?.isReplyToOwnPost });
+}
+
+/** A quiet explanation affordance on posts the scorer saw but did not surface. */
+function addButton(el: HTMLElement) {
+  if (el.querySelector("[data-tbx-badge]")) return;
+  const info = statusInfo(el); if (!info) return;
+  const cached = seen.get(info.id);
+  paintPostOverlay(el, { kind: "passed", id: info.id, author: info.author, reason: cached?.reason || "Lower fit for your current priorities", category: cached?.category, score: cached?.score, done: false, isReplyToOwnPost: cached?.isReplyToOwnPost });
 }
 
 /** Pin a post into the dock by hand (from "+ Add"), then score it for real so it
@@ -702,28 +999,29 @@ async function addManual(el: HTMLElement) {
   const info = statusInfo(el);
   const text = outerText(el);
   if (!info || !text) { toast("Couldn't read that post."); return; }
-  el.querySelector("[data-tbx-add]")?.remove();
+  clearPostOverlay(el);
   if (opps.has(info.id)) { dockOpen = true; renderDock(); toast("That post is already in your list."); return; }
   const stat = snapStats(el);
   const cached = seen.get(info.id);
+  const ownReply = cached?.isReplyToOwnPost || isReplyToOwnPost(el);
   const opp: Opp = {
     id: info.id, author: info.author, text: text.slice(0, 400), manual: true,
     score: cached?.score ?? 0.5, reason: cached?.reason || "Added by you", category: cached?.category,
     context: quotedText(el), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
-    avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el),
+    avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el), isReplyToOwnPost: ownReply || undefined,
   };
   opps.set(info.id, opp);
-  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category });
+  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category, isReplyToOwnPost: opp.isReplyToOwnPost });
   badge(el, opp.reason, opp.category, effectiveScore(opp));
   dockOpen = true; renderDock();
   toast("Added to your reply list — scoring it…");
   // Score it for real (one call, bypasses the per-session cap) to fill in the tag/angle.
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text }] });
+  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
   const s = resp?.scores?.[0];
   const cur = opps.get(info.id);
   if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
     cur.score = s.score; cur.reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ") || cur.reason; cur.category = catId(s.category) ?? cur.category;
-    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category });
+    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category, isReplyToOwnPost: cur.isReplyToOwnPost });
     if (statusInfo(el)?.id === info.id) badge(el, cur.reason, cur.category, effectiveScore(cur));
     renderDock();
   }
@@ -732,6 +1030,8 @@ async function addManual(el: HTMLElement) {
 /* ---------- draft panel (closed shadow root, CSP-safe) ---------- */
 
 const PANEL_CSS = `
+:host { --g-surface:#1d1812; --g-surface-raised:#282018; --g-text:#f7efe2; --g-muted:#b6a892; --g-accent:${ACCENT}; --g-border:rgba(214,154,92,.24); }
+:focus-visible { outline:2px solid var(--g-accent); outline-offset:2px; }
 .p { width: 340px; max-width: calc(100vw - 36px); background: #1d1812; color: #f3ead9;
      border: .5px solid rgba(214,154,92,.18); border-radius: 14px; padding: 14px;
      font: 13px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -739,9 +1039,11 @@ const PANEL_CSS = `
 .h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .th { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pav { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
-.t { font-weight: 600; } .x { background: none; border: 0; color: #8c7d68; font-size: 14px; cursor: pointer; }
+.t { font-weight: 600; } .x { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; background:none; border:0; border-radius:8px; color:#b6a892; font-size:14px; cursor:pointer; }
+.x:hover { background:rgba(214,154,92,.1); color:var(--g-text); }
 .ctx { font-size: 12px; color: #b6a892; max-height: 60px; overflow: auto; margin-bottom: 10px;
        border-left: 2px solid rgba(214,154,92,.25); padding-left: 8px; }
+.repeat-warn { margin:0 0 10px; padding:8px 9px; border-radius:8px; background:rgba(232,154,60,.12); border:1px solid rgba(232,154,60,.34); color:#f0b66f; font-size:11.5px; line-height:1.4; }
 .angles { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .prods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
 .plabel { font-size: 10.5px; color: #8c7d68; text-transform: uppercase; letter-spacing: .3px; }
@@ -756,15 +1058,28 @@ const PANEL_CSS = `
 .b { flex: 1; font: inherit; font-weight: 500; border-radius: 9px; padding: 8px;
      border: .5px solid rgba(214,154,92,.18); background: #221c15; color: #f3ead9; cursor: pointer; }
 .b.primary { background: ${ACCENT}; color: ${INK}; border-color: transparent; font-weight: 600; }
-.foot { margin-top: 9px; font-size: 10.5px; color: #8c7d68; }
+.foot { margin-top:9px; font-size:12px; line-height:1.45; color:#b6a892; }
+.manual-state { margin:4px 0 10px; padding:10px; border:1px solid rgba(214,154,92,.24); border-radius:10px; background:#221c15; }
+.manual-state b { display:block; color:#f3ead9; font-size:13px; }
+.manual-state span { display:block; margin-top:4px; color:#b6a892; font-size:12px; line-height:1.45; }
+.manual-draft { width:100%; box-sizing:border-box; margin-top:10px; background:#1a1510; color:#d8c9b2; border:.5px solid rgba(214,154,92,.18); border-radius:9px; padding:8px 9px; font:12px/1.4 inherit; resize:none; }
+.manual-actions { display:flex; gap:8px; margin-top:10px; }
+.manual-actions .b { min-width:0; }
 .steer { width: 100%; box-sizing: border-box; margin-top: 10px; background: #1a1510; color: #f3ead9;
          border: .5px solid rgba(214,154,92,.28); border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 12px; }
 .steer::placeholder { color: #8c7d68; }
 .steer:focus { outline: none; border-color: ${ACCENT}; }
+@media (max-width: 420px) {
+  .p { width:calc(100vw - 24px); max-width:none; padding:12px; border-radius:12px; box-sizing:border-box; }
+  .row { flex-wrap:wrap; }
+  .b { min-height:38px; }
+}
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
 `;
 
 let panelHost: HTMLElement | null = null;
 let panelRoot: ShadowRoot | null = null;
+let panelReturnFocus: HTMLElement | null = null;
 /** X registers single-key shortcuts (n=new post, /=search, l=like, …) on `document` and
  *  decides whether to fire them by inspecting the event target. Our inputs live in CLOSED
  *  shadow roots, so a keystroke is retargeted to the host (a plain div) — X doesn't see an
@@ -777,6 +1092,8 @@ function trapKeys(host: HTMLElement): void {
 
 function ensurePanel(): ShadowRoot {
   if (panelHost?.isConnected && panelRoot) return panelRoot;
+  const shadowActive = dockRoot?.activeElement;
+  panelReturnFocus = shadowActive instanceof HTMLElement ? shadowActive : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
   panelHost = document.createElement("div");
   Object.assign(panelHost.style, { position: "fixed", bottom: "18px", right: "18px", zIndex: "2147483647" } as Partial<CSSStyleDeclaration>);
   panelRoot = panelHost.attachShadow({ mode: "closed" });
@@ -784,19 +1101,27 @@ function ensurePanel(): ShadowRoot {
   sheet.replaceSync(PANEL_CSS);
   panelRoot.adoptedStyleSheets = [sheet];
   trapKeys(panelHost); // keep X's keyboard shortcuts from hijacking typing in the draft/steer fields
+  panelHost.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); dismissPanel(); } });
   document.documentElement.appendChild(panelHost);
   return panelRoot;
 }
-function dismissPanel() { panelHost?.remove(); panelHost = null; panelRoot = null; }
+function dismissPanel(force = false) {
+  // Reply completion is intentionally a return-state, not a toast. Keep it on
+  // screen until the user explicitly confirms or cancels it.
+  if (pendingManualReply && !force) { renderPendingManualReplyCard(); return; }
+  panelHost?.remove(); panelHost = null; panelRoot = null;
+  if (panelReturnFocus?.isConnected) panelReturnFocus.focus();
+  panelReturnFocus = null;
+}
 
-let draftGetEl: (() => HTMLElement | null) | null = null;
 let draftOppId: string | null = null;
 let draftOppAuthor = "";
 /** Cross-session reply-reputation log. X penalties attach to the ACCOUNT (they
  *  suppress reach ongoing, not per-reply), so this persists across navigations +
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
- *  normalized reply texts for the duplicate-reply guard. Persisted on each insert. */
+ *  normalized reply texts for the duplicate-reply guard. Persisted after a
+ *  successful Like + insert attempt or an explicit copy/open confirmation. */
 /** One sent reply's features — the raw material for the "what's working" learning
  *  loop. `outcome` IS written by the daily measure pass (runMeasurePass matches your
  *  posted replies via /user-replies and reads their real engagement); the features are
@@ -812,10 +1137,14 @@ interface SentRecord {
   ageMs?: number;        // how old the post was when you replied (freshness)
   category?: string;     // opportunity category (promote/value/ask/…)
   angle?: string;        // the drafting angle used
+  growthExperimentId?: string; // top-level strategy active when this reply was handed off
+  growthStrategyId?: GrowthStrategyId;
   norm?: string;         // normalized reply text (match + dedup)
   snippet?: string;      // first 80 chars of the reply (match via /user-replies)
   avatar?: string;       // the author's profile picture (so the playground treat wears their face)
   target?: { views?: number; likes?: number; replies?: number }; // the POST's engagement state at reply time — learn "fast-rising vs quiet" per user (cannot be backfilled, so log now)
+  confirmedAt?: number;  // actual reply found via RapidAPI, or explicit manual confirmation
+  confirmation?: "rapidapi" | "manual";
   outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; tweetId?: string; authorReplied?: boolean; frozen?: boolean };
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
@@ -833,8 +1162,14 @@ function mergeReplyLog(a: ReplyLog, b: Partial<ReplyLog>): ReplyLog {
   const put = (r: SentRecord) => {
     const k = r.id || String(r.at);
     const ex = byId.get(k);
-    // Prefer the copy carrying a measured outcome, else the newer one.
-    byId.set(k, !ex ? r : (ex.outcome && !r.outcome ? ex : r.outcome && !ex.outcome ? r : r.at >= ex.at ? r : ex));
+    if (!ex) { byId.set(k, r); return; }
+    // Cross-tab writes can discover confirmation/outcomes independently. Merge those facts
+    // instead of picking one whole record and accidentally dropping the other tab's proof.
+    const confirmedAt = Math.max(ex.confirmedAt ?? 0, r.confirmedAt ?? 0) || undefined;
+    const confirmation = ex.confirmation === "rapidapi" || r.confirmation === "rapidapi"
+      ? "rapidapi" : ex.confirmation ?? r.confirmation;
+    const outcome = ex.outcome || r.outcome ? { ...(ex.outcome ?? {}), ...(r.outcome ?? {}), authorReplied: !!(ex.outcome?.authorReplied || r.outcome?.authorReplied) || undefined } as SentRecord["outcome"] : undefined;
+    byId.set(k, { ...ex, ...r, confirmedAt, confirmation, outcome });
   };
   for (const r of a.sent) put(r);
   for (const r of bSent) put(r);
@@ -872,27 +1207,8 @@ const DRAFT_MAX = 50;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; getEl?: () => HTMLElement | null; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; steer?: string; }
+interface DraftReq { author: string; text: string; context?: string; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; steer?: string; isReplyToOwnPost?: boolean; }
 let lastDraft: DraftReq | null = null;
-
-/** Posts already liked this session, so re-drafts / angle switches don't re-toggle. */
-const liked = new Set<string>();
-
-/** Heart the OUTER post (skip the quoted tweet's bar). X's button is testid
- *  "like" only while UNliked — once liked it becomes "unlike", so a click here
- *  can only ever like, never un-like. No-op if the post is already liked. */
-function likePost(id: string | null, el: HTMLElement | null): void {
-  if (!id && !el?.isConnected) return;
-  // A human doesn't like in the same millisecond they finish a reply — land it a
-  // natural beat later. The timeline virtualizes, so re-resolve the post by id at
-  // click time (strict id match); never like a recycled element showing another tweet.
-  setTimeout(() => {
-    const target = id ? findPost(id) : (el?.isConnected ? el : null);
-    if (!target?.isConnected) return;
-    const btns = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="like"]'));
-    (btns.find((b) => !b.closest('[role="link"]')) || btns[0])?.click();
-  }, humanDelayMs("settle"));
-}
 
 /** Authors we've followed (or confirmed already-followed) this session. */
 const followed = new Set<string>();
@@ -935,7 +1251,7 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
  *  painted). An element with a DIFFERENT extractable id is a different tweet and
  *  is never matched, so we can never act on a same-author lookalike. Off-page
  *  opps (e.g. search-discovered, whose id is not in the DOM) find nothing, so
- *  Insert degrades to the "open the post, then Insert" path. Pass no text to
+ *  Like + insert degrades to copy + open when the post is not rendered. Pass no text to
  *  force a strict id-only lookup. */
 function findPost(id: string, text?: string): HTMLElement | null {
   let byText: HTMLElement | null = null;
@@ -947,6 +1263,15 @@ function findPost(id: string, text?: string): HTMLElement | null {
     if (needle && !byText && outerText(a).startsWith(needle)) byText = a;
   }
   return byText;
+}
+
+/** Repaint one rendered post after its reply status changes. */
+function repaintReplyPost(id: string): void {
+  const el = findPost(id); if (!el) return;
+  const cached = seen.get(id);
+  const opp = opps.get(id);
+  if (opp || el.querySelector("[data-tbx-badge]")) badge(el, opp?.reason || cached?.reason || "Reply opportunity", opp?.category || cached?.category, opp?.score ?? cached?.score);
+  else addButton(el);
 }
 
 function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
@@ -964,109 +1289,200 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The actual contenteditable inside X's composer (the testid node may wrap it). */
-function editableOf(node: HTMLElement): HTMLElement {
+/** Resolve X's real contenteditable from its tweetTextarea wrapper. */
+function composerEditable(node: HTMLElement): HTMLElement {
   if (node.getAttribute("contenteditable") === "true") return node;
   return node.querySelector<HTMLElement>('[contenteditable="true"]') || node;
 }
-function placeCaretEnd(ce: HTMLElement) {
+
+function composerText(node: HTMLElement): string {
+  return (node.textContent || "").replace(/​/g, "").replace(/\s+/g, " ").trim();
+}
+
+function placeComposerCaretAtEnd(node: HTMLElement): void {
   try {
-    const r = document.createRange();
-    r.selectNodeContents(ce);
-    r.collapse(false);
-    const s = window.getSelection();
-    s?.removeAllRanges();
-    s?.addRange(r);
-  } catch { /* ignore */ }
+    const range = document.createRange(); range.selectNodeContents(node); range.collapse(false);
+    const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+  } catch { /* best-effort */ }
 }
 
-/** Put text into X's DraftJS editor. First types it in word-by-word (verified —
- *  DraftJS silently drops repeated inserts, so each word is confirmed and the moment
- *  one drops we bail), then falls back to a reliable one-shot insert (exec → paste →
- *  beforeinput). Success is LENGTH-aware (`complete`, not just "non-empty"), so a
- *  partial fill can never be mistaken for success and the box is never left half-done. */
-async function typeInto(node: HTMLElement, text: string): Promise<boolean> {
-  const ce = editableOf(node);
-  const norm = (s: string) => s.replace(/​/g, "").replace(/\s+/g, " ").trim();
-  const want = norm(text);
-  const got = () => norm(ce.textContent || "");
-  const filled = () => got().length > 0;
-  const complete = () => want.length > 0 && got().length >= want.length * 0.9; // FULL reply landed; never "complete" on empty text
+/** Fill one empty X reply composer in one verified operation. This does not type
+ *  word-by-word, submit the reply, or overwrite text already present. */
+async function fillReplyComposer(node: HTMLElement, text: string): Promise<"ok" | "occupied" | "blocked"> {
+  const editor = composerEditable(node);
+  const want = text.replace(/​/g, "").replace(/\s+/g, " ").trim();
+  const complete = () => want.length > 0 && composerText(editor) === want;
+  if (complete()) return "ok";
+  if (composerText(editor)) return "occupied";
 
-  const clear = () => {
+  const clearAttempt = async () => {
     try {
-      ce.focus();
-      const r = document.createRange(); r.selectNodeContents(ce);
-      const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r);
+      editor.focus();
+      const range = document.createRange(); range.selectNodeContents(editor);
+      const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
       document.execCommand("delete", false);
-    } catch { /* ignore */ }
+      await sleep(30);
+    } catch { /* best-effort */ }
   };
-  // Empty the box, verified — DraftJS sometimes ignores a single delete.
-  const ensureEmpty = async (): Promise<boolean> => {
-    for (let i = 0; i < 4; i++) { if (!filled()) return true; clear(); await sleep(30); }
-    return !filled();
-  };
-  const exec = () => { placeCaretEnd(ce); document.execCommand("insertText", false, text); };
-  const paste = () => {
-    try {
-      const dt = new DataTransfer(); dt.setData("text/plain", text);
-      ce.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-    } catch { /* ignore */ }
-  };
-  const beforeInput = () => {
-    try {
-      ce.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
-      ce.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
-    } catch { /* ignore */ }
-  };
+  const methods = [
+    () => document.execCommand("insertText", false, text),
+    () => {
+      try {
+        const data = new DataTransfer(); data.setData("text/plain", text);
+        editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+      } catch { /* try beforeinput next */ }
+    },
+    () => {
+      editor.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
+      editor.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
+    },
+  ];
 
-  // Reliable one-shot insert into an empty box, verified by `complete` (length-aware),
-  // so a partial never counts as success. The proven path.
-  const insertWhole = async (): Promise<boolean> => {
-    for (const method of [exec, paste, beforeInput]) {
-      ce.focus();
-      await ensureEmpty();
-      await sleep(20);
-      placeCaretEnd(ce);
-      method();
-      for (let i = 0; i < 14; i++) { if (complete()) return true; await sleep(40); }
-    }
-    return complete();
-  };
-
-  // No typed cadence: repeated programmatic inserts POISON DraftJS — after a couple
-  // words it stops accepting input entirely, so even a fallback can't recover and the
-  // box is left with two words. The only reliable way is one verified shot. A brief
-  // human pause before it is the only safe in-text cadence; the real human-pacing is
-  // the spaced-out like/follow actions, not the keystrokes.
-  await sleep(80 + humanDelayMs("react"));
-  ce.focus();
-  return await insertWhole();
+  for (const method of methods) {
+    if (composerText(editor)) await clearAttempt();
+    if (composerText(editor)) return "blocked";
+    editor.focus(); placeComposerCaretAtEnd(editor); method();
+    for (let i = 0; i < 12; i++) { if (complete()) return "ok"; await sleep(40); }
+  }
+  return complete() ? "ok" : "blocked";
 }
 
-/** Best-effort: open the post's reply box and type the draft into it. Never submits. */
-async function insertReply(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "blocked"> {
-  // Target the REPLY DIALOG's composer — never the page's main "what's happening"
-  // box (which is also a tweetTextarea and would post to everyone).
-  let editor = document.querySelector<HTMLElement>('[role="dialog"] [data-testid^="tweetTextarea_"]');
-  if (!editor) {
-    if (!postEl?.isConnected) return "no-composer";
-    postEl.scrollIntoView({ block: "center" });
-    const btn = postEl.querySelector<HTMLElement>('[data-testid="reply"]');
-    if (!btn) return "no-composer";
-    btn.click();
-    // The reply composer opens inside a modal dialog (feed). Fall back to an
-    // inline composer only on a post page, where there is no "everyone" box.
-    editor =
-      (await waitFor('[role="dialog"] [data-testid^="tweetTextarea_"]', 2500)) ||
-      (location.pathname.includes("/status/") ? await waitFor('[data-testid^="tweetTextarea_"]', 600) : null);
-  }
+/** Open only the selected post's reply composer and fill it. Never submits. */
+async function insertReplyIntoX(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "occupied" | "blocked"> {
+  const existingDialog = document.querySelector<HTMLElement>('[role="dialog"] [data-testid^="tweetTextarea_"]');
+  if (existingDialog) return "occupied"; // do not risk filling an unrelated composer
+  if (!postEl?.isConnected) return "no-composer";
+  postEl.scrollIntoView({ block: "center" });
+  const reply = Array.from(postEl.querySelectorAll<HTMLElement>('[data-testid="reply"]')).find((button) => !button.closest('[role="link"]'));
+  if (!reply) return "no-composer";
+  reply.click();
+  const editor =
+    (await waitFor('[role="dialog"] [data-testid^="tweetTextarea_"]', 2500)) ||
+    (location.pathname.includes("/status/") ? await waitFor('[data-testid^="tweetTextarea_"]', 600) : null);
   if (!editor) return "no-composer";
-  return (await typeInto(editor, text)) ? "ok" : "blocked";
+  return fillReplyComposer(editor, text);
+}
+
+const likedPostIds = new Set<string>();
+
+/** Like only the selected outer post. The `like` test id disappears once liked,
+ *  so this can never toggle an existing like off. */
+function likeSelectedPost(id: string | null, postEl: HTMLElement | null): boolean {
+  if (id && likedPostIds.has(id)) return true;
+  const target = id ? findPost(id) : (postEl?.isConnected ? postEl : null);
+  if (!target?.isConnected) return false;
+  const unlike = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="unlike"]')).find((candidate) => !candidate.closest('[role="link"]'));
+  if (unlike) { if (id) likedPostIds.add(id); return true; }
+  const buttons = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="like"]'));
+  const button = buttons.find((candidate) => !candidate.closest('[role="link"]')) || buttons[0];
+  if (!button) return false;
+  button.click();
+  if (id) likedPostIds.add(id);
+  return true;
 }
 
 let inserting = false;
-/** Record an inserted reply in the persisted reputation log and return the single
+interface PendingManualReply {
+  text: string;
+  opp?: Opp;
+  angle?: string;
+  author: string;
+  url: string;
+  postId?: string;
+  copied: boolean;
+}
+let pendingManualReply: PendingManualReply | undefined;
+
+function replyUrl(opp?: Opp): string {
+  const id = opp?.id ?? draftOppId;
+  const author = (opp?.author ?? draftOppAuthor).replace(/^@+/, "");
+  if (id && author) return `https://x.com/${encodeURIComponent(author)}/status/${encodeURIComponent(id)}`;
+  if (id) return `https://x.com/i/status/${encodeURIComponent(id)}`;
+  return author ? `https://x.com/${encodeURIComponent(author)}` : "https://x.com/home";
+}
+
+async function copyReplyText(text: string): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  // Clipboard permission can disappear after X's composer timeout. Retain a
+  // synchronous copy path so the fallback still does useful work.
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    Object.assign(ta.style, { position: "fixed", left: "-9999px", top: "0" } as Partial<CSSStyleDeclaration>);
+    document.documentElement.appendChild(ta);
+    ta.select();
+    const copied = document.execCommand("copy");
+    ta.remove();
+    return copied;
+  } catch { return false; }
+}
+
+/** Start both handoff actions from the same user gesture so the new tab is not
+ *  popup-blocked and the clipboard request retains browser permission. */
+async function copyReplyAndOpenPost(text: string, url: string): Promise<boolean> {
+  const copied = copyReplyText(text);
+  window.open(url, "_blank", "noopener");
+  return await copied;
+}
+
+async function copyAndOpenPendingReplyPost(): Promise<void> {
+  const pending = pendingManualReply;
+  if (!pending) return;
+  const copied = await copyReplyAndOpenPost(pending.text, pending.url);
+  if (pendingManualReply !== pending) return;
+  pending.copied = copied;
+  renderPendingManualReplyCard();
+  toast(copied ? "Draft copied and post opened." : "Post opened. Copy the draft from Goobi before replying.");
+}
+
+function cancelPendingManualReply(): void {
+  const pending = pendingManualReply;
+  if (!pending) return;
+  pendingManualReply = undefined;
+  dismissPanel();
+  toast("Reply handoff cancelled — nothing was counted.");
+}
+
+function markPendingManualReplyPosted(): void {
+  const pending = pendingManualReply;
+  if (!pending) return;
+  // Clear first: even a double click or re-entrant render can record this handoff
+  // only once. The normal record/nudge path owns every tally and safety update.
+  pendingManualReply = undefined;
+  const warn = recordReplyAndNudge(pending.text, pending.opp, pending.angle, pending.author, "manual");
+  if (pending.postId) repaintReplyPost(pending.postId);
+  dismissPanel();
+  toast(warn || "Reply marked as posted.");
+}
+
+function renderPendingManualReplyCard(): void {
+  const pending = pendingManualReply;
+  if (!pending) return;
+  const root = ensurePanel();
+  root.replaceChildren();
+  const p = document.createElement("div"); p.className = "p";
+  p.setAttribute("role", "dialog"); p.setAttribute("aria-modal", "false"); p.setAttribute("aria-labelledby", "goobi-manual-title");
+  const h = document.createElement("div"); h.className = "h";
+  const title = document.createElement("div"); title.className = "t"; title.id = "goobi-manual-title"; title.textContent = "Finish your reply on X";
+  h.append(title);
+  const state = document.createElement("div"); state.className = "manual-state";
+  const status = document.createElement("b"); status.textContent = pending.copied ? "Draft copied" : "Copy the draft below";
+  const help = document.createElement("span"); help.textContent = pending.copied
+    ? "Paste it into X, post it, then come back here. Goobi will not count it until you confirm."
+    : "X would not accept the insert and clipboard access was unavailable. Copy this text, post it on X, then confirm here.";
+  const draft = document.createElement("textarea"); draft.className = "manual-draft"; draft.rows = 4; draft.readOnly = true; draft.value = pending.text; draft.setAttribute("aria-label", "Reply draft to copy");
+  state.append(status, help, draft);
+  const actions = document.createElement("div"); actions.className = "manual-actions";
+  const open = document.createElement("button"); open.className = "b"; open.textContent = "Copy reply & open post ↗"; open.onclick = () => void copyAndOpenPendingReplyPost();
+  const mark = document.createElement("button"); mark.className = "b primary"; mark.textContent = "Mark as posted"; mark.onclick = markPendingManualReplyPosted;
+  const cancel = document.createElement("button"); cancel.className = "b"; cancel.textContent = "Cancel"; cancel.onclick = cancelPendingManualReply;
+  actions.append(open, mark, cancel);
+  const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Only Mark as posted updates reply totals, pacing, streaks, and learning.";
+  p.append(h, state, actions, foot);
+  root.append(p);
+  requestAnimationFrame(() => { if (panelRoot === root) open.focus(); });
+}
+/** Record a confirmed reply in the persisted reputation log and return the single
  *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
  *  Pattern-aware + cross-session, because X's penalties attach to the account. */
 /** Bump today's "replies sent" tally + the all-time total; trim old days. */
@@ -1082,7 +1498,8 @@ function bumpDaily(now: number): void {
  *  "what's working" loop correlates with outcomes: the daily measure-pass fills SentRecord.outcome,
  *  learnFeatures/aggregateAccounts turn it into per-angle/per-account signal, and (behind
  *  learnLoopOn) accountRankMultipliers + learnedBestAngle feed it back into ranking + drafting. */
-function logSentReply(now: number, text: string, opp?: Opp, angle?: string): void {
+function logSentReply(now: number, text: string, opp?: Opp, angle?: string, confirmation?: "rapidapi" | "manual"): void {
+  const gx = activeGrowthExperiment(growthStore);
   const rec: SentRecord = {
     id: `${now}.${sentSeq++}`,
     at: now,
@@ -1093,25 +1510,31 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string): voi
     ageMs: opp?.postedAt ? Math.max(0, now - opp.postedAt) : undefined,
     category: opp?.category,
     angle: angle || opp?.category,
+    growthExperimentId: gx?.id,
+    growthStrategyId: gx?.strategyId,
     norm: normalizeReply(text) || undefined,
     snippet: text.slice(0, 80),
     avatar: opp?.avatar,
     target: opp && (opp.views != null || opp.likes != null || opp.replies != null) ? { views: opp.views, likes: opp.likes, replies: opp.replies } : undefined,
+    confirmedAt: confirmation ? now : undefined,
+    confirmation,
   };
   replyLog.sent.push(rec);
   if (rec.postId) commentedIds.add(rec.postId); // mark this post as commented → "✓" badge in the feed
   if (replyLog.sent.length > SENT_MAX) replyLog.sent = replyLog.sent.slice(-SENT_MAX);
 }
 
-/** Record one reply the system handed you (Insert landed, or clipboard fallback):
- *  count it, log its features, persist, refresh the header. The click is the
- *  signal — no post-confirmation. */
-function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now()): void {
+/** Record one assisted reply attempt after a successful composer fill or explicit
+ *  copy/open confirmation: count it, log its features, update author recency,
+ *  persist, and refresh the UI. */
+function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now(), confirmation?: "rapidapi" | "manual"): void {
   replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
-  replyLog.times.push(now); // count EVERY recorded reply toward the hourly pace — insert, clipboard fallback, or "Mark commented"
+  replyLog.times.push(now); // every confirmed reply counts toward the hourly pace
   const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
-  logSentReply(now, text, opp, angle);
+  logSentReply(now, text, opp, angle, confirmation);
+  const confirmedAuthor = (opp?.author ?? draftOppAuthor).replace(/^@+/, "").toLowerCase();
+  if (confirmedAuthor) replyLog.authors[confirmedAuthor] = Math.max(replyLog.authors[confirmedAuthor] ?? 0, now);
   const pid = opp?.id ?? draftOppId; // you replied → drop it from the dock (the feed badge handles the green "✓")
   if (pid) opps.delete(pid);
   touchGoobi();
@@ -1124,13 +1547,15 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
     else goobiReactLove("Love it!", "that's the good stuff", 3200);
   }
   safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+  if (!confirmation && text.trim()) scheduleReplyVerification(); // RapidAPI confirms the actual X reply after its timeline has had time to update
   renderDock(); // update "N replies sent today" immediately
   requestScan(); // flip this post's in-feed badge to the green "✓ Commented" call-out
 }
 
-function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | null {
+function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, replyAuthor?: string, confirmation?: "rapidapi" | "manual"): string | null {
   const now = Date.now();
-  const author = draftOppAuthor.toLowerCase();
+  const displayAuthor = (replyAuthor || opp?.author || draftOppAuthor).replace(/^@+/, "");
+  const author = displayAuthor.toLowerCase();
   const last = author ? replyLog.authors[author] : undefined;
   const repeat = last != null && now - last < AUTHOR_REPEAT_TTL;
   const norm = normalizeReply(text);
@@ -1139,40 +1564,72 @@ function recordReplyAndNudge(text: string, opp?: Opp, angle?: string): string | 
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  recordSentReply(text, opp, angle, now); // pushes this reply onto replyLog.times (the hourly pace counter)
-  return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? draftOppAuthor : null });
+  recordSentReply(text, opp, angle, now, confirmation); // pushes this reply onto replyLog.times (the hourly pace counter)
+  return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? displayAuthor : null });
 }
 
-async function doInsert(text: string) {
-  if (inserting) return; // ignore re-clicks while an insert is in flight (avoids doubling)
-  if (!text.replace(/​/g, "").trim()) { toast("The draft is empty — nothing to insert."); return; } // never like/count a phantom reply
+async function startCopyOpenHandoff(text: string, opp?: Opp, angle?: string): Promise<void> {
+  const pending: PendingManualReply = { text, opp, angle, author: opp?.author || draftOppAuthor, url: replyUrl(opp), postId: opp?.id ?? draftOppId ?? undefined, copied: false };
+  pendingManualReply = pending;
+  renderPendingManualReplyCard();
+  const copied = await copyReplyAndOpenPost(text, pending.url);
+  if (pendingManualReply !== pending) return;
+  pending.copied = copied;
+  renderPendingManualReplyCard();
+  toast(pending.copied
+    ? "Draft copied and post opened. Paste, review, and post it yourself, then return to confirm."
+    : "Post opened. Copy the draft from Goobi, then confirm only after you post it.");
+}
+
+async function handoffReply(text: string): Promise<void> {
+  if (inserting) return;
+  if (!text.replace(/​/g, "").trim()) { toast("The draft is empty — nothing to copy."); return; }
   inserting = true;
   try {
-    // Snapshot the opportunity + angle BEFORE we delete the card, for the feature log.
     const opp = draftOppId ? opps.get(draftOppId) : undefined;
-    const angle = lastDraft?.angle;
-    const el = draftGetEl?.() ?? null;
-    const r = await insertReply(text, el);
-    if (r === "ok") {
-      // Like the post only now — once you've actually committed to replying, not on
-      // panel-open. Genuine, user-paced engagement, once per post.
-      if (draftOppId && !liked.has(draftOppId)) { liked.add(draftOppId); likePost(draftOppId, el); }
-      const warn = recordReplyAndNudge(text, opp, angle); // counts today's reply + reputation guard + feature log
-      if (draftOppId) opps.delete(draftOppId);
-      renderDock(); // after the count, so the "N today" header reflects this reply
-      toast(warn || "Inserted into the reply box. Review it, then post.");
-      dismissPanel();
-    }
-    else if (r === "no-composer") toast("Couldn't find a reply box. Open the post (↗), click Reply, then Insert.");
-    else { try { await navigator.clipboard.writeText(text); } catch { /* ignore */ } recordSentReply(text, opp, angle); toast("X blocked the insert — copied it instead; paste it in."); }
+    await startCopyOpenHandoff(text, opp, lastDraft?.angle);
   } finally {
     inserting = false;
   }
 }
 
+async function likeAndInsertReply(text: string): Promise<void> {
+  if (inserting) return;
+  if (!text.replace(/​/g, "").trim()) { toast("The draft is empty — nothing to insert."); return; }
+  inserting = true;
+  try {
+    const opp = draftOppId ? opps.get(draftOppId) : undefined;
+    const angle = lastDraft?.angle;
+    const postEl = draftOppId ? findPost(draftOppId, opp?.source === "search" ? undefined : opp?.text) : null;
+    const result = await insertReplyIntoX(text, postEl);
+    if (result === "ok") {
+      const liked = draftOppId ? likeSelectedPost(draftOppId, postEl) : false;
+      const postId = draftOppId ?? opp?.id;
+      const warn = recordReplyAndNudge(text, opp, angle);
+      if (postId) repaintReplyPost(postId);
+      dismissPanel(true);
+      toast(warn || (liked
+        ? "Post liked and reply inserted. Review it, then submit on X."
+        : "Reply inserted. Review it, then submit on X."));
+      return;
+    }
+    const reason = result === "occupied"
+      ? "An X composer is already open or contains text."
+      : result === "no-composer" ? "That post is not available in this tab." : "X blocked the composer fill.";
+    toast(`${reason} Switching to copy + open.`);
+    await startCopyOpenHandoff(text, opp, angle);
+  } finally {
+    inserting = false;
+  }
+}
+
+function runReplyDraftAction(text: string): Promise<void> {
+  return xReplyInsertOn ? likeAndInsertReply(text) : handoffReply(text);
+}
+
 async function draftFor(req: DraftReq) {
-  const { author, text, context, getEl, oppId, angle, avatar, name, steer } = req;
-  draftGetEl = getEl ?? null;
+  if (pendingManualReply) { renderPendingManualReplyCard(); toast("Finish or cancel the reply waiting for confirmation first."); return; }
+  const { author, text, context, oppId, angle, avatar, name, steer, isReplyToOwnPost: reqOwnReply } = req;
   draftOppId = oppId ?? null;
   draftOppAuthor = author;
   // The picker lists ALL products when promoting (choose any); default-select the
@@ -1197,12 +1654,16 @@ async function draftFor(req: DraftReq) {
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
   // Ground the drafter in what we already know about this opp (specificity = ranked variable).
   const dOpp = oppId ? opps.get(oppId) : undefined;
+  const ownReply = dOpp?.isReplyToOwnPost || reqOwnReply;
   const authorLine = dOpp ? [
     `@${dOpp.author}`,
     knownFollowers(dOpp) != null ? `~${fmtCount(knownFollowers(dOpp))} followers` : "",
     builderTierFor(dOpp) === 2 ? "a two-way peer in the user's niche" : builderTierFor(dOpp) === 1 ? "a builder/community person" : "",
   ].filter(Boolean).join(" · ") : undefined;
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, authorLine });
+  const threadLine = ownReply
+    ? "This is a direct comment on one of the user's own posts. Reply as the original poster continuing a warm inbound conversation, not as cold outreach."
+    : undefined;
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, authorLine, threadLine });
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${friendlyErr(resp.error)}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -1251,31 +1712,46 @@ function productRow(candidates: ProductItem[], selected: number): HTMLElement {
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
   const meta = info ? (opps.get(info.id) ?? seen.get(info.id)) : undefined;
-  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), getEl: () => el, oppId: info?.id, angle: initialAngle(meta?.category), avatar: avatarUrl(el), products: meta?.products, name: displayName(el) });
+  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), oppId: info?.id, angle: initialAngle(meta?.category), avatar: avatarUrl(el), products: meta?.products, name: displayName(el), isReplyToOwnPost: meta?.isReplyToOwnPost || isReplyToOwnPost(el) });
 }
 
 function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number; steer?: string }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
+  p.setAttribute("role", "dialog"); p.setAttribute("aria-modal", "false"); p.setAttribute("aria-labelledby", "goobi-draft-title");
   const h = document.createElement("div"); h.className = "h";
   const th = document.createElement("div"); th.className = "th";
   if (opts.avatar) { const av = document.createElement("img"); av.className = "pav"; av.src = opts.avatar; av.alt = ""; av.referrerPolicy = "no-referrer"; av.onerror = () => av.remove(); th.append(av); }
-  const t = document.createElement("div"); t.className = "t"; t.textContent = `Reply to ${opts.name || "@" + author}`;
+  const t = document.createElement("div"); t.className = "t"; t.id = "goobi-draft-title"; t.textContent = `Reply to ${opts.name || "@" + author}`;
   th.append(t);
-  const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.onclick = dismissPanel;
+  const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.setAttribute("aria-label", "Close draft panel"); x.title = "Close (Escape)"; x.onclick = () => dismissPanel();
   h.append(th, x);
   const ctx = document.createElement("div"); ctx.className = "ctx"; ctx.textContent = text;
-  p.append(h, ctx, angleRow(opts.angle));
+  p.append(h, ctx);
+  const repeatState = repeatAuthorWarning({
+    authorHandle: author,
+    recentAuthorReplies: recentRepliesTo(author, Date.now()),
+    lastAuthorReplyAt: replyLog.authors[author.replace(/^@+/, "").toLowerCase()],
+  }, Date.now());
+  if (repeatState) {
+    const repeat = document.createElement("div"); repeat.className = "repeat-warn";
+    repeat.textContent = `You replied to @${author.replace(/^@+/, "")} ${repeatState.label}. Goobi lowered this spot's score to encourage account spread. Continue only for a real ongoing conversation.`;
+    p.append(repeat);
+  }
+  p.append(angleRow(opts.angle));
   if (opts.angle === "promote" && opts.products && opts.products.length) p.append(productRow(opts.products, opts.productIndex ?? 0));
   if (opts.loading) {
     const l = document.createElement("div"); l.className = "load"; l.textContent = "Drafting in your voice…"; p.append(l);
   } else if (opts.note) {
     const n = document.createElement("div"); n.className = "load"; n.textContent = opts.note; p.append(n);
   } else {
-    const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = 5; ta.value = opts.draft ?? "";
-    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = "Insert into reply box";
+    const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = 5; ta.value = opts.draft ?? ""; ta.setAttribute("aria-label", "Reply draft");
+    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = xReplyInsertOn ? "Like + insert reply in X" : "Copy reply & open post ↗";
+    insert.title = xReplyInsertOn
+      ? "Like the selected post and fill X's reply box; you review and submit it"
+      : "Copy this draft and open the exact post on X; you paste and post it yourself";
     insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
-    insert.onclick = () => void doInsert(ta.value);
+    insert.onclick = () => void runReplyDraftAction(ta.value);
     // Steering: type how to nudge the reply, then Regenerate (or Enter) re-drafts with it.
     const steer = document.createElement("input"); steer.className = "steer"; steer.type = "text";
     steer.placeholder = "Steer it — e.g. punchier, ask a question, less formal…";
@@ -1288,10 +1764,14 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     regen.onclick = () => { if (lastDraft) void draftFor({ ...lastDraft, steer: steer.value.trim() || undefined }); };
     steer.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); regen.click(); } };
     row.append(copy, regen);
-    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = "Inserts into X's reply box — you review and post. Never auto-posts.";
+    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = xReplyInsertOn
+      ? "On your click, Goobi likes this post, fills X's reply box, and updates its local activity state. It never submits."
+      : "Copy + open mode: you paste, review, and post it yourself.";
     p.append(ta, insert, steer, row, foot);
+    requestAnimationFrame(() => { if (panelRoot === root) ta.focus(); });
   }
   root.appendChild(p);
+  if (opts.loading || opts.note) requestAnimationFrame(() => { if (panelRoot === root) x.focus(); });
 }
 
 function toast(msg: string) {
@@ -1310,12 +1790,20 @@ function toast(msg: string) {
 /* ---------- opportunities dock (always-on, ranked top posts) ---------- */
 
 const DOCK_CSS = `
+/* Warm studio utility: a quiet workbench, with play reserved for Goobi. */
+:host {
+  --g-bg:#14110d; --g-surface:#1d1812; --g-raised:#221c15; --g-hover:#2c241d;
+  --g-text:#f3ead9; --g-muted:#b6a892; --g-subtle:#a89a82;
+  --g-accent:#d69a5c; --g-accent-hover:#e7b277; --g-focus:#e89a3c;
+  --g-success:#6fcf7f; --g-warning:#e89a3c; --g-danger:#d6604a;
+  --g-border:rgba(214,154,92,.24);
+}
 /* Keyboard a11y: one consistent, always-visible focus ring across every interactive element
    (some inputs set outline:none for aesthetics — :focus-visible restores keyboard visibility). */
-:focus-visible { outline: 2px solid rgba(232,154,60,.75); outline-offset: 1px; border-radius: 4px; }
+:focus-visible { outline:2px solid var(--g-focus); outline-offset:2px; border-radius:4px; }
 /* Vestibular a11y: honor the OS-level reduced-motion preference for all CSS motion. */
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
-.l { display:flex; align-items:center; gap:9px; background:#1d1812; color:#f3ead9; border:.5px solid rgba(214,154,92,.3); border-radius:14px;
+.l { display:flex; align-items:center; gap:9px; background:#1d1812; color:#f3ead9; border:1px solid rgba(214,154,92,.3); border-radius:14px;
      cursor:pointer; text-align:left; font:600 12px -apple-system,system-ui,sans-serif; padding:7px 14px 7px 9px;
      box-shadow:0 8px 28px rgba(0,0,0,.45); }
 .l:hover { border-color:rgba(214,154,92,.55); }
@@ -1329,41 +1817,46 @@ const DOCK_CSS = `
 .lavinit { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#fff; }
 .lmore { display:inline-flex; align-items:center; justify-content:center; font:700 9px -apple-system,system-ui,sans-serif; color:#cbb89c; background:#2a2118; }
 .lctl { display:inline-flex; align-items:center; gap:4px; margin-left:9px; flex:0 0 auto; }
-.lbtn { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%;
+.lbtn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%;
         background:#2a2118; color:#cbb89c; border:.5px solid rgba(214,154,92,.25); cursor:pointer; font:600 10px -apple-system,system-ui,sans-serif; padding:0; }
 .lbtn:hover { border-color:rgba(214,154,92,.55); color:#f3ead9; }
 .lbtn:disabled { opacity:.45; cursor:default; }
-.d { width:452px; max-width:calc(100vw - 32px); max-height:80vh; display:flex; flex-direction:column; position:relative;
-     background:#14110d; color:#f3ead9; border:.5px solid rgba(214,154,92,.18); border-radius:16px;
+.d { width:min(452px, calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:calc(100vh - 24px); display:flex; flex-direction:column; position:relative;
+     background:#14110d; color:#f3ead9; border:1px solid rgba(214,154,92,.18); border-radius:16px;
      font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; box-shadow:0 16px 48px rgba(0,0,0,.55); }
-.d.wide { width:min(680px, calc(100vw - 32px)); max-height:90vh; } /* the Post-ideas writing surface gets more room */
+.d.wide { width:min(680px, calc(100vw - 24px)); max-height:calc(100vh - 24px); } /* the Post-ideas writing surface gets more room */
 .d.wide .idea-ta { font-size:15px; }
 .d.wide .dl { padding-bottom:18px; }
-.dh { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:15px 16px 10px; flex:0 0 auto; }
-.dtitle { font-weight:500; font-size:18px; letter-spacing:-.2px; }
-.dsub { font-weight:400; font-size:11.5px; color:#8c7d68; margin-top:3px; }
+.dh { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:56px; box-sizing:border-box; padding:9px 14px 7px; flex:0 0 auto; }
+.dtitle { font-weight:650; font-size:14px; letter-spacing:-.1px; }
+.dsub { font-weight:400; font-size:12px; color:var(--g-subtle); margin-top:3px; }
 .pace { font-weight:500; white-space:nowrap; cursor:default; }
-.mom { padding:8px 14px 9px; background:rgba(214,154,92,.045); border-bottom:.5px solid rgba(214,154,92,.12); flex:0 0 auto; }
+.mom { padding:7px 14px; max-height:92px; overflow:auto; box-sizing:border-box; background:rgba(214,154,92,.035); border-bottom:1px solid rgba(214,154,92,.1); flex:0 0 auto; }
 .mom-sum { cursor:pointer; -webkit-user-select:none; user-select:none; }
-.mom-bar { width:100%; height:8px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; } /* full-width progress bar */
-.mom-meta { display:flex; align-items:center; gap:8px; margin-top:6px; } /* state label + facts + caret, below the bar */
+.mom-bar { width:100%; height:5px; border-radius:5px; background:rgba(214,154,92,.12); overflow:hidden; } /* full-width progress bar */
+.mom-meta { display:flex; align-items:center; gap:8px; margin-top:5px; } /* state label + facts + caret, below the bar */
 .mom-fill { height:100%; border-radius:5px; transition:width .6s ease, background .3s; }
 .mom-label { font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
 .mom-bits { display:flex; align-items:center; gap:5px; font-size:10.5px; color:#8c7d68; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; }
 .mom-car { flex:0 0 auto; color:#8c7d68; font-size:10px; }
-.mom-coach { font-size:11px; color:#b6a892; margin-top:6px; line-height:1.4; }
+.mom-coach { font-size:11px; color:#b6a892; margin-top:5px; line-height:1.35; }
 .mom-coach.warn { color:#d6604a; font-weight:600; }
 .mom-coach.amber { color:#e89a3c; }
 .mom-detail { margin-top:4px; padding-top:3px; border-top:.5px dashed rgba(214,154,92,.12); }
 .mom-cue { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.35; }
 .insight { border-bottom:.5px solid rgba(214,154,92,.1); }
+.rel-summary { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; box-sizing:border-box; padding:6px 14px; border:0; border-top:1px solid rgba(214,154,92,.1); border-bottom:1px solid rgba(214,154,92,.1); background:transparent; color:var(--g-subtle); cursor:pointer; text-align:left; flex:0 0 auto; }
+.rel-summary:hover { background:rgba(214,154,92,.045); color:var(--g-text); }
+.rel-summary-title { flex:0 0 auto; font:600 11px -apple-system,system-ui,sans-serif; color:var(--g-muted); }
+.rel-summary-facts { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:500 11px -apple-system,system-ui,sans-serif; }
+.rel-summary-caret { flex:0 0 auto; }
 .rel-tabs { display:flex; gap:6px; padding:8px 14px; flex:0 0 auto; }
 .rel-tab { flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 6px; border-radius:9px; border:.5px solid rgba(214,154,92,.2); background:none; color:#cbb89c; font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; white-space:nowrap; }
 .rel-tab:hover { color:#f3ead9; }
 .rel-tab.on { background:rgba(214,154,92,.13); border-color:transparent; color:#f3ead9; }
 .rel-badge { min-width:15px; text-align:center; font-size:9px; font-weight:700; padding:1px 5px; border-radius:999px; background:rgba(214,154,92,.22); color:#e6d6ba; }
 .rel-badge.amber { background:#e89a3c; color:#1a1206; }
-.rel-body { border-top:.5px solid rgba(214,154,92,.1); flex:2 1 auto; min-height:max(200px, 36vh); overflow-y:auto; } /* an OPEN section is roomy: a generous floor (≥200px / 36vh) + double the reply list's grow, so it dominates the dock when expanded. Toggle it shut via its tab. (Only exists while open, so no effect collapsed.) */
+.rel-body { border-top:1px solid rgba(214,154,92,.1); flex:0 1 auto; min-height:0; max-height:180px; overflow-y:auto; } /* secondary context must never push the reply queue below the fold */
 .ins-body { padding:2px 14px 12px; }
 .ins-trend { font-size:11px; color:#6fcf7f; margin:2px 0 8px; font-weight:500; }
 .ins-fact { font-size:11px; color:#8c7d68; margin:2px 0 6px; } /* neutral insight line — green means POSITIVE, not "any insight" */
@@ -1391,8 +1884,11 @@ const DOCK_CSS = `
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
 .scanb:hover { background:rgba(214,154,92,.10); } .scanb:disabled { opacity:.6; cursor:default; }
-.iconb { background:none; border:.5px solid rgba(214,154,92,.18); color:#8c7d68; border-radius:8px;
-         width:30px; height:30px; cursor:pointer; font-size:15px; line-height:1; flex:0 0 auto; }
+.findb { min-height:34px; padding:7px 12px; border:0; border-radius:9px; background:${ACCENT}; color:${INK}; font:700 11.5px -apple-system,system-ui,sans-serif; cursor:pointer; white-space:nowrap; }
+.findb:hover { filter:brightness(1.06); } .findb:disabled { opacity:.52; cursor:default; }
+.foot .findb { margin-top:10px; }
+.iconb { background:none; border:1px solid var(--g-border); color:var(--g-subtle); border-radius:9px;
+         width:34px; height:34px; cursor:pointer; font-size:15px; line-height:1; flex:0 0 auto; }
 .iconb:hover { background:#221c15; }
 .kback { position:absolute; inset:0; z-index:5; }
 .kmenu { position:absolute; top:50px; right:14px; z-index:6; background:#221c15; border:.5px solid rgba(214,154,92,.22);
@@ -1401,57 +1897,164 @@ const DOCK_CSS = `
          padding:8px 10px; border-radius:7px; cursor:pointer; }
 .kitem:hover { background:#2c241d; } .kitem:disabled { opacity:.5; cursor:default; }
 .tabs { display:flex; gap:4px; padding:0 14px 8px; flex:0 0 auto; }
-.tab { flex:1; border:.5px solid transparent; border-radius:9px; background:none; color:#8c7d68;
-       font:500 11.5px -apple-system,system-ui,sans-serif; padding:7px 4px; cursor:pointer; white-space:nowrap; }
+.reply-tools { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 14px; border-bottom:1px solid rgba(214,154,92,.08); }
+.reply-tools-label { color:var(--g-muted); font-size:12px; font-weight:600; }
+.reply-tools-btn { min-height:32px; padding:5px 10px; border:1px solid var(--g-border); border-radius:8px; background:transparent; color:var(--g-subtle); font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; }
+.reply-tools-btn:hover { background:var(--g-raised); color:var(--g-text); }
+.tab { flex:1; min-height:32px; border:1px solid transparent; border-radius:9px; background:none; color:var(--g-subtle);
+       font:600 12px -apple-system,system-ui,sans-serif; padding:7px 4px; cursor:pointer; white-space:nowrap; }
 .tab:hover { color:#cbb89c; } .tab.on { background:rgba(214,154,92,.13); border-color:rgba(214,154,92,.32); color:#e7b277; }
-.modes { display:flex; gap:6px; padding:2px 14px 10px; flex:0 0 auto; }
-.mode { flex:1; border:.5px solid rgba(214,154,92,.22); border-radius:10px; background:none; color:#8c7d68; font:600 12px -apple-system,system-ui,sans-serif; padding:8px 4px; cursor:pointer; }
+.modes { display:flex; gap:6px; min-height:42px; box-sizing:border-box; padding:4px 14px 6px; border-top:1px solid rgba(214,154,92,.08); border-bottom:1px solid rgba(214,154,92,.08); flex:0 0 auto; }
+.mode { flex:1; min-height:36px; border:1px solid var(--g-border); border-radius:10px; background:none; color:var(--g-subtle); font:600 12px -apple-system,system-ui,sans-serif; padding:8px 4px; cursor:pointer; }
 .mode:hover { color:#cbb89c; }
 .mode.on { background:${ACCENT}; border-color:transparent; color:${INK}; }
+.mode-count { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; margin-left:5px; padding:0 4px; box-sizing:border-box; border-radius:999px; background:rgba(20,17,13,.2); font-size:10px; line-height:1; }
+.day-goals { flex:0 0 auto; padding:10px 14px 11px; border-bottom:1px solid rgba(214,154,92,.08); background:linear-gradient(180deg,rgba(30,24,18,.62),rgba(20,17,13,.38)); }
+.dg-head { display:flex; align-items:center; gap:7px; margin-bottom:8px; }
+.dg-title { color:var(--g-muted); font-size:10px; font-weight:800; letter-spacing:.65px; text-transform:uppercase; }
+.dg-summary { color:var(--g-subtle); font-size:10px; }
+.dg-edit { margin-left:auto; border:0; background:none; color:var(--g-subtle); font:600 10px -apple-system,system-ui,sans-serif; cursor:pointer; padding:2px 3px; }
+.dg-edit:hover { color:var(--g-text); }
+.dg-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.dg-item { min-width:0; padding:8px 9px; border:1px solid rgba(214,154,92,.13); border-radius:10px; background:#17130f; color:inherit; cursor:pointer; text-align:left; }
+.dg-item:hover { border-color:rgba(214,154,92,.3); background:#1d1812; }
+.dg-item.done { border-color:rgba(111,207,127,.22); background:rgba(111,207,127,.055); }
+.dg-item.primary { grid-column:1/-1; padding:11px 12px 10px; border-color:rgba(214,154,92,.32); background:linear-gradient(135deg,rgba(214,154,92,.12),#17130f 62%); }
+.dg-top { display:flex; align-items:baseline; justify-content:space-between; gap:5px; }
+.dg-label { min-width:0; color:var(--g-muted); font-size:10.5px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dg-count { color:var(--g-text); font-size:11px; font-weight:750; white-space:nowrap; }
+.dg-item.primary .dg-label { color:#e7b277; font-size:12px; font-weight:780; }
+.dg-item.primary .dg-count { font-size:14px; }
+.dg-helper { display:block; margin-top:3px; color:var(--g-subtle); font-size:10.5px; line-height:1.3; }
+.dg-item.done .dg-count { color:#7fcf8d; }
+.dg-track { display:block; height:4px; margin-top:7px; border-radius:999px; overflow:hidden; background:#30271e; }
+.dg-item.primary .dg-track { height:7px; margin-top:9px; background:#382c21; }
+.dg-fill { display:block; height:100%; border-radius:999px; background:${ACCENT}; }
+.dg-item.done .dg-fill { background:#6fcf7f; }
+.growth { flex:1 1 auto; min-height:0; overflow:auto; padding:12px 14px 18px; display:flex; flex-direction:column; gap:10px; }
+.gx-hero,.gx-card { border:1px solid var(--g-border); border-radius:13px; background:var(--g-surface); padding:13px; }
+.gx-hero { background:linear-gradient(145deg,rgba(214,154,92,.13),rgba(34,28,21,.76)); border-color:rgba(214,154,92,.3); }
+.gx-kicker { color:${ACCENT}; font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+.gx-title { color:var(--g-text); font-size:16px; font-weight:720; line-height:1.25; margin-top:3px; }
+.gx-copy { color:var(--g-muted); font-size:12px; line-height:1.45; margin-top:5px; }
+.gx-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:11px; }
+.gx-metric { border:1px solid rgba(214,154,92,.14); border-radius:9px; background:rgba(20,17,13,.45); padding:8px; min-width:0; }
+.gx-metric b { display:block; color:var(--g-text); font-size:17px; font-weight:680; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gx-metric span { display:block; color:var(--g-subtle); font-size:10px; margin-top:1px; }
+.gx-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.gx-head h3 { margin:0; color:var(--g-text); font-size:13.5px; }
+.gx-day { flex:none; color:var(--g-subtle); font-size:10.5px; }
+.gx-hyp { color:#cbb89c; font-size:12px; line-height:1.45; margin-top:6px; }
+.gx-play { display:grid; gap:6px; margin-top:10px; }
+.gx-play div { color:var(--g-muted); font-size:11.5px; line-height:1.4; padding-left:14px; position:relative; }
+.gx-play div:before { content:'◆'; position:absolute; left:0; color:${ACCENT}; font-size:8px; top:3px; }
+.gx-read { margin-top:10px; border-top:1px solid rgba(214,154,92,.12); padding-top:9px; }
+.gx-read b { color:var(--g-text); font-size:12px; }
+.gx-read div { color:var(--g-muted); font-size:11px; margin-top:3px; }
+.gx-actions { display:flex; gap:7px; align-items:center; margin-top:11px; }
+.gx-select { flex:1; min-width:0; background:#1a1510; color:var(--g-text); border:1px solid var(--g-border); border-radius:9px; padding:8px 9px; font:600 11.5px -apple-system,system-ui,sans-serif; }
+.gx-btn { border:0; border-radius:9px; background:${ACCENT}; color:${INK}; font:700 11.5px -apple-system,system-ui,sans-serif; padding:9px 12px; cursor:pointer; white-space:nowrap; }
+.gx-btn.secondary { border:1px solid var(--g-border); background:none; color:var(--g-muted); }
+.gx-btn:disabled { opacity:.46; cursor:default; }
+.gx-find { color:var(--g-muted); font-size:11.5px; line-height:1.45; margin-top:7px; }
+.gx-find.good { color:#7fcf8d; } .gx-find.act { color:#dca26a; }
+.gx-history { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.gx-hrow { color:var(--g-muted); font-size:11px; padding-top:7px; border-top:1px solid rgba(214,154,92,.09); }
+.gx-hmain { display:flex; justify-content:space-between; gap:8px; }
+.gx-hmeta { color:var(--g-subtle); font-size:10px; line-height:1.35; margin-top:3px; }
+.gx-hrow b { color:#cbb89c; font-weight:600; }
+.comments { flex:1 1 auto; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
+.comments-intro { margin:12px 14px 8px; padding:12px 13px; border:1px solid rgba(111,207,127,.22); border-radius:12px; background:linear-gradient(145deg,rgba(111,207,127,.08),rgba(34,28,21,.55)); flex:0 0 auto; }
+.comments-title { color:var(--g-text); font-size:14px; font-weight:700; }
+.comments-copy { color:var(--g-muted); font-size:11.5px; line-height:1.45; margin-top:4px; }
+.comments .rel-body { flex:1 1 auto; max-height:none; border-top:0; border-bottom:0; overflow-y:auto; }
+.comments .ins-body { padding-top:2px; }
+.comments-empty { margin:6px 14px 14px; padding:18px 14px; border:1px dashed var(--g-border); border-radius:11px; color:var(--g-muted); font-size:12px; line-height:1.5; text-align:center; }
+.comments-empty .gx-btn { margin-top:11px; }
 .ideas { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+.idea-compose { margin:2px 14px 12px; padding:14px; border:1px solid rgba(214,154,92,.3); border-radius:13px; background:linear-gradient(145deg,rgba(214,154,92,.11),rgba(34,28,21,.72)); flex:0 0 auto; }
+.idea-compose-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.idea-compose-title { color:var(--g-text); font-size:15px; font-weight:700; letter-spacing:-.1px; }
+.idea-compose-sub { color:var(--g-muted); font-size:11.5px; margin-top:2px; }
+.idea-rough { width:100%; min-height:74px; box-sizing:border-box; margin-top:11px; padding:10px 11px; resize:vertical; border:1px solid var(--g-border); border-radius:10px; background:var(--g-bg); color:var(--g-text); font:13px/1.5 -apple-system,system-ui,sans-serif; }
+.idea-rough::placeholder { color:var(--g-subtle); }
+.idea-rough:focus { border-color:var(--g-focus); outline:none; box-shadow:0 0 0 2px rgba(232,154,60,.16); }
+.idea-compose-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+.idea-rough-count { color:var(--g-subtle); font-size:11px; }
+.idea-polish { min-height:36px; padding:8px 13px; border:0; border-radius:9px; background:var(--g-accent); color:#1a1206; font:700 12px -apple-system,system-ui,sans-serif; cursor:pointer; }
+.idea-polish:hover { background:var(--g-accent-hover); }
+.idea-polish:disabled { opacity:.5; cursor:default; }
+.idea-compose-error { margin-top:8px; color:#e8a08c; font-size:11.5px; line-height:1.4; }
+.idea-compose-status { margin-top:8px; color:var(--g-accent-hover); font-size:11.5px; line-height:1.4; }
+.idea-seeds { padding:0 14px 10px; max-height:260px; overflow:auto; flex:0 1 auto; }
+.idea-seeds > .idea-section-title { margin:0 0 7px; }
 .ideahead { padding:0 14px 9px; flex:0 0 auto; }
+.idea-section-title { color:var(--g-text); font-size:13px; font-weight:700; }
+.idea-head-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.idea-clear { min-height:32px; padding:5px 9px; border:1px solid var(--g-border); border-radius:8px; background:transparent; color:var(--g-subtle); font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; }
+.idea-clear:hover { color:var(--g-text); background:var(--g-raised); }
+.idea-clear.armed { border-color:var(--g-danger); background:rgba(214,96,74,.1); color:#e8a08c; }
+.idea-clear:not(:disabled):where(:focus-visible) { border-color:var(--g-danger); }
+.idea-clear:disabled { opacity:.4; cursor:default; }
+.idea-niche-note { margin-top:8px; padding:8px 10px; border-radius:9px; background:rgba(214,154,92,.07); color:var(--g-muted); font-size:11px; line-height:1.4; }
 .ideasub { font-size:10.5px; color:#8c7d68; margin-top:6px; line-height:1.4; }
-.idea { position:relative; display:flex; align-items:stretch; background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:0; margin-bottom:7px; cursor:pointer; overflow:hidden; transition:background .12s, border-color .12s; }
+.idea { position:relative; display:flex; align-items:stretch; background:#1b150f; border:1px solid rgba(214,154,92,.16); border-radius:12px; padding:0; margin-bottom:9px; cursor:pointer; overflow:hidden; transition:background .12s, border-color .12s; }
 .idea:hover { background:#201a12; border-color:rgba(214,154,92,.28); }
 .idea.open { cursor:default; background:#1d1710; border-color:rgba(214,154,92,.34); flex-wrap:wrap; }
+.idea.open .idea-main { display:none; }
+.idea.open .idea-rowact { margin-left:auto; padding:8px 11px 4px; }
 .idea.dimmed { opacity:.5; pointer-events:none; }
 .idea-pip { flex:0 0 4px; align-self:stretch; background:rgba(214,154,92,.18); }
-.idea.kept .idea-pip { box-shadow:inset 2px 0 0 ${ACCENT}; }
-.idea-main { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:3px; padding:11px 6px 11px 9px; }
-.idea-hook { font:600 13px -apple-system,system-ui,sans-serif; color:#f3ead9; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.idea.open .idea-hook { white-space:normal; }
-.idea-meta { font-size:10.5px; color:#8c7d68; line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.idea.kept { border-color:rgba(214,154,92,.42); }
+.idea-main { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:7px; padding:13px 8px 13px 13px; }
+.idea-hook { font:600 13px -apple-system,system-ui,sans-serif; color:#f3ead9; line-height:1.45; white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.idea.open .idea-hook { display:none; }
+.idea-meta { font-size:11px; color:var(--g-subtle); line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .idea-meta b { font-weight:700; }
 .idea-summary { font-size:11px; color:#8c7d68; margin-top:6px; } .idea-summary b { font-weight:700; }
 .idea-improve { border:.5px solid rgba(232,154,60,.4); background:rgba(232,154,60,.14); color:#e89a3c; border-radius:9px; padding:8px 12px; font:600 12px inherit; cursor:pointer; }
 .idea-improve:hover { background:rgba(232,154,60,.22); } .idea-improve:disabled { opacity:.6; cursor:default; }
 .idea.open .idea-meta { display:none; }
-.idea-rowact { flex:0 0 auto; display:flex; align-items:center; gap:2px; padding:0 8px 0 2px; }
+.idea-rowact { flex:0 0 auto; display:flex; align-items:center; padding:0 11px 0 3px; }
+.idea-edit { min-width:48px; min-height:32px; border:1px solid var(--g-border); border-radius:8px; background:transparent; color:var(--g-accent-hover); font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; }
+.idea-edit:hover { background:var(--g-raised); color:var(--g-text); }
 .idea-quickopen { border:0; background:none; color:${ACCENT}; font-size:15px; line-height:1; width:30px; height:30px; border-radius:8px; cursor:pointer; }
 .idea-quickopen:hover { background:rgba(214,154,92,.14); }
 .idea.open .idea-quickopen { display:none; }
 .idea-chev { color:#8c7d68; font-size:11px; width:14px; text-align:center; transition:transform .15s; }
 .idea.open .idea-chev { transform:rotate(90deg); }
-.idea-body { flex-basis:100%; order:99; display:none; padding:2px 12px 12px 14px; }
+.idea-body { flex-basis:100%; order:99; display:none; padding:3px 14px 14px; }
 .idea.open .idea-body { display:block; }
-.idea-ta { width:100%; box-sizing:border-box; margin:0 0 2px; background:transparent; color:#f3ead9; border:0; border-bottom:1px solid transparent; border-radius:0; padding:0 0 4px; font:inherit; font-size:15px; line-height:1.6; resize:none; white-space:pre-wrap; min-height:44px; }
-.idea-ta:focus { outline:none; border-bottom-color:rgba(214,154,92,.45); }
+.idea-draft-label { display:block; margin-bottom:6px; color:var(--g-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.45px; }
+.idea-ta { width:100%; box-sizing:border-box; margin:0 0 2px; background:var(--g-bg); color:#f3ead9; border:1px solid var(--g-border); border-radius:10px; padding:10px 11px; font:inherit; font-size:14px; line-height:1.55; resize:none; white-space:pre-wrap; min-height:72px; }
+.idea-ta:focus { outline:none; border-color:var(--g-focus); box-shadow:0 0 0 2px rgba(232,154,60,.13); }
+.idea-quality { margin-top:8px; color:var(--g-muted); font-size:11.5px; line-height:1.4; }
+.idea-why-toggle { display:block; width:100%; margin-top:11px; padding:7px 0; border:0; border-top:1px solid rgba(214,154,92,.12); background:transparent; color:var(--g-subtle); text-align:left; font:600 11px -apple-system,system-ui,sans-serif; cursor:pointer; }
+.idea-why-toggle:hover { color:var(--g-text); }
+.idea-details { padding:1px 0 4px; }
+.idea-detail-meta { margin-top:7px; color:var(--g-subtle); font-size:11px; line-height:1.4; }
+.idea-outcome { margin-top:9px; padding:9px 10px; border:1px solid rgba(111,207,127,.2); border-radius:9px; background:rgba(111,207,127,.06); color:#b8c7ad; font-size:11px; line-height:1.45; }
+.idea-outcome a { color:#8bd397; text-decoration:none; font-weight:650; }
+.idea-outcome a:hover { text-decoration:underline; }
 .idea-why { font-size:12px; color:#b6a892; margin-top:10px; line-height:1.5; }
-.idea-src { font-size:10.5px; color:#8c7d68; margin-top:9px; }
-.idea-srctog { cursor:pointer; }
+.idea-src { font-size:11px; color:var(--g-subtle); margin-top:9px; }
+.idea-srctog { display:block; width:100%; padding:4px 0; border:0; background:none; text-align:left; font:inherit; color:inherit; cursor:pointer; }
 .idea-srctog:hover { color:#cbb89c; }
 .idea-quote { margin-top:7px; border-left:2px solid rgba(214,154,92,.3); padding:2px 0 2px 9px; }
 .idea-qtext { font-size:11.5px; color:#b6a892; line-height:1.4; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; }
 .idea-qfoot { display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10.5px; color:#8c7d68; }
 .idea-qlink { color:${ACCENT}; text-decoration:none; }
-.idea-actions { display:flex; gap:7px; align-items:center; margin-top:12px; }
+.idea-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-top:12px; padding-top:11px; border-top:1px solid rgba(214,154,92,.12); }
+.idea-quiet-actions { display:flex; align-items:center; gap:2px; margin-left:auto; }
 .idea-open { border:0; border-radius:9px; padding:8px 14px; font:600 12px inherit; cursor:pointer; background:${ACCENT}; color:${INK}; }
 .idea-open:hover { filter:brightness(1.06); }
 .idea-copy { border:.5px solid rgba(214,154,92,.28); background:none; color:#cbb89c; border-radius:9px; padding:8px 12px; font:600 12px inherit; cursor:pointer; }
 .idea-copy:hover { background:rgba(214,154,92,.1); color:#f3ead9; }
-.idea-pin { margin-left:auto; border:.5px solid rgba(214,154,92,.22); background:none; color:#cbb89c; border-radius:9px; padding:6px 10px; cursor:pointer; font-size:12px; }
+.idea-pin { border:0; background:none; color:var(--g-subtle); border-radius:8px; padding:6px 8px; cursor:pointer; font-size:11px; }
 .idea-pin + .idea-pin { margin-left:0; }
 .idea-pin.on { background:rgba(214,154,92,.14); border-color:transparent; color:${ACCENT}; }
+.idea-pin:hover { background:var(--g-raised); color:var(--g-text); }
+.idea-delete:hover { color:#e8a08c; }
 .idea-trend { font-size:10.5px; color:#8c7d68; margin-top:6px; }
 .idea-trend b { color:#cbb89c; }
 .idea-streak { font:600 11.5px -apple-system,system-ui,sans-serif; color:#cbb89c; margin:0; }
@@ -1461,10 +2064,10 @@ const DOCK_CSS = `
 .idea.shipped { opacity:.85; }
 .idea.shipped .idea-hook { color:#b6a892; }
 .idea-steer { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:10px; }
-.idea-chip { border:.5px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 10.5px -apple-system,system-ui,sans-serif; padding:4px 8px; cursor:pointer; }
+.idea-chip { border:1px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 11px -apple-system,system-ui,sans-serif; padding:5px 9px; cursor:pointer; }
 .idea-chip:hover { background:rgba(214,154,92,.13); color:#f3ead9; }
 .idea-undo { color:#8c7d68; }
-.idea-steerin { flex:1; min-width:70px; background:#1a1510; color:#f3ead9; border:.5px solid rgba(214,154,92,.2); border-radius:8px; padding:4px 8px; font:inherit; font-size:11px; }
+.idea-steerin { flex:1; min-width:90px; background:#1a1510; color:#f3ead9; border:1px solid rgba(214,154,92,.2); border-radius:8px; padding:6px 9px; font:inherit; font-size:11px; }
 .idea-steerin:focus { outline:none; border-color:${ACCENT}; }
 .idea-steerbusy { font-size:11px; color:#cbb89c; padding:4px 0; }
 .idea-shiptog { font-size:11px; color:#8c7d68; cursor:pointer; padding:6px 2px 10px; }
@@ -1477,6 +2080,10 @@ const DOCK_CSS = `
 .idea-err-t { color:#e8a08c; font:600 12.5px -apple-system,system-ui,sans-serif; margin-bottom:10px; }
 .idea-err .scanb { display:inline-flex; margin:0 auto; }
 .idea-empty { text-align:center; padding:26px 18px; color:#8c7d68; font-size:12.5px; line-height:1.5; }
+.idea-list { padding:0 14px 10px; }
+.idea-list .idea-err { text-align:left; padding:11px 12px; margin:0 0 9px; }
+.idea-list .idea-err-t { margin:0 0 8px; line-height:1.4; }
+.idea-list .idea-empty { margin:0; padding:28px 16px; border:1px dashed rgba(214,154,92,.2); border-radius:12px; color:var(--g-muted); background:rgba(214,154,92,.035); }
 .tg-add { display:flex; gap:6px; margin-top:9px; }
 .tg-add .idea-steerin { flex:1; }
 .tg-card { background:#1b150f; border:.5px solid rgba(214,154,92,.16); border-radius:12px; padding:11px 12px; margin-bottom:7px; }
@@ -1497,10 +2104,117 @@ const DOCK_CSS = `
 .tg-sug { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:.5px solid rgba(214,154,92,.08); }
 .tg-track { padding:5px 10px; font-size:11px; flex:0 0 auto; }
 .tg-hh { margin-top:8px; }
+.dm-from-target { margin-left:7px; color:#bda98d; }
+.dm-head { padding-bottom:12px; }
+.dm-stats { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.dm-stat,.dm-pace,.dm-warm { display:inline-flex; align-items:center; min-height:24px; box-sizing:border-box; padding:3px 8px; border-radius:999px; border:1px solid rgba(214,154,92,.18); background:#221c15; color:#b6a892; font:650 10.5px -apple-system,system-ui,sans-serif; }
+.dm-stat.hot { border-color:rgba(232,154,60,.42); color:#e7b277; background:rgba(232,154,60,.1); }
+.dm-pace { margin-left:auto; color:#8c7d68; }
+.dm-pace.caution { color:#e89a3c; } .dm-pace.pause { color:#e88c77; }
+.dm-next { display:flex; align-items:center; gap:10px; margin-top:10px; padding:10px 11px; border:1px solid rgba(111,207,127,.24); border-radius:11px; background:linear-gradient(135deg,rgba(111,207,127,.09),rgba(34,28,21,.72)); }
+.dm-next-mark { flex:0 0 auto; color:#79d68a; font:750 9px -apple-system,system-ui,sans-serif; letter-spacing:.65px; }
+.dm-next-copy { flex:1; min-width:0; }
+.dm-next-label { color:#f3ead9; font-size:12px; font-weight:700; }
+.dm-next-why { margin-top:2px; color:#b6a892; font-size:10.5px; line-height:1.35; }
+.dm-next-act { flex:0 0 auto; padding:7px 11px; }
+.dm-outcomes { margin-top:8px; color:#a89a82; font-size:10.5px; line-height:1.4; }
+.dm-outcomes b { color:#cbb89c; }
+.dm-learning { display:block; margin-top:2px; color:#8c7d68; }
+.dm-people-learning { color:#a89a82; }
+.dm-add { display:grid; grid-template-columns:minmax(90px,.55fr) minmax(180px,1.45fr) auto; gap:7px; margin-top:10px; }
+.dm-add .idea-steerin { min-height:34px; box-sizing:border-box; }
+.dm-message { margin-top:7px; color:#e7b277; font-size:11px; }
+.dm-list { padding:0 14px 14px; }
+.dm-suggestions { margin:2px 0 12px; padding:11px 12px; border:1px solid rgba(214,154,92,.15); border-radius:12px; background:rgba(214,154,92,.035); }
+.dm-section-title { color:#f3ead9; font-size:12.5px; font-weight:700; }
+.dm-section-sub { color:#8c7d68; font-size:10.5px; margin:2px 0 6px; }
+.dm-suggestion { display:flex; align-items:center; gap:9px; min-height:42px; border-top:1px solid rgba(214,154,92,.08); }
+.dm-suggestion-main { flex:1; min-width:0; }
+.dm-warm { min-height:21px; padding:2px 7px; }
+.dm-warm.warm { color:#6fcf7f; border-color:rgba(111,207,127,.25); background:rgba(111,207,127,.07); }
+.dm-warm.research { color:#a89a82; }
+.dm-plan { padding:5px 9px; flex:0 0 auto; }
+.dm-empty { border:1px dashed rgba(214,154,92,.2); border-radius:12px; background:rgba(214,154,92,.025); }
+.dm-card { margin:0 0 8px; padding:11px 12px; border:1px solid rgba(214,154,92,.16); border-radius:13px; background:#1b150f; }
+.dm-card.due { border-color:rgba(232,154,60,.38); box-shadow:inset 3px 0 0 rgba(232,154,60,.72); }
+.dm-card-top { display:flex; align-items:center; gap:9px; }
+.dm-ident { flex:1; min-width:0; }
+.dm-stage { flex:0 0 auto; border-radius:999px; padding:3px 8px; background:#221c15; color:#a89a82; font-size:10.5px; font-weight:700; }
+.dm-stage.ready,.dm-stage.active { background:rgba(111,207,127,.08); color:#79d68a; }
+.dm-stage.waiting { background:rgba(232,154,60,.08); color:#e7b277; }
+.dm-stage.won { background:rgba(111,207,127,.14); color:#8bd397; }
+.dm-stage.closed { opacity:.7; }
+.dm-toggle { width:30px; height:30px; border:0; border-radius:8px; background:transparent; color:#8c7d68; cursor:pointer; }
+.dm-toggle:hover { background:#221c15; color:#f3ead9; }
+.dm-evidence { margin-top:8px; color:#b6a892; font-size:11.5px; line-height:1.42; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; }
+.dm-card.open .dm-evidence { -webkit-line-clamp:4; }
+.dm-candidate-signal { margin-top:7px; padding:6px 8px; border-radius:8px; background:rgba(111,207,127,.06); color:#8bd397; font-size:10.5px; line-height:1.35; }
+.dm-controls { display:flex; gap:7px; margin-top:11px; }
+.dm-select { flex:0 1 150px; min-width:0; height:34px; box-sizing:border-box; border:1px solid rgba(214,154,92,.22); border-radius:9px; padding:0 9px; background:#221c15; color:#f3ead9; font:600 11.5px -apple-system,system-ui,sans-serif; }
+.dm-product { flex:1 1 220px; }
+.dm-goal { width:100%; box-sizing:border-box; margin-top:8px; padding:9px 10px; resize:vertical; border:1px solid rgba(214,154,92,.2); border-radius:9px; background:#14110d; color:#f3ead9; font:12px/1.45 -apple-system,system-ui,sans-serif; }
+.dm-goal:focus,.dm-select:focus { outline:none; border-color:#e89a3c; box-shadow:0 0 0 2px rgba(232,154,60,.12); }
+.dm-context,.dm-timeline { margin-top:10px; padding:9px 10px; border-radius:10px; background:#221c15; }
+.dm-mini-title { margin-bottom:5px; color:#cbb89c; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.35px; }
+.dm-context-row { display:flex; align-items:flex-start; gap:8px; padding:5px 0; border-top:1px solid rgba(214,154,92,.08); }
+.dm-context-copy { flex:1; min-width:0; color:#b6a892; font-size:11px; line-height:1.4; white-space:pre-wrap; }
+.dm-remove { flex:0 0 auto; border:0; background:none; color:#8c7d68; cursor:pointer; font-size:16px; }
+.dm-remove:hover { color:#e8a08c; }
+.dm-draft { margin-top:10px; resize:vertical; }
+.dm-warning { margin-top:7px; color:#e89a3c; font-size:11px; line-height:1.4; }
+.dm-actions { display:flex; align-items:center; flex-wrap:wrap; gap:7px; margin-top:9px; }
+.dm-actions.compact { margin-top:6px; }
+.dm-secondary { display:flex; align-items:center; flex-wrap:wrap; gap:2px; margin-top:8px; padding-top:7px; border-top:1px solid rgba(214,154,92,.09); }
+.dm-secondary .idea-pin:last-child { margin-left:auto; }
+.dm-capture { margin-top:9px; }
+.dm-touch { display:flex; align-items:flex-start; gap:8px; padding:4px 0; color:#b6a892; font-size:11px; line-height:1.4; border-top:1px solid rgba(214,154,92,.07); white-space:pre-wrap; }
+.dm-touch > span { flex:1; min-width:0; }
+.dm-touch.inbound { color:#c9b99f; }
+.dm-disclosure,.dm-footer { color:#8c7d68; font-size:10.5px; line-height:1.45; }
+.dm-disclosure { margin-top:9px; }
+.dm-footer { padding:12px 4px 2px; text-align:center; }
 .df { margin:0 14px 8px; background:#221c15; border:.5px solid rgba(214,154,92,.18); border-radius:10px;
       color:#f3ead9; font:inherit; font-size:12.5px; padding:9px 12px; outline:none; flex:0 0 auto; }
 .dl { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0; } /* basis auto: shows its content, grows into leftover, and shrinks+scrolls (with an open .rel-body) when the dock is full */
-.it { display:flex; flex-direction:column; padding:12px 16px 10px; border-top:.5px solid rgba(214,154,92,.10); }
+.it { display:flex; flex-direction:column; padding:6px 10px; border-top:.5px solid rgba(214,154,92,.07); }
+.reply-card { border:1px solid transparent; border-radius:13px; background:transparent; transition:background .14s ease,border-color .14s ease,box-shadow .14s ease; }
+.reply-card:hover { background:rgba(214,154,92,.035); }
+.reply-card.open { background:#1b1712; border-color:rgba(214,154,92,.18); box-shadow:0 8px 24px rgba(0,0,0,.18); }
+.reply-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; padding:9px 10px; }
+.reply-toggle { min-width:0; display:flex; align-items:center; gap:10px; border-radius:9px; cursor:pointer; }
+.reply-toggle:focus-visible,.reply-disclose:focus-visible,.reply-draft-quick:focus-visible { outline:2px solid ${ACCENT}; outline-offset:2px; }
+.reply-copy { min-width:0; flex:1; }
+.reply-id { display:flex; align-items:center; min-width:0; gap:5px; }
+.reply-id .nm { min-width:0; }
+.reply-compact-meta { display:flex; align-items:center; min-width:0; gap:6px; margin-top:4px; color:#8c7d68; font-size:10.5px; white-space:nowrap; }
+.reply-lane { min-width:0; max-width:180px; overflow:hidden; text-overflow:ellipsis; color:#f3ead9; font-weight:700; }
+.reply-strength { flex:0 0 auto; padding:1px 6px; border-radius:999px; font-size:9.5px; font-weight:750; text-transform:uppercase; letter-spacing:.28px; }
+.reply-repeat { flex:0 0 auto; padding:1px 6px; border-radius:999px; color:#f0b66f; background:rgba(232,154,60,.13); font-size:9.5px; font-weight:700; }
+.reply-age { flex:0 0 auto; }
+.reply-compact-text { min-width:0; margin-top:4px; color:#b6a892; font-size:11.5px; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.reply-summary-actions { display:flex; align-items:center; gap:5px; }
+.reply-draft-quick { min-height:34px; padding:0 11px; border:0; border-radius:9px; background:${ACCENT}; color:${INK}; cursor:pointer; font:700 11.5px -apple-system,system-ui,sans-serif; white-space:nowrap; }
+.reply-draft-quick:hover { filter:brightness(1.06); }
+.reply-disclose { display:inline-flex; align-items:center; justify-content:center; width:30px; height:34px; border:0; border-radius:8px; background:transparent; color:#8c7d68; cursor:pointer; font-size:13px; }
+.reply-disclose:hover { background:#282018; color:#f3ead9; }
+.reply-detail { margin:0 10px 9px 56px; padding-top:10px; border-top:1px solid rgba(214,154,92,.10); }
+.reply-post { color:#d8c9b2; font-size:12px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.reply-repeat-warning { margin-top:9px; padding:8px 10px; border-radius:9px; color:#f0b66f; background:rgba(232,154,60,.11); border:1px solid rgba(232,154,60,.28); font-size:11.5px; line-height:1.4; }
+.reply-why-card { margin-top:9px; padding:9px 10px; border-radius:10px; background:#221c15; border:1px solid rgba(214,154,92,.11); }
+.reply-section-label { color:${ACCENT}; font-size:9.5px; font-weight:800; letter-spacing:.7px; text-transform:uppercase; }
+.reply-why-line { display:flex; align-items:flex-start; gap:7px; margin-top:5px; color:#d8c9b2; font-size:11.5px; line-height:1.4; }
+.reply-why-dot { flex:0 0 auto; color:${ACCENT}; }
+.reply-signal-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:9px; }
+.reply-signal { padding:7px 8px; border-radius:9px; background:#17130f; border:1px solid rgba(214,154,92,.10); }
+.reply-signal-top { display:flex; justify-content:space-between; gap:4px; color:#8c7d68; font-size:9.5px; }
+.reply-signal-top b { color:#d8c9b2; font-size:10.5px; }
+.reply-signal-track { height:3px; margin-top:6px; overflow:hidden; border-radius:999px; background:#30271e; }
+.reply-signal-fill { display:block; height:100%; border-radius:999px; }
+.reply-evidence { margin-top:7px; color:#8c7d68; font-size:10.5px; line-height:1.4; }
+.reply-detail-actions { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:9px; padding-top:8px; border-top:1px solid rgba(214,154,92,.08); }
+.reply-action { min-height:30px; padding:5px 8px; border:0; border-radius:7px; background:transparent; color:#a99a83; cursor:pointer; font:600 11px -apple-system,system-ui,sans-serif; white-space:nowrap; }
+.reply-action:hover { background:#282018; color:#f3ead9; }
+.reply-action.remove { margin-left:auto; color:#9a806e; }
 .top { display:flex; gap:12px; }
 .botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:8px; padding-top:7px; border-top:.5px solid rgba(214,154,92,.08); }
 .av { width:40px; height:40px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:#221c15; }
@@ -1521,9 +2235,9 @@ const DOCK_CSS = `
 .pfav { width:14px; height:14px; border-radius:3px; flex:0 0 auto; vertical-align:-3px; }
 .pini { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%;
         flex:0 0 auto; font-size:9px; font-weight:700; color:#fff; vertical-align:-3px; }
-.rcol { flex:0 0 116px; display:flex; flex-direction:column; }
+.rcol { flex:0 0 124px; display:flex; flex-direction:column; }
 .rf { font-size:11px; color:#8c7d68; } .inf { cursor:default; }
-.pct { font-size:32px; font-weight:600; line-height:1.02; margin-top:3px; font-variant-numeric:tabular-nums; }
+.pct { font-size:17px; font-weight:650; line-height:1.15; margin-top:5px; }
 .vd { font-size:11.5px; font-weight:500; margin-top:1px; }
 .acts { margin-top:12px; }
 .draftb { width:100%; background:${ACCENT}; color:${INK}; border:0; border-radius:9px;
@@ -1534,7 +2248,7 @@ const DOCK_CSS = `
 .foot { padding:13px 14px; text-align:center; border-top:.5px solid rgba(214,154,92,.10); flex:0 0 auto; }
 .foot1 { font-size:12.5px; color:#b6a892; } .foot2 { font-size:11.5px; color:#8c7d68; margin-top:2px; }
 .dhl { display:flex; align-items:center; gap:11px; min-width:0; flex:1 1 auto; }
-.dhgoobi { flex:0 0 auto; cursor:pointer; }
+.dhgoobi { display:inline-flex; align-items:center; justify-content:center; min-width:36px; min-height:36px; flex:0 0 auto; cursor:pointer; border-radius:10px; }
 .dt { min-width:0; flex:1 1 auto; }
 .gcv { display:block; image-rendering:pixelated; transform-origin:bottom center; }
 .g-bob { animation:g-bob 1.7s ease-in-out infinite; }
@@ -1580,7 +2294,7 @@ const DOCK_CSS = `
 /* Goobi's in-dock playground — springs open when you tap him */
 .dplay { overflow:hidden; }
 .dpg { padding:8px 14px 16px; }
-.dpg-stage { position:relative; height:128px; border-radius:14px; background:#221c15; border:.5px solid rgba(214,154,92,.12); display:flex; align-items:flex-end; justify-content:center; padding-bottom:18px; cursor:pointer; }
+.dpg-stage { position:relative; width:100%; box-sizing:border-box; height:128px; border-radius:14px; background:#221c15; border:1px solid rgba(214,154,92,.16); display:flex; align-items:flex-end; justify-content:center; padding-bottom:18px; cursor:pointer; color:inherit; }
 .dpg-shadow { position:absolute; bottom:14px; width:46px; height:9px; background:rgba(0,0,0,.3); border-radius:50%; filter:blur(2px); }
 .dpg-msg { text-align:center; font-size:12.5px; color:#cbb89c; min-height:17px; margin:11px 0 9px; }
 .dpg-meter { height:9px; border-radius:6px; background:#221c15; border:.5px solid rgba(214,154,92,.12); overflow:hidden; }
@@ -1603,6 +2317,44 @@ const DOCK_CSS = `
 .dpg-move { border:.5px solid rgba(214,154,92,.25); background:#221c15; color:#cbb89c; border-radius:8px; font:600 10.5px -apple-system,system-ui,sans-serif; padding:5px 8px; cursor:pointer; }
 .dpg-move:hover { background:rgba(214,154,92,.13); color:#f3ead9; }
 @keyframes dpg-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.03)} }
+/* Meaningful copy never drops below 12px; compact metadata stays at an 11px floor. */
+.mom-label,.mom-coach,.mom-cue,.ins-fact,.ins-learn,.ins-trend,.ins-ar,.ins-meta,.ins-nudge,
+.idea-summary,.idea-trend,.idea-streak,.idea-loadcap,.idea-qfoot,.tg-stand,.tg-track,.tg-sughead,.tg-fresh,.tg-warn,.tg-foot,
+.rf,.meta,.foot2,.ins-foot,.ins-thin,.ins-more,.dpg-lbl,.dpg-stat,.dpg-movelbl { font-size:11px; color:var(--g-subtle); }
+.ideasub,.idea-why,.tg-post,.tg-warn,.tg-foot,.pcopy,.foot1 { color:var(--g-muted); }
+.rel-tab { min-height:34px; border-width:1px; font-size:12px; }
+.idea-quickopen,.idea-pin,.tg-x,.dpg-treat { min-width:32px; min-height:32px; }
+@media (max-width: 480px) {
+  .d,.d.wide { width:calc(100vw - 16px); max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); border-radius:13px; }
+  .dh { padding:12px 12px 8px; align-items:center; }
+  .da { gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+  .scanb { display:none; }
+  .modes,.tabs { padding-left:10px; padding-right:10px; overflow-x:auto; }
+  .day-goals { padding-left:10px; padding-right:10px; }
+  .mode,.tab { flex:1 0 auto; min-width:78px; }
+  .rel-tabs { padding:7px 10px; overflow-x:auto; }
+  .rel-tab { flex:1 0 auto; min-width:94px; }
+  .bodywrap { flex-direction:column; gap:7px; }
+  .rcol { flex:0 0 auto; width:100%; flex-direction:row; align-items:center; gap:10px; }
+  .rcol .acts { margin:0 0 0 auto; }
+  .pct { font-size:24px; margin:0; }
+  .it { padding:5px 8px; }
+  .reply-summary { gap:7px; padding:8px; }
+  .reply-detail { margin-left:48px; margin-right:8px; }
+  .reply-draft-quick { padding:0 9px; }
+  .reply-signal-grid { grid-template-columns:1fr; }
+  .idea-compose { margin:2px 10px 10px; padding:12px; }
+  .ideahead-top { align-items:flex-start; gap:8px; }
+  .idea-head-actions .scanb { display:inline-flex; }
+  .dm-add { grid-template-columns:1fr auto; }
+  .dm-why-input { grid-column:1 / -1; grid-row:2; }
+  .dm-add .scanb { display:inline-flex; }
+  .dm-controls { flex-wrap:wrap; }
+  .dm-select { flex:1 1 130px; }
+  .dm-pace { margin-left:0; }
+  .dm-next { align-items:flex-start; flex-wrap:wrap; }
+  .dm-next-act { margin-left:auto; }
+}
 `;
 
 let dockHost: HTMLElement | null = null;
@@ -1640,6 +2392,50 @@ function ensureDock(): ShadowRoot {
   return dockRoot;
 }
 
+/** Keep Goobi discoverable before consent/key setup without reading the page or starting any
+ * observers. The only action opens the extension side panel from this explicit user gesture. */
+function renderSetupGate(reason: string): void {
+  const root = ensureDock(); root.replaceChildren();
+  const button = document.createElement("button"); button.className = "l";
+  button.setAttribute("aria-label", "Finish setting up Goobi");
+  const face = document.createElement("span"); face.className = "lgoobi"; face.setAttribute("aria-hidden", "true");
+  face.textContent = "●"; Object.assign(face.style, { width: "28px", height: "28px", borderRadius: "10px", background: ACCENT, color: INK, alignItems: "center", justifyContent: "center", fontSize: "12px" });
+  const copy = document.createElement("span"); copy.className = "ltext";
+  const title = document.createElement("span"); title.className = "ll1"; title.textContent = "Goobi · Finish setup";
+  const sub = document.createElement("span"); sub.className = "ll2"; sub.textContent = reason;
+  copy.append(title, sub); button.append(face, copy);
+  button.onclick = async () => {
+    const result = await send<{ ok?: boolean }>({ type: "OPEN_SIDE_PANEL" });
+    if (!result?.ok) toast("Click the Goobi toolbar icon to finish setup.");
+  };
+  root.append(button);
+}
+
+let setupGateListener: ((changes: Record<string, chrome.storage.StorageChange>, area: string) => void) | undefined;
+function watchSetupGate(): void {
+  if (setupGateListener) return;
+  setupGateListener = (changes, area) => {
+    if (area !== "local" || (!changes[CONFIG.X_DATA_CONSENT_KEY] && !changes[CONFIG.ANTHROPIC_KEY_KEY] && !changes[CONFIG.X_COPILOT_KEY])) return;
+    void (async () => {
+      const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
+      const consent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
+      const hasKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
+      if (!requestedOn) {
+        dockHost?.remove(); dockHost = null; dockRoot = null;
+        return;
+      }
+      if (!consent || !hasKey) {
+        renderSetupGate(!consent ? "Consent still needed · open side panel" : "Anthropic key still needed · open side panel");
+        return;
+      }
+      if (setupGateListener) chrome.storage.onChanged.removeListener(setupGateListener);
+      setupGateListener = undefined;
+      await boot(); // setup completed in another extension surface; activate without another X refresh
+    })();
+  };
+  chrome.storage.onChanged.addListener(setupGateListener);
+}
+
 /* ---------- author reach (Twttr X-data API, best-effort enrichment) ---------- */
 
 /** handle(lower) -> follower lookup. `followers` set once known; `pending`
@@ -1651,6 +2447,8 @@ let reachLookups = 0;            // lookup attempts this session (a failed autho
 const REACH_CONCURRENCY = 4;     // gentle on the 10 req/sec budget
 const REACH_CAP = 80;            // per-session ceiling — bounds cost
 const REACH_FAIL_TTL = 600_000;  // re-try a failed lookup after 10 min
+const reachProfileComplete = (e?: { followers?: number; following?: number; bio?: string }): boolean =>
+  e?.followers != null && e.following != null && e.bio != null;
 
 /** The known follower count for an opp's author, from a live lookup or (for
  *  search-discovered opps) the count the search response already carried. */
@@ -1665,7 +2463,7 @@ function maybeFetchReach(handle?: string): void {
   const key = (handle || "").toLowerCase();
   if (!key) return;
   const e = authorReach.get(key);
-  if (e && (e.pending || e.followers != null)) return;
+  if (e && (e.pending || reachProfileComplete(e))) return;
   if (e?.failed && Date.now() - e.at < REACH_FAIL_TTL) return;
   if (reachQueue.includes(key)) return;
   reachQueue.push(key);
@@ -1677,7 +2475,7 @@ function pumpReach(): void {
   while (reachInFlight < REACH_CONCURRENCY && reachQueue.length && reachLookups < REACH_CAP && !twttrUnconfigured) {
     const key = reachQueue.shift()!;
     const cur = authorReach.get(key);
-    if (cur && cur.followers != null) continue;
+    if (reachProfileComplete(cur)) continue;
     reachInFlight++; reachLookups++;
     authorReach.set(key, { ...cur, pending: true, at: Date.now() });
     void send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: key } })
@@ -1694,66 +2492,8 @@ function pumpReach(): void {
   }
 }
 
-/** True when the author is in the "punch up but reachable" zone: 5x–25x the
- *  user's own following. Replying under these gets real new-audience exposure
- *  without being one of thousands of replies on a mega-account. */
-function inReachSweetSpot(o: Opp): boolean {
-  const f = knownFollowers(o);
-  if (!myFollowers || !f) return false;
-  const r = f / myFollowers;
-  return r >= 5 && r <= 25;
-}
-
-/** Reply-back proxy from the author's following/followers ratio (the cheapest
- *  signal for the ~75 author-reply-back weight, and it's already in the /user
- *  response we fetch for reach). An account that follows back a real fraction of
- *  its audience engages; a pure broadcaster almost never replies to a stranger.
- *  Neutral (1) when `following` isn't known yet (e.g. search-seeded opps). */
-function reciprocityFactor(o: Opp): number {
-  const e = authorReach.get(o.author.toLowerCase());
-  const f = e?.followers ?? o.followers;
-  const fr = e?.following;
-  if (!f || fr == null) return 1;
-  const ratio = fr / Math.max(f, 1);
-  if (ratio >= 0.5) return 1.08;  // follows back heavily — very reply-prone
-  if (ratio >= 0.1) return 1.04;  // healthy two-way account
-  if (ratio < 0.02) return 0.92;  // pure broadcaster — rarely replies to randoms
-  return 1;
-}
-
-/** Audience factor for effectiveScore. Real follower count when known (lifts
- *  bigger audiences, with a sweet-spot bump, a mega-account discount, and a
- *  reciprocity nudge), else the on-page likes proxy. */
-function reachFactor(o: Opp): number {
-  const f = knownFollowers(o);
-  if (f && f > 0) {
-    let r = Math.min(1.2, Math.max(0.5, 0.55 + Math.log10(f + 1) * 0.11)); // 1k:0.88 10k:0.99 100k:1.1 1M:1.2
-    if (myFollowers > 0) {
-      const ratio = f / myFollowers;
-      if (ratio >= 5 && ratio <= 25) r *= 1.08;   // sweet spot
-      else if (ratio > 500) r *= 0.94;            // you'd be buried among the replies
-    }
-    return Math.min(1.3, r * reciprocityFactor(o));
-  }
-  return o.likes ? Math.min(1.2, 0.6 + Math.log10(o.likes + 1) * 0.12) : 0.7;
-}
-
-/** Reply-worthiness RIGHT NOW = content/fit (the model score) × how live the
- *  window is. Timing dominates by design: on X, only the first ~5-10 replies in
- *  the first ~15 min get seen, so a fresh fast-rising post must outrank a stale
- *  great one. Multiplicative, recomputed live (postedAt is absolute), so a spot
- *  visibly decays as it ages. Reach (audience) lifts; reply-pileup buries. */
 function freshnessFactor(postedAt?: number): number {
-  if (!postedAt) return 0.5; // unknown age — neutral
-  const m = (Date.now() - postedAt) / 60_000; // minutes old
-  if (m < 5) return 1;
-  if (m < 15) return 0.92;
-  if (m < 30) return 0.78;
-  if (m < 60) return 0.6;
-  if (m < 180) return 0.42;
-  if (m < 720) return 0.28; // <12h
-  if (m < 1440) return 0.16; // <24h
-  return 0.08;
+  return replyFreshness(postedAt, Date.now());
 }
 /** 0 = not a builder peer · 1 = reciprocal builder peer · 2 = and in your niche.
  *  From the author's fetched bio + following/followers ratio — 0 until we've pulled
@@ -1766,42 +2506,59 @@ function builderTierFor(o: Opp): 0 | 1 | 2 {
   return builderTier(e.bio, xNiche, ratio);
 }
 
-function effectiveScore(o: Opp): number {
-  const reach = reachFactor(o); // real follower count when known (Twttr), else the on-page likes proxy
-  const fresh = freshnessFactor(o.postedAt);
-  // Dedup-slot winnability: only ONE reply per conversation is served in For You
-  // (dedup_conversation_filter), so a crowded thread's slot is effectively taken. This replaces the
-  // old likes/replies pile-on proxy with the mechanism it was approximating. Unknown count → neutral.
-  const slot = slotOdds(o.replies);
-  // low_blast_radius: below the reply-grader's root-follower threshold a reply earns ~no out-of-network
-  // reach — a MILD growth demotion for a relationship-only thread (still fine for the relationship;
-  // niche peers are re-floored below). Neutral when the root's size is unknown (honest-mirror).
-  const surface = surfaceMult(gradedSurface(knownFollowers(o)));
-  let s = o.score * fresh * reach * slot * surface;
-  // Community lift: a peer/builder in your space is worth replying to even when the
-  // POST isn't on your niche topic — engaging peers compounds your community. Lift
-  // them; and floor a FRESH niche-peer so a low topic-fit score can't bury them.
-  const tier = builderTierFor(o);
-  if (tier) s *= tier === 2 ? 1.25 : 1.12;
-  if (tier === 2 && fresh >= 0.6) s = Math.max(s, 0.45);
-  return Math.max(0, Math.min(1, s));
+let _authorSignalMemo: { key: string; accounts: ReturnType<typeof aggregateAccounts>["accounts"] } = { key: "", accounts: {} };
+function authorSignals(now: number): ReturnType<typeof aggregateAccounts>["accounts"] {
+  const key = `${replyLog.sent.length}:${Math.floor(now / DAY_MS)}`;
+  if (_authorSignalMemo.key !== key) _authorSignalMemo = { key, accounts: aggregateAccounts(replyLog.sent, now).accounts };
+  return _authorSignalMemo.accounts;
 }
 
-// The closed loop's RANKING half. Deliberately SEPARATE from effectiveScore: effectiveScore
-// is logged into SentRecord.score (the stage-1 fit that fitCorr correlates against outcomes),
-// so folding the learned term into it would make the "is fit predictive?" gate circular. The
-// learned tilt therefore lives only in rankScore, used for SORT ORDER — never for the recorded
-// score, the displayed fit %, or the drafter. Off by default (learnLoopOn) and inert unless the
-// data clears learn-stats' own gates (fitCorr>0, settled measured score) → neutral 1.0 otherwise.
+function recentRepliesTo(handle: string, now: number): number {
+  const h = handle.replace(/^@+/, "").toLowerCase();
+  const since = now - 7 * DAY_MS;
+  return replyLog.sent.filter((r) => r.at >= since && r.author?.replace(/^@+/, "").toLowerCase() === h).length;
+}
+
+/** The inspectable recommendation behind both the ordering and the row copy. */
+function recommendationFor(o: Opp, now = Date.now()): ReplyRecommendation {
+  const handle = o.author.replace(/^@+/, "").toLowerCase();
+  const reach = authorReach.get(handle);
+  const history = authorSignals(now)[handle];
+  return recommendReply({
+    authorHandle: o.author,
+    modelFit: o.score,
+    postedAt: o.postedAt,
+    replies: o.replies,
+    authorFollowers: knownFollowers(o),
+    authorFollowing: reach?.following,
+    myFollowers: myFollowers || undefined,
+    reachCeiling: myFollowers ? bandHiFor(myFollowers) : undefined,
+    peerTier: builderTierFor(o),
+    connection: connectionEvidence(relationshipMemory, learn.handle || selfHandle, o.author, now),
+    history: history ? { replies: history.replies, backs: history.backs } : undefined,
+    recentAuthorReplies: recentRepliesTo(o.author, now),
+    lastAuthorReplyAt: replyLog.authors[handle],
+    isReplyToOwnPost: o.isReplyToOwnPost,
+  }, now);
+}
+
+/** Baseline recommendation value, excluding optional outcome-learning and momentum. */
+function effectiveScore(o: Opp): number { return recommendationFor(o).priority; }
+
+// The optional closed-loop tilt stays separate from the baseline recommendation logged in
+// SentRecord.score. That lets fitCorr test whether the explainable policy predicts outcomes before
+// per-account payoff can reorder it. Off by default and neutral until the measured-data gates pass.
 let _multMemo: { key: string; mult: Record<string, number> } = { key: "", mult: {} };
+function invalidateLearnedMults(): void { _multMemo = { key: "", mult: {} }; _authorSignalMemo = { key: "", accounts: {} }; }
 function learnedMults(): Record<string, number> {
   const key = `${replyLog.sent.length}:${Math.floor(Date.now() / DAY_MS)}`; // rebuild on a new reply or a day roll (settled outcomes update daily); keeps the sort comparator O(1)
   if (_multMemo.key !== key) _multMemo = { key, mult: accountRankMultipliers(replyLog.sent, Date.now()).mult };
   return _multMemo.mult;
 }
-/** effectiveScore tilted by the measured per-account multiplier — RANKING ONLY. */
-function rankScore(o: Opp): number {
-  return effectiveScore(o) * (learnLoopOn ? (learnedMults()[o.author.toLowerCase()] ?? 1) : 1);
+/** Recommendation tilted by opt-in measured outcomes and short-lived post momentum. */
+function rankScore(o: Opp, now = Date.now()): number {
+  const learned = recommendationFor(o, now).priority * (learnLoopOn ? (learnedMults()[o.author.toLowerCase()] ?? 1) : 1);
+  return applyMomentum(learned, opportunityMomentum(o.id, now));
 }
 
 /** An at-a-glance "reply fit" verdict for a spot, from its live effectiveScore
@@ -1826,18 +2583,24 @@ function easyScore(o: Opp): number {
 
 type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
-type DockView = "replies" | "ideas" | "targets"; // top-level dock mode: reply spots vs post ideas vs big-account targeting
+type DockView = "replies" | "comments" | "ideas" | "targets" | "dms" | "growth"; // targets is a secondary drill-in; the other five are primary workspaces
 let dockView: DockView = "replies";
+let growthStrategyChoice: GrowthStrategyId | undefined;
+let growthOwnerProblem = "";
+let growthEndArmedUntil = 0;
 interface IdeaSource { handle: string; id: string; text: string; likes?: number; reposts?: number; views?: number; } // the real over-performing post we remixed
 interface IdeaGrade { tier: "strong" | "ok" | "weak"; lever?: string; callout?: string; fixable?: boolean; } // per-idea quality call-out from the judge (distinct from the virality band = source reach)
 interface IdeaRecord {
   id: string; text: string; source: string; pattern: string; why: string;
+  origin?: "seed" | "generated"; // old persisted records predate this field and are treated as generated
   shape?: Shape; // code-classified at creation — links the model's "pattern" to the measured shape table
   band?: Band; basis?: string; sortScore?: number; // honest virality (band cites the source's real rank)
   grade?: IdeaGrade;                               // the quality tier + call-out surfaced on the row
   virality?: number;                               // legacy: old persisted records render via a fallback
   src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
   createdAt: number; lastEditedAt: number; postedAt?: number;
+  growthExperimentId?: string; growthStrategyId?: GrowthStrategyId; // stamped when shipped/matched
+  publication?: IdeaPublication; // exact, unique RapidAPI match to the real post + latest measured outcome
 }
 let ideaQueue: IdeaRecord[] = [];          // persisted drafts queue (X_IDEAS_KEY): working drafts + shipped
 const expandedIdeas = new Set<string>();   // idea ids expanded into the in-place editor (single-open)
@@ -1849,8 +2612,78 @@ let shippedOpen = false;                   // the collapsed "Shipped" section
 let ideaSeq = 0;
 let ideasLoading = false;
 let ideasError: string | undefined;
+let roughIdea = "";
+let roughBusy = false;
+let roughError: string | undefined;
+let clearIdeasArmed = false;
+let clearIdeasTimer: number | undefined;
+let clearedSuggestions: IdeaRecord[] = [];
 const IDEAS_MAX = 30;
 function newIdeaId(): string { return "i" + Date.now().toString(36) + (ideaSeq++).toString(36); }
+
+const growthStorageKey = (handle: string): string => `${CONFIG.X_GROWTH_LOOP_KEY}:${handle.replace(/^@+/, "").trim().toLowerCase()}`;
+function growthActions(): TaggedGrowthAction[] {
+  const replies: TaggedGrowthAction[] = replyLog.sent.flatMap((r) => r.growthExperimentId && r.growthStrategyId ? [{ at: r.at, experimentId: r.growthExperimentId, strategyId: r.growthStrategyId, kind: "reply" as const, confirmed: isConfirmedReply(r) }] : []);
+  const posts: TaggedGrowthAction[] = ideaQueue.flatMap((i) => i.postedAt && i.growthExperimentId && i.growthStrategyId ? [{ at: i.postedAt, experimentId: i.growthExperimentId, strategyId: i.growthStrategyId, kind: "post" as const, confirmed: !!i.publication }] : []);
+  return [...replies, ...posts];
+}
+function growthExperimentAt(at: number): GrowthExperiment | undefined {
+  return growthStore.experiments.find((e) => at >= e.startedAt && at <= (e.endedAt ?? e.endsAt));
+}
+function tagIdeaGrowth(rec: IdeaRecord, at = rec.postedAt ?? Date.now()): boolean {
+  if (rec.growthExperimentId) return false;
+  const gx = growthExperimentAt(at); if (!gx) return false;
+  rec.growthExperimentId = gx.id; rec.growthStrategyId = gx.strategyId; return true;
+}
+async function persistGrowth(snapshot: GrowthStore = growthStore): Promise<void> {
+  if (!snapshot.ownerHandle) return;
+  const key = growthStorageKey(snapshot.ownerHandle);
+  const stored = await getLocal(key) as GrowthStore | undefined;
+  growthStore = mergeGrowthStores(stored, snapshot, snapshot.ownerHandle, Date.now());
+  safeSet({ [key]: growthStore });
+}
+function captureGrowthData(now = Date.now()): void {
+  if (growthOwnerProblem) return;
+  const owner = growthStore.ownerHandle || learn.handle || selfHandle;
+  if (!owner) return;
+  const posts = (ownStats ?? []).flatMap((p) => p.postedAt ? [{ id: p.id, day: dayKey(p.postedAt), postedAt: p.postedAt, views: p.views, likes: p.likes, reposts: p.reposts, replies: p.replies }] : []);
+  growthStore = captureGrowthSnapshot(growthStore, owner, now, dayKey(now), myFollowers || undefined, posts);
+  let ideaChanged = false;
+  for (const idea of ideaQueue) if (idea.status === "posted" && idea.postedAt) ideaChanged = tagIdeaGrowth(idea, idea.postedAt) || ideaChanged;
+  const settled = settleGrowthExperiments(growthStore, growthActions(), now);
+  growthStore = settled.store;
+  if (ideaChanged) persistIdeas();
+  void persistGrowth();
+}
+async function ensureGrowthOwner(): Promise<void> {
+  const configured = await myHandle();
+  const session = getSelf() || selfHandle;
+  if (configured && session && configured.toLowerCase() !== session.toLowerCase()) {
+    growthOwnerProblem = `Goobi is configured for @${configured}, but this X session is @${session}. Match the handle in the side panel before tracking growth.`;
+    growthStore = freshGrowthStore("");
+    return;
+  }
+  const owner = configured || session;
+  if (!owner) {
+    growthOwnerProblem = "Open Goobi while signed into X, or set your X handle in the side panel, before starting a growth test.";
+    growthStore = freshGrowthStore("");
+    return;
+  }
+  growthOwnerProblem = "";
+  const stored = await getLocal(growthStorageKey(owner)) as GrowthStore | undefined;
+  growthStore = mergeGrowthStores(growthStore, stored, owner, Date.now());
+  if (learn.handle.toLowerCase() === owner.toLowerCase()) for (const sn of Object.values(learn.snaps)) {
+    if (sn.followers == null) continue;
+    const at = new Date(`${sn.day}T12:00:00`).getTime();
+    if (Number.isFinite(at)) growthStore = seedFollowerSnapshot(growthStore, owner, sn.day, at, sn.followers, Date.now());
+  }
+  captureGrowthData();
+}
+function profileStateForCurrentOwner(): ProfileState | undefined {
+  const owner = (growthStore.ownerHandle || learn.handle || selfHandle).replace(/^@+/, "").toLowerCase();
+  const measured = (profileState?.ownerHandle || "").replace(/^@+/, "").toLowerCase();
+  return owner && measured === owner ? profileState : undefined;
+}
 function persistIdeas(): void {
   if (ideaQueue.length > IDEAS_MAX) { // prune oldest, keeping working over posted
     ideaQueue.sort((a, b) => (a.status === "working" ? 1 : 0) - (b.status === "working" ? 1 : 0) || a.createdAt - b.createdAt);
@@ -1858,19 +2691,88 @@ function persistIdeas(): void {
   }
   safeSet({ [CONFIG.X_IDEAS_KEY]: ideaQueue });
 }
+
+/** Attribute ideas to real own posts without another API call. Exact unique text only: no fuzzy
+ * guess is allowed to move a draft or teach the generator. Returns true when history changed. */
+function reconcileIdeasWithOwnPosts(now = Date.now()): boolean {
+  if (!ownStats?.length || !ideaQueue.length) return false;
+  const result = reconcileIdeaPublications(ideaQueue, ownStats, now);
+  if (!result.changed) return false;
+  ideaQueue = result.ideas;
+  for (const idea of ideaQueue) if (idea.status === "posted" && idea.postedAt) tagIdeaGrowth(idea, idea.postedAt);
+  persistIdeas();
+  if (result.matched) toast(`${result.matched === 1 ? "A post" : `${result.matched} posts`} matched on X — outcome tracking is now live.`);
+  return true;
+}
+
+/** Turn one user-owned seed into one editable post. This intentionally reuses the
+ * existing scoped rewrite message: no niche search, source attribution, or new
+ * background capability is needed. */
+async function polishRoughIdea(): Promise<void> {
+  const seed = roughIdea.trim();
+  if (!seed || roughBusy) return;
+  roughBusy = true; roughError = undefined; renderDock();
+  goobiDrafting = true; refreshGoobi();
+  try {
+    const resp = await send<{ text?: string; error?: string }>({
+      type: "POST_IDEA_REWRITE",
+      text: seed,
+      steer: "Turn this rough idea into one polished, publish-ready X post in my voice. Preserve my actual point and any concrete details. Make the hook clear and the writing concise. Do not invent facts, numbers, experiences, or claims.",
+    });
+    if (resp?.error === "no-key") { roughError = "Add your Anthropic key in the Goobi panel to polish this idea."; return; }
+    if (!resp?.text?.trim()) { roughError = resp?.error ? `Couldn't polish it: ${friendlyErr(resp.error)}` : "Couldn't polish that idea. Try adding a little more detail."; return; }
+    const now = Date.now();
+    const rec: IdeaRecord = {
+      id: newIdeaId(), text: resp.text.trim(), source: "Your rough idea", pattern: "original thought",
+      why: "Built from your rough idea — edit anything before you post.", shape: classifyShape(resp.text),
+      band: "Niche", basis: "Your original idea — no reach prediction until it ships.",
+      origin: "seed", status: "working", createdAt: now, lastEditedAt: now,
+    };
+    ideaQueue = [rec, ...ideaQueue]; roughIdea = ""; persistIdeas();
+    expandedIdeas.clear(); expandedIdeas.add(rec.id);
+  } catch {
+    roughError = "Couldn't polish this yet. Your rough idea is still here.";
+  } finally {
+    roughBusy = false; goobiDrafting = false; refreshGoobi(); renderDock();
+  }
+}
+
+function clearWorkingIdeas(): void {
+  const removable = ideaQueue.filter((i) => i.status === "working" && i.origin !== "seed");
+  if (!removable.length) return;
+  if (!clearIdeasArmed) {
+    clearIdeasArmed = true; renderDock();
+    if (clearIdeasTimer) clearTimeout(clearIdeasTimer);
+    clearIdeasTimer = window.setTimeout(() => { clearIdeasArmed = false; clearIdeasTimer = undefined; renderDock(); }, 5000);
+    return;
+  }
+  if (clearIdeasTimer) clearTimeout(clearIdeasTimer);
+  clearIdeasTimer = undefined; clearIdeasArmed = false;
+  clearedSuggestions = removable;
+  ideaQueue = ideaQueue.filter((i) => i.status === "posted" || i.origin === "seed");
+  expandedIdeas.clear(); expandedSources.clear(); ideaUndo.clear(); persistIdeas(); renderDock();
+  toast("Suggestions cleared. Your drafts and posted history are safe.");
+}
+
+function undoClearSuggestions(): void {
+  if (!clearedSuggestions.length) return;
+  ideaQueue = [...clearedSuggestions, ...ideaQueue]; clearedSuggestions = []; persistIdeas(); renderDock();
+  toast("Suggestions restored.");
+}
 let goobiIdeasHandle: GoobiHandle | null = null; // the big dancing Goobi shown while ideas generate
 let goobiIdeasTimer: number | undefined;
 let kebabOpen = false; // the ⋮ overflow menu (Pause / Find spots / Clear all)
-// The three relationship surfaces (threads / who-you-show-up-with / who-shows-up-for-you) are one
-// horizontal tab row now, accordion — at most one body open at a time. null = all collapsed (just
-// the tabs + their count badges). Defaults to "threads" (the action queue) when there's something to tend.
-type RelTab = "threads" | "invest" | "supporters" | null;
+// Relationship analytics stay secondary. The actionable reply/mention queue is now the top-level
+// Comments workspace; this accordion only holds who-you-show-up-with / who-shows-up-for-you.
+type RelTab = "invest" | "supporters" | null;
 // Collapsed by DEFAULT so the reply-spots list is visible the moment you open the dock — the count
 // badges do the notifying; you tap a tab only when you want its body. (Open-by-default pushed the
 // reply queue off-screen.)
 let relTab: RelTab = null;
 let todayOpen = false; // the Today strip's full detail (cue/shape/dots/callout) — collapsed to summary+coach by default
 let threadsAll = false; // tend-your-threads: false = top 3 rows (the dock is a queue, not a ledger), true = the full ranked 8
+let relationshipsOpen = false; // secondary relationship analytics stay behind one compact disclosure
+let replyToolsOpen = false;    // sort + filter are contextual tools, not permanent chrome
 
 let goobiReactUntil = 0;                          // transient reaction window (happy/cheer)
 let goobiReactMood: GoobiMood = "happy";
@@ -1956,11 +2858,12 @@ function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
   const list = [...opps.values()].filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
+  const now = Date.now();
   const key = (o: Opp): number =>
     dockSort === "recent" ? (o.postedAt ?? 0) :
     dockSort === "reach" ? (knownFollowers(o) ?? 0) :
     dockSort === "easy" ? easyScore(o) :
-    rankScore(o); // "best" = fit tilted by measured per-account outcomes (learnLoopOn; neutral otherwise)
+    rankScore(o, now); // "best" = fit + proven account tilt + measured post momentum (both neutral when absent)
   return list.sort((a, b) => key(b) - key(a)).slice(0, 25);
 }
 
@@ -1995,7 +2898,8 @@ function lavInitial(o: Opp): HTMLElement {
 /** The overlapping avatar stack on the launcher pill — top reply-spot authors, faces
  *  first, so the minimized dock reads like "these people are worth replying to". */
 function launcherAvatars(): HTMLElement | null {
-  const ranked = [...opps.values()].sort((a, b) => rankScore(b) - rankScore(a));
+  const now = Date.now();
+  const ranked = [...opps.values()].sort((a, b) => rankScore(b, now) - rankScore(a, now));
   if (!ranked.length) return null;
   const shown = ranked.slice(0, 4);
   const avs = document.createElement("span"); avs.className = "lavs";
@@ -2027,105 +2931,96 @@ function renderList(list: HTMLElement) {
   }
   for (const o of items) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
-    const it = document.createElement("div"); it.className = "it";
-    const top = document.createElement("div"); top.className = "top";
+    const rec = recommendationFor(o);
+    const open = expandedReplyCards.has(o.id);
+    const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "");
+    const toggle = () => { const wasOpen = expandedReplyCards.has(o.id); expandedReplyCards.clear(); if (!wasOpen) expandedReplyCards.add(o.id); renderDock(); };
+    const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
+    const laneColor = rec.lane === "inbound" || rec.lane === "continue" ? "#6fcf7f" : rec.lane === "community" ? "#5dcaa5" : ACCENT;
+    const age = fmtAge(o.postedAt);
+    const strength = rec.strength === "best next" ? "Best next" : rec.strength === "good option" ? "Good" : "Later";
 
-    // Avatar (image, or a colored initial).
+    const summary = document.createElement("div"); summary.className = "reply-summary";
+    const summaryToggle = document.createElement("div"); summaryToggle.className = "reply-toggle"; summaryToggle.setAttribute("role", "button"); summaryToggle.tabIndex = 0; summaryToggle.setAttribute("aria-expanded", String(open)); summaryToggle.title = open ? "Collapse reply details" : "Show why Goobi recommends this reply";
+    summaryToggle.onclick = toggle;
+    summaryToggle.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
     if (o.avatar) {
-      const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer";
-      av.onerror = () => av.replaceWith(avInitial(o));
-      top.append(av);
-    } else { top.append(avInitial(o)); }
-
-    const body = document.createElement("div"); body.className = "bodywrap";
-    const main = document.createElement("div"); main.className = "main";
-
-    // Name (+ verified badge) + follower count, right on the name line.
+      const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.replaceWith(avInitial(o)); summaryToggle.append(av);
+    } else summaryToggle.append(avInitial(o));
+    const copy = document.createElement("div"); copy.className = "reply-copy";
+    const identity = document.createElement("div"); identity.className = "reply-id";
     const nm = document.createElement("div"); nm.className = "nm";
     const ns = document.createElement("span"); ns.className = "nmt"; ns.textContent = o.name || `@${o.author}`; ns.title = `@${o.author}`; nm.append(ns);
     if (o.verified) { const vb = document.createElement("span"); vb.className = "vf"; vb.textContent = "✓"; vb.title = "Verified account"; nm.append(vb); }
-    const fc = knownFollowers(o);
-    if (fc) { const fcs = document.createElement("span"); fcs.className = "fc"; fcs.textContent = `${fmtCount(fc)} followers`; nm.append(fcs); }
-    main.append(nm);
+    const fc = knownFollowers(o); if (fc) { const fcs = document.createElement("span"); fcs.className = "fc"; fcs.textContent = `${fmtCount(fc)} followers`; nm.append(fcs); }
+    identity.append(nm); copy.append(identity);
+    const compactMeta = document.createElement("div"); compactMeta.className = "reply-compact-meta";
+    const lane = document.createElement("span"); lane.className = "reply-lane"; lane.style.color = laneColor; lane.textContent = rec.laneLabel;
+    const strengthEl = document.createElement("span"); strengthEl.className = "reply-strength"; strengthEl.style.color = laneColor; strengthEl.style.background = `${laneColor}1f`; strengthEl.textContent = strength;
+    compactMeta.append(lane, strengthEl);
+    if (rec.authorRepeat) { const repeat = document.createElement("span"); repeat.className = "reply-repeat"; repeat.textContent = `↻ replied ${rec.authorRepeat.label}`; repeat.title = rec.cautions[0] || "Recent reply to this author lowers all recommendation scores."; compactMeta.append(repeat); }
+    if (age) { const ageEl = document.createElement("span"); ageEl.className = "reply-age"; ageEl.textContent = `· ${age}`; compactMeta.append(ageEl); }
+    const rising = opportunityMomentum(o.id);
+    const isRising = !!rising && rising.score >= 0.25 && o.postedAt != null && Date.now() - o.postedAt <= 2 * HOUR_MS && slotOdds(o.replies) > 0.45;
+    if (isRising) { const up = document.createElement("span"); up.style.color = "#6fcf7f"; up.textContent = "↗ picking up"; compactMeta.append(up); }
+    const excerpt = document.createElement("div"); excerpt.className = "reply-compact-text"; excerpt.textContent = o.text;
+    copy.append(compactMeta, excerpt); summaryToggle.append(copy);
 
-    // Category chip + age — up near the name, above the text.
-    const meta = document.createElement("div"); meta.className = "meta";
-    if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎"; s.title = "Found via niche search (off your current page)"; meta.append(s); }
-    if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = catLabel(o.category); meta.append(ct); }
-    const btier = builderTierFor(o);
-    if (btier) { const bc = document.createElement("span"); bc.className = "chip"; bc.style.background = "rgba(93,202,165,.16)"; bc.style.color = "#5dcaa5"; bc.textContent = btier === 2 ? "peer · your space" : "peer builder"; bc.title = "A builder/peer in your space — replying builds your community, even when the post isn't on your exact topic."; meta.append(bc); }
-    const age = fmtAge(o.postedAt);
-    if (age) meta.append(document.createTextNode((o.category ? " · " : "") + age));
-    if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
-    // Reply-surface realism (grounded in the open-source ranker) — one muted, HONEST caution chip:
-    // a relationship-only thread (root below the reply-grader threshold) won't reach strangers; a
-    // crowded thread's single For-You slot (conversation dedup) is likely already taken. Good threads
-    // get no chip (absence = fine), so the row only speaks up when there's a real caveat.
-    const surf = gradedSurface(knownFollowers(o));
-    const mkCaution = (txt: string, tip: string) => { const sc = document.createElement("span"); sc.className = "chip"; sc.style.background = "rgba(140,125,104,.16)"; sc.style.color = "#a89a82"; sc.textContent = txt; sc.title = tip; meta.append(sc); };
-    if (surf === "relationship") mkCaution("small thread", surfaceLabel(surf)!);
-    else if (o.replies != null && slotOdds(o.replies) <= 0.45) mkCaution("slot ~taken", `${o.replies} replies already — only one reply per thread reaches For You (conversation dedup), so this slot is likely taken. Still fine for the relationship, low for new reach.`);
-    main.append(meta);
+    const quick = document.createElement("div"); quick.className = "reply-summary-actions";
+    const draft = document.createElement("button"); draft.className = "reply-draft-quick"; draft.textContent = "Draft"; draft.title = `Draft a ${catLabel(o.category).toLowerCase()} reply in your voice`; draft.onclick = draftNow;
+    const disclose = document.createElement("button"); disclose.className = "reply-disclose"; disclose.textContent = open ? "▴" : "▾"; disclose.setAttribute("aria-label", open ? "Collapse reply details" : "Expand reply details"); disclose.setAttribute("aria-expanded", String(open)); disclose.onclick = toggle;
+    quick.append(draft, disclose); summary.append(summaryToggle, quick); card.append(summary);
 
-    // Post text.
-    const ix = document.createElement("div"); ix.className = "ix"; ix.textContent = o.text; main.append(ix);
+    if (open) {
+      const detail = document.createElement("div"); detail.className = "reply-detail";
+      const meta = document.createElement("div"); meta.className = "meta"; meta.style.marginTop = "0";
+      if (o.isReplyToOwnPost) { const own = document.createElement("span"); own.className = "chip"; own.style.background = "rgba(111,207,127,.14)"; own.style.color = "#8bd397"; own.textContent = "↩ Comment on your post"; own.title = "X shows this post as replying directly to your account. Goobi prioritizes it as warm inbound conversation."; meta.append(own); }
+      if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎 Found by niche search"; s.title = "This post is not currently rendered on your X page."; meta.append(s); }
+      if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = `${catLabel(o.category)} angle`; meta.append(ct); }
+      const btier = builderTierFor(o);
+      if (btier) { const bc = document.createElement("span"); bc.className = "chip"; bc.style.background = "rgba(93,202,165,.16)"; bc.style.color = "#5dcaa5"; bc.textContent = btier === 2 ? "Peer in your space" : "Peer builder"; bc.title = "A relevant builder peer—useful for community-building when the post itself is a genuine fit."; meta.append(bc); }
+      const connection = connectionEvidence(relationshipMemory, learn.handle || selfHandle, o.author, Date.now());
+      if (connection?.established) { const rc = document.createElement("span"); rc.className = "chip"; rc.style.background = "rgba(111,207,127,.12)"; rc.style.color = "#8bd397"; rc.textContent = "↔ Ongoing connection"; rc.title = `You directly answered ${connection.completed} of @${o.author}'s replies across ${connection.activeWeeks} weeks on this device.`; meta.append(rc); }
+      if (isRising && rising) { const rc = document.createElement("span"); rc.className = "chip"; rc.style.background = "rgba(111,207,127,.14)"; rc.style.color = "#6fcf7f"; rc.textContent = "↗ Picking up"; const pace = rising.viewsPerHour != null ? `~${fmtCount(Math.round(rising.viewsPerHour))} views/hr` : `~${fmtCount(Math.round(rising.engagementsPerHour ?? 0))} engagements/hr`; rc.title = `Measured from two public snapshots: ${pace}. This only gives a mild Best-sort lift.`; meta.append(rc); }
+      if (o.category === "promote") for (const p of o.products || []) { const ic = faviconImg(p.url) || letterAvatar(p.name); ic.title = p.name; meta.append(ic); }
+      if (meta.childNodes.length) detail.append(meta);
 
-    // Why this.
-    if (o.reason) {
-      const why = document.createElement("div"); why.className = "why";
-      const star = document.createElement("span"); star.className = "wst"; star.textContent = "✦";
-      const lbl = document.createElement("b"); lbl.textContent = "Why this: ";
-      const span = document.createElement("span"); span.append(lbl, document.createTextNode(o.reason));
-      why.append(star, span); main.append(why);
+      const post = document.createElement("div"); post.className = "reply-post"; post.textContent = o.text; if (meta.childNodes.length) post.style.marginTop = "8px"; detail.append(post);
+      if (rec.authorRepeat) { const warning = document.createElement("div"); warning.className = "reply-repeat-warning"; warning.textContent = o.isReplyToOwnPost
+        ? `Already replied to @${o.author} ${rec.authorRepeat.label}. This is a direct comment on your post, so Goobi kept it important as an ongoing conversation. Reply only if you have something useful to add.`
+        : `Already replied to @${o.author} ${rec.authorRepeat.label}. Goobi lowered all three scores to encourage account spread; continue only for a real ongoing conversation.`; detail.append(warning); }
+      const why = document.createElement("div"); why.className = "reply-why-card";
+      const whyLabel = document.createElement("div"); whyLabel.className = "reply-section-label"; whyLabel.textContent = "Why this is worth your time"; why.append(whyLabel);
+      const reasons = [...new Set([...rec.reasons, o.reason].filter(Boolean))].slice(0, 3);
+      for (const reason of reasons) { const line = document.createElement("div"); line.className = "reply-why-line"; const dot = document.createElement("span"); dot.className = "reply-why-dot"; dot.textContent = "◆"; const text = document.createElement("span"); text.textContent = reason; line.append(dot, text); why.append(line); }
+      detail.append(why);
+
+      const signals = document.createElement("div"); signals.className = "reply-signal-grid"; signals.title = "Decision signals, not predicted X probabilities.";
+      ([['Reach', rec.discovery, ACCENT], ['Relationship', rec.relationship, '#6fcf7f'], ['Community', rec.community, '#5dcaa5']] as Array<[string, number, string]>).forEach(([label, value, color]) => {
+        const signal = document.createElement("div"); signal.className = "reply-signal";
+        const signalTop = document.createElement("div"); signalTop.className = "reply-signal-top"; const l = document.createElement("span"); l.textContent = label; const n = document.createElement("b"); n.textContent = String(Math.round(value * 100)); signalTop.append(l, n);
+        const track = document.createElement("div"); track.className = "reply-signal-track"; const fill = document.createElement("span"); fill.className = "reply-signal-fill"; fill.style.width = `${Math.round(value * 100)}%`; fill.style.background = color; track.append(fill); signal.append(signalTop, track); signals.append(signal);
+      });
+      detail.append(signals);
+      const evidence = document.createElement("div"); evidence.className = "reply-evidence"; evidence.textContent = `${rec.confidence}${rec.cautions[0] ? ` · ${rec.cautions[0]}` : ""} · Signals guide prioritization; they do not predict reach.`; detail.append(evidence);
+
+      const actions = document.createElement("div"); actions.className = "reply-detail-actions";
+      const action = (label: string, run: () => void, remove = false) => { const b = document.createElement("button"); b.className = "reply-action" + (remove ? " remove" : ""); b.textContent = label; b.onclick = run; return b; };
+      const openX = action("Open on X ↗", () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener"));
+      const follow = action(followed.has(o.author) ? "✓ Following" : "+ Follow", () => { void (async () => {
+        if (followed.has(o.author)) return; follow.disabled = true; follow.textContent = "Following…";
+        const result = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
+        if (result === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); touchGoobi(); goobiReact("happy", "New friend!", `following @${o.author}`, 2000); }
+        else if (result === "already") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Already following @${o.author}.`); }
+        else if (result === "paced") { follow.disabled = false; follow.textContent = "+ Follow"; toast("Slow down on follows — give it a minute."); }
+        else { follow.disabled = false; follow.textContent = "+ Follow"; toast("Couldn't follow here — open the post and follow from X."); }
+      })(); }); follow.disabled = followed.has(o.author);
+      const dm = action("Plan DM", () => planDmFromReplySpot(o)); dm.title = "Save this public context in the draft-only DM workspace.";
+      const replied = action("Mark replied", () => { expandedReplyCards.delete(o.id); opps.delete(o.id); recordSentReply("", o, undefined, Date.now(), "manual"); toast("Marked as replied — counted as manually verified."); }); replied.title = "Manual record only: counts this toward today's replies and removes it from the queue.";
+      const skip = action("Skip", () => { expandedReplyCards.delete(o.id); opps.delete(o.id); renderDock(); }, true); skip.title = "Remove from the queue without counting a reply.";
+      actions.append(openX, follow, dm, replied, skip); detail.append(actions); card.append(detail);
     }
-    body.append(main);
-
-    // Right column — reply fit + actions.
-    const rcol = document.createElement("div"); rcol.className = "rcol";
-    const es = effectiveScore(o); const v = scoreVerdict(es);
-    const rf = document.createElement("div"); rf.className = "rf";
-    const inf = document.createElement("span"); inf.className = "inf"; inf.textContent = "ⓘ"; inf.title = "Reply fit: how worth replying to right now — content fit × freshness × reach × your odds of winning the thread's single For-You slot (conversation dedup), with a mild cut for relationship-only threads that can't reach strangers.";
-    rf.append(document.createTextNode("Reply fit "), inf); rcol.append(rf);
-    const pct = document.createElement("div"); pct.className = "pct"; pct.textContent = `${Math.round(es * 100)}%`; pct.style.color = v.color; rcol.append(pct);
-    const vd = document.createElement("div"); vd.className = "vd"; vd.style.color = v.color;
-    vd.textContent = inReachSweetSpot(o) ? `${v.label} · ◎ in reach` : v.label;
-    vd.title = inReachSweetSpot(o) ? "In reach: this account is 5-25x your size — a reply reaches a bigger, still-attainable audience." : "";
-    rcol.append(vd);
-
-    const acts = document.createElement("div"); acts.className = "acts";
-    const draft = document.createElement("button"); draft.className = "draftb"; draft.textContent = "✎ Draft reply";
-    draft.onclick = () => void draftFor({ author: o.author, text: o.text, context: o.context, getEl: () => findPost(o.id, o.source === "search" ? undefined : o.text), oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name });
-    acts.append(draft);
-    rcol.append(acts);
-    body.append(rcol);
-    top.append(body);
-    it.append(top);
-
-    // Bottom action row — Follow / Open on X / Skip / Mark commented.
-    const bot = document.createElement("div"); bot.className = "botacts";
-    const follow = document.createElement("button"); follow.className = "lk";
-    const isFollowed = followed.has(o.author);
-    follow.textContent = isFollowed ? "✓ Following" : "+ Follow";
-    follow.disabled = isFollowed;
-    follow.onclick = async () => {
-      follow.disabled = true; follow.textContent = "Following…";
-      const r = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
-      if (r === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); touchGoobi(); goobiReact("happy", "New friend!", `following @${o.author}`, 2000); }
-      else if (r === "already") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Already following @${o.author}.`); }
-      else if (r === "paced") { follow.disabled = false; follow.textContent = "+ Follow"; toast("Slow down on follows — X flags rapid follows. Give it a minute."); }
-      else { follow.disabled = false; follow.textContent = "+ Follow"; toast("Couldn't follow — open the post (↗), then use its ••• menu."); }
-    };
-    const open = document.createElement("button"); open.className = "lk"; open.textContent = "↗ Open on X"; open.title = "Open the post on X";
-    open.onclick = () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener");
-    const commented = document.createElement("button"); commented.className = "lk"; commented.textContent = "✓ Commented";
-    commented.title = "Mark as commented — counts it toward today's replies and removes it from the list.";
-    commented.onclick = () => { opps.delete(o.id); recordSentReply("", o); toast("Marked as commented."); };
-    const skip = document.createElement("button"); skip.className = "lk skip"; skip.textContent = "✕ Skip"; skip.title = "Skip — remove from the list (doesn't count)";
-    skip.onclick = () => { opps.delete(o.id); renderDock(); };
-    bot.append(follow, open, commented, skip);
-    it.append(bot);
-
-    list.appendChild(it);
+    list.appendChild(card);
   }
 }
 
@@ -2189,7 +3084,7 @@ function feedTreat(b: HTMLButtonElement, rec: SentRecord, id: string, snip: stri
     const stat = dockRoot?.querySelector("#dpg-stat"); if (stat) stat.textContent = `🍪 ${fedTotal} ${fedTotal === 1 ? "treat" : "treats"} eaten`;
     syncPlay();
   };
-  if (stage && typeof b.animate === "function") {
+  if (stage && typeof b.animate === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
     const sr = stage.getBoundingClientRect();
     const fly = document.createElement("div");
     fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;overflow:hidden;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none`;
@@ -2210,7 +3105,7 @@ function buildPlay(): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "dplay";
   const pg = document.createElement("div"); pg.className = "dpg";
 
-  const stage = document.createElement("div"); stage.className = "dpg-stage"; stage.title = "Tap to pet Goobi";
+  const stage = document.createElement("button"); stage.className = "dpg-stage"; stage.type = "button"; stage.title = "Tap to pet Goobi"; stage.setAttribute("aria-label", "Pet Goobi");
   stage.append(Object.assign(document.createElement("div"), { className: "dpg-shadow" }));
   stage.onclick = () => petGoobi();
   pg.append(stage);
@@ -2269,7 +3164,7 @@ function buildPlay(): HTMLElement {
 
 /** Framer-ish spring: panel height eases open, inner content overshoots in. */
 function springOpen(panel: HTMLElement): void {
-  if (typeof panel.animate !== "function") return;
+  if (typeof panel.animate !== "function" || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const inner = panel.firstElementChild as HTMLElement | null;
   const h = panel.scrollHeight;
   panel.animate([{ height: "0px" }, { height: h + "px" }], { duration: 380, easing: "cubic-bezier(.16,1,.3,1)" })
@@ -2280,7 +3175,7 @@ function springOpen(panel: HTMLElement): void {
   ], { duration: 460, easing: "cubic-bezier(.34,1.56,.64,1)" });
 }
 function springClose(panel: HTMLElement, done: () => void): void {
-  if (typeof panel.animate !== "function") { done(); return; }
+  if (typeof panel.animate !== "function" || matchMedia("(prefers-reduced-motion: reduce)").matches) { done(); return; }
   const h = panel.scrollHeight;
   panel.animate([{ height: h + "px", opacity: 1 }, { height: "0px", opacity: 0 }], { duration: 260, easing: "cubic-bezier(.4,0,1,1)" }).onfinish = done;
 }
@@ -2308,6 +3203,20 @@ function measuredShapeLine(): { line: string; n: number; metric: string } | null
   const top = sp?.shapes[0];
   if (!sp || !top || top.rel < 1.3) return null; // only speak when a shape clearly leads
   return { line: `their ${SHAPE_LABEL[top.shape]}-shaped posts earn ${top.rel.toFixed(1)}× their median ${sp.metric === "views" ? "views" : "engagement"} (n=${top.n}).`, n: top.n, metric: sp.metric };
+}
+
+/** Same honest shape read, but restricted to ideas Goobi matched exactly to real posts. This is the
+ * action-grade signal for future idea generation; it falls back silently until enough posts settle. */
+function measuredIdeaShapeLine(): { line: string; n: number; metric: string } | null {
+  const posts = ideaQueue.flatMap((idea) => {
+    const p = idea.publication;
+    if (!p || p.confidence !== "exact") return [];
+    return [{ text: idea.text, postedAt: p.postedAt ?? idea.postedAt, views: p.views, likes: p.likes, reposts: p.reposts }];
+  });
+  const sp = shapePerformance(posts, Date.now());
+  const top = sp?.shapes[0];
+  if (!sp || !top || top.rel < 1.3) return null;
+  return { line: `their ${SHAPE_LABEL[top.shape]}-shaped Goobi drafts earn ${top.rel.toFixed(1)}× their median ${sp.metric === "views" ? "views" : "engagement"} (n=${top.n}, exact X matches).`, n: top.n, metric: sp.metric };
 }
 
 /** The best PATTERNS to remix: recent original niche posts that punch above their
@@ -2376,6 +3285,8 @@ async function fetchOwnData(handle: string): Promise<OwnPostsCache | null> {
   const cache: OwnPostsCache = { posts: stats.map((s) => s.text), stats, at: Date.now(), handle };
   safeSet({ [CONFIG.X_MY_POSTS_KEY]: cache });
   ownStats = stats;
+  reconcileIdeasWithOwnPosts();
+  captureGrowthData();
   return cache;
 }
 async function getOwnPosts(): Promise<{ text: string; likes?: number; reposts?: number }[]> {
@@ -2394,7 +3305,12 @@ async function refreshOwnStats(): Promise<void> {
   const handle = await myHandle();
   if (!handle) { if (ownStats) { ownStats = undefined; renderDock(); } return; }
   const cached = (await getLocal(CONFIG.X_MY_POSTS_KEY)) as OwnPostsCache | undefined;
-  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_STATS_TTL) { ownStats = cached.stats; return; }
+  if (cached && cached.handle === handle && Date.now() - cached.at < OWN_STATS_TTL) {
+    ownStats = cached.stats;
+    if (reconcileIdeasWithOwnPosts()) renderDock();
+    captureGrowthData();
+    return;
+  }
   const before = ownStats;
   await fetchOwnData(handle);
   if (ownStats !== before) renderDock();
@@ -2412,6 +3328,41 @@ function postedToday(): number {
   return ideaQueue.filter((i) => i.status === "posted" && i.postedAt && dayKey(i.postedAt) === today).length;
 }
 
+function dmPeopleToday(): number {
+  const today = dayKey(Date.now());
+  return new Set(dmStore.candidates.filter((c) => c.touches.some((t) => t.direction === "outbound" && dayKey(t.at) === today)).map((c) => c.handle)).size;
+}
+
+function dailyGoalTracker(counts: { replies: number; posts: number; dms: number }): HTMLElement {
+  const wrap = document.createElement("section"); wrap.className = "day-goals"; wrap.setAttribute("aria-label", "Today's activity goals");
+  const active = (Object.keys(dailyGoals) as Array<keyof DailyGoals>).filter((key) => dailyGoals[key] > 0);
+  const complete = active.filter((key) => counts[key] >= dailyGoals[key]).length;
+  const head = document.createElement("div"); head.className = "dg-head";
+  const title = document.createElement("span"); title.className = "dg-title"; title.textContent = "Today";
+  const summary = document.createElement("span"); summary.className = "dg-summary"; summary.textContent = active.length ? `${complete}/${active.length} goals complete` : "Goals are off";
+  const edit = document.createElement("button"); edit.className = "dg-edit"; edit.textContent = "Edit goals"; edit.onclick = () => void send({ type: "OPEN_SIDE_PANEL" });
+  head.append(title, summary, edit); wrap.append(head);
+  const grid = document.createElement("div"); grid.className = "dg-grid";
+  const specs: Array<{ key: keyof DailyGoals; label: string; view: DockView; title: string }> = [
+    { key: "replies", label: "Replies", view: "replies", title: "Successful Like + insert attempts count immediately as pending; RapidAPI or manual confirmation later verifies them." },
+    { key: "posts", label: "Posts", view: "ideas", title: "X-detected originals today, or posts explicitly marked shipped in Goobi when X data is unavailable." },
+    { key: "dms", label: "DM people", view: "dms", title: "Unique people with an outbound DM you explicitly marked sent today. Goobi cannot read or verify the X inbox." },
+  ];
+  for (const spec of specs) {
+    const target = dailyGoals[spec.key], done = counts[spec.key], met = target > 0 && done >= target;
+    const item = document.createElement("button"); item.className = "dg-item" + (met ? " done" : ""); item.title = `${spec.title} Safety and quality limits always override volume goals.`;
+    item.setAttribute("aria-label", `${spec.label}: ${target > 0 ? `${done} of ${target}` : "goal off"}`);
+    item.onclick = () => { dockView = spec.view; relationshipsOpen = false; replyToolsOpen = false; renderDock(); };
+    const top = document.createElement("span"); top.className = "dg-top";
+    const label = document.createElement("span"); label.className = "dg-label"; label.textContent = spec.label;
+    const count = document.createElement("span"); count.className = "dg-count"; count.textContent = target > 0 ? `${done}/${target}` : "Off";
+    top.append(label, count);
+    const track = document.createElement("span"); track.className = "dg-track"; const fill = document.createElement("span"); fill.className = "dg-fill"; fill.style.width = `${dailyGoalPercent(done, target)}%`; track.append(fill);
+    item.append(top, track); grid.append(item);
+  }
+  wrap.append(grid); return wrap;
+}
+
 /* ---- Engagement learning loop ("who you show up with" + the Tier-2 measure-pass) ----
  * A once-a-day, dayKey-gated pass that (A) folds your own posts' real view-growth into a
  * bounded trend, and (B) fetches the real engagement your recent replies earned
@@ -2420,11 +3371,35 @@ function postedToday(): number {
  * reply log (idempotent) — only the own-post trend + scan gates persist. */
 const LEARN_SCAN_ENABLED = true;   // the once-daily API fetch (Tier-1 ranking itself needs no fetch)
 const SETTLE_DAYS = 2;             // freeze a reply's measured outcome once it's this old
+const VERIFY_MIN_AGE_MS = 6 * 60_000;  // give X/provider timelines time to publish the reply before matching
+const VERIFY_RETRY_MS = 30 * 60_000;   // a successful no-match waits; avoids hammering the expensive timeline endpoint
+const VERIFY_WINDOW_MS = 72 * HOUR_MS; // same honest attribution window as matchOutcomes
 interface DailySnap extends DailyDelta { day: string; followers?: number; } // followers = free daily snapshot (already in storage) → the measured "picking up" trend
-interface LearnStore { handle: string; scanDay: string; measureDay?: string; restId?: string; prevById: Record<string, PostMetrics>; snaps: Record<string, DailySnap>; }
+interface LearnStore { handle: string; scanDay: string; measureDay?: string; measureAt?: number; restId?: string; prevById: Record<string, PostMetrics>; snaps: Record<string, DailySnap>; answeredThreadIds?: Record<string, number>; }
 function freshLearn(handle: string): LearnStore { return { handle, scanDay: "", prevById: {}, snaps: {} }; }
 let learn: LearnStore = freshLearn("");
 let learnBusy = false;
+let verifyTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** A pending record becomes eligible after six minutes. A new pending reply can bypass an
+ * older daily measurement, but repeated no-match checks wait 30 minutes and only happen when
+ * the dock opens again. One scheduled check per page keeps the RapidAPI timeline spend bounded. */
+function pendingVerification(now: number): SentRecord | undefined {
+  return [...replyLog.sent].reverse().find((r) => !isConfirmedReply(r) && !!(r.norm || r.snippet)
+    && now - r.at >= VERIFY_MIN_AGE_MS && now - r.at <= VERIFY_WINDOW_MS);
+}
+function verificationDue(now: number): boolean {
+  const pending = pendingVerification(now);
+  if (!pending) return false;
+  return !learn.measureAt || learn.measureAt < pending.at || now - learn.measureAt >= VERIFY_RETRY_MS;
+}
+function scheduleReplyVerification(): void {
+  if (verifyTimer != null) return;
+  verifyTimer = setTimeout(() => {
+    verifyTimer = undefined;
+    if (!invalidated && !paused) void maybeRunDailyLearn();
+  }, VERIFY_MIN_AGE_MS + 30_000);
+}
 function pruneSnaps(snaps: Record<string, DailySnap>): void {
   const cut = dayKey(Date.now() - 60 * 24 * HOUR_MS);
   for (const k of Object.keys(snaps)) if (k < cut) delete snaps[k];
@@ -2439,7 +3414,7 @@ function weeklyViewGrowth(): { views: number; days: number } {
 /** Fetch your recent replies' real engagement, match each to a stored reply, and write the
  *  outcome (likes/replies). Provisional until SETTLE_DAYS old, then frozen. Best-effort. */
 async function runMeasurePass(handle: string, today: string): Promise<void> {
-  if (!replyLog.sent.length) { learn.measureDay = today; return; }
+  if (!replyLog.sent.length && !inbound.length) { learn.measureDay = today; learn.measureAt = Date.now(); return; }
   let restId = learn.restId;
   if (!restId) {
     const ures = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
@@ -2451,20 +3426,28 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
   const rres = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: restId, count: "40" }, intent: true });
   if (rres?.error === "no-twttr-config") { twttrUnconfigured = true; return; }
   if (!rres?.ok) return; // budget/HTTP error — retry next day
-  const fetched: FetchedReply[] = parseTimelineTweets(rres.data)
-    .filter((t) => t.isReply && t.text)
-    .map((t) => ({ text: t.text, at: t.postedAt, likes: t.likes, replies: t.replies, views: t.views, reposts: t.reposts, id: t.id })); // views/reposts/id ride the same paid response — views = distribution (the thing the ranker actually decides), id enables future ground-truth fetches
   const now = Date.now();
+  const parsed = parseTimelineTweets(rres.data);
+  const ownReplies = parsed.filter((t) => t.isReply && t.text && (t.authorId ? t.authorId === restId : t.author.toLowerCase() === handle.toLowerCase()));
+  learn.answeredThreadIds ??= {};
+  for (const t of ownReplies) if (t.replyToId) learn.answeredThreadIds[t.replyToId] = t.postedAt ?? now; // exact parent join: this inbound status was actually answered
+  pruneAnsweredThreadIds(now);
+  foldRelationshipMemory(); // preserve exact completed exchanges beyond the short thread-clearing window
+  const fetched: FetchedReply[] = ownReplies
+    .map((t) => ({ text: t.text, at: t.postedAt, likes: t.likes, replies: t.replies, views: t.views, reposts: t.reposts, id: t.id })); // views/reposts/id ride the same paid response — views = distribution (the thing the ranker actually decides), id enables future ground-truth fetches
   let wrote = 0;
   for (const mt of matchOutcomes(fetched, replyLog.sent)) {
     const rec = replyLog.sent[mt.index];
     if (!rec || rec.outcome?.frozen) continue; // frozen = settled, never re-touch
     rec.outcome = { ...rec.outcome, at: now, likes: mt.likes, replies: mt.replies, views: mt.views ?? rec.outcome?.views, reposts: mt.reposts ?? rec.outcome?.reposts, tweetId: mt.replyId ?? rec.outcome?.tweetId, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS }; // spread keeps authorReplied; ?? keeps yesterday's measured views when a payload shape omits them
+    rec.confirmedAt ??= now;
+    rec.confirmation = "rapidapi";
     wrote++;
   }
   if (fetched.length) learn.restId = restId; // cache the resolved id ONLY when it proved it works (returned replies) — a bad/transient resolve re-resolves next day instead of freezing
   learn.measureDay = today;
-  if (wrote) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+  learn.measureAt = now;
+  if (wrote) { invalidateLearnedMults(); safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }); }
   safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
 }
 /** The once-daily learning pass, dayKey-gated + idempotent. Fired on dock open. */
@@ -2477,7 +3460,8 @@ async function maybeRunDailyLearn(): Promise<void> {
   // The engaged-back join runs on EVERY dock open (pure, idempotent, $0) — new notification
   // events since the morning pass still credit same-day; the day-gate below only guards fetches.
   if (fillAuthorReplied(inbound, replyLog.sent) > 0) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
-  if (learn.scanDay === today && learn.measureDay === today) return; // both FETCH passes done for the day
+  const verifyDue = verificationDue(Date.now());
+  if (learn.scanDay === today && learn.measureDay === today && !verifyDue) return; // daily passes done; pending new replies may still request one verification
   learnBusy = true;
   try {
     // (A) own-post view-growth trend — CONSUME the momentum cache only. refreshOwnStats (fired
@@ -2497,10 +3481,11 @@ async function maybeRunDailyLearn(): Promise<void> {
         learn.scanDay = day2;
         pruneSnaps(learn.snaps);
         safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
+        captureGrowthData();
       }
     }
     // (B) Tier-2 measure-pass — the real engagement your replies earned.
-    if (learn.measureDay !== today) await runMeasurePass(handle, today);
+    if (learn.measureDay !== today || verifyDue) await runMeasurePass(handle, today);
   } finally { learnBusy = false; renderDock(); }
 }
 
@@ -2512,10 +3497,37 @@ async function maybeRunDailyLearn(): Promise<void> {
 let inbound: EngagedRecord[] = [];
 let inboundKeys = new Set<string>();
 const SUPPORTERS_MAX = 1000;
+let relationshipMemory: RelationshipMemoryStore = freshRelationshipMemory();
+let relationshipPersist: Promise<void> = Promise.resolve();
+/** Fold either-arrival-order proof (notifications or reply history), then union with storage so
+ * concurrent X tabs cannot erase exchanges. Exact parent IDs make this idempotent. */
+function foldRelationshipMemory(): void {
+  const owner = (learn.handle || selfHandle || "").toLowerCase();
+  const folded = foldCompletedExchanges(relationshipMemory, owner, inbound, learn.answeredThreadIds, Date.now());
+  relationshipMemory = folded.store;
+  if (!folded.changed) return;
+  relationshipPersist = relationshipPersist.then(async () => {
+    const stored = await getLocal(CONFIG.X_RELATIONSHIP_MEMORY_KEY) as RelationshipMemoryStore | undefined;
+    relationshipMemory = mergeRelationshipMemory(stored, relationshipMemory, Date.now());
+    safeSet({ [CONFIG.X_RELATIONSHIP_MEMORY_KEY]: relationshipMemory });
+  }).catch(() => {});
+}
 // Reply postIds the user has explicitly MARKED DONE in "tend your threads" (device-local). Pruned to
 // the live harvest on persist so it can't grow unbounded as old events age out of the window.
 let threadsDone = new Set<string>();
 function hydrateThreadsDone(arr: unknown): void { if (Array.isArray(arr)) threadsDone = new Set(arr.filter((x): x is string => typeof x === "string")); }
+const ANSWERED_THREAD_KEEP_MS = TEND_WINDOW_MS + 2 * 24 * HOUR_MS; // provider's recent-40 window may roll before the 3d tend queue does
+const ANSWERED_THREAD_CAP = 500;
+function pruneAnsweredThreadIds(now: number): void {
+  const entries = Object.entries(learn.answeredThreadIds ?? {})
+    .filter(([id, at]) => !!id && typeof at === "number" && now - at <= ANSWERED_THREAD_KEEP_MS && now >= at)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, ANSWERED_THREAD_CAP);
+  learn.answeredThreadIds = Object.fromEntries(entries);
+}
+/** Manual done + exact parent IDs from RapidAPI. Exact matches disappear; unmatched rows keep
+ * the existing soft handle/time "likely tended" inference. */
+function completedThreadIds(): Set<string> { return new Set([...threadsDone, ...Object.keys(learn.answeredThreadIds ?? {})]); }
 function persistThreadsDone(): void {
   const live = new Set(inbound.map((e) => e.postId).filter((x): x is string => !!x));
   threadsDone = new Set([...threadsDone].filter((id) => live.has(id))); // drop keys whose event has aged out of the harvest
@@ -2561,7 +3573,7 @@ function scanNotifications(): void {
     pushInbound({ at: postedAtMs(el) ?? Date.now(), handle: info.author, kind, postId: info.id, avatar: avatarUrl(el), name: displayName(el), text: outerText(el).slice(0, 240) || undefined, key, followers: authorReach.get(info.author.toLowerCase())?.followers }); // follower backfill from the reach cache — activates supporters' reachBoost (else it sits at the FALLBACK constant); text snippet powers "tend your threads"
     added++;
   });
-  if (added) { schedulePersistInbound(); if (dockOpen) renderDock(); } // debounced write; only repaint when the dock is open
+  if (added) { foldRelationshipMemory(); schedulePersistInbound(); if (dockOpen) renderDock(); } // either arrival order works; debounced write; only repaint when the dock is open
 }
 
 /** The most recent avatar/display we've seen for a handle (for the insight rows). */
@@ -2588,14 +3600,14 @@ function avatarChip(handle: string, url?: string): HTMLElement {
  *  grade highest; keeping a conversation alive is what dedup_conversation_filter promotes). Honest:
  *  we can't see which of your posts each is on, "tended" is a lossy guess, opens the thread so you
  *  reply in your own words. It's an ACTION list, so it hides itself when there's nothing to tend. */
-function renderThreadsPanel(d: HTMLElement): void {
+function renderThreadsPanel(d: HTMLElement, opts: { topLevel?: boolean } = {}): void {
   const now = Date.now();
-  const { rows, total } = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
+  const { rows, total } = rankThreads(inbound as InboundLite[], replyLog.sent, now, opts.topLevel ? 20 : 8, completedThreadIds());
   if (total === 0) return; // nothing recent to tend → the tab is hidden anyway
   const wrap = document.createElement("div"); wrap.className = "insight rel-body";
   {
     const body = document.createElement("div"); body.className = "ins-body";
-    const shown = threadsAll ? rows : rows.slice(0, 3); // a queue, not a ledger — the reply list below needs the room
+    const shown = opts.topLevel ? rows : threadsAll ? rows : rows.slice(0, 3); // top-level owns the workspace; the old embedded panel stayed compact
     for (const r of shown) {
       const row = document.createElement("div"); row.className = "ins-row";
       const av = avatarChip(r.handle, r.avatar); av.style.cursor = "pointer"; av.title = `Open @${r.handle}`;
@@ -2609,6 +3621,13 @@ function renderThreadsPanel(d: HTMLElement): void {
       const age = document.createElement("span"); age.className = "ins-ar"; age.textContent = r.ageLabel;
       if (r.fresh === "live") { age.style.color = "#6fcf7f"; age.title = "still in the thread's live window — answering now compounds most"; }
       top.append(age);
+      const relationship = document.createElement("span"); relationship.className = "ins-thin";
+      relationship.textContent = r.kind === "reply" ? "↩ Comment on your post" : "@ Mentioned you";
+      relationship.style.color = r.kind === "reply" ? "#8bd397" : "#d6b07c";
+      relationship.title = r.kind === "reply"
+        ? "This person replied directly to one of your posts. Goobi ranks it as warm inbound conversation."
+        : "This person mentioned you, but this is not confirmed as a comment on one of your posts.";
+      top.append(relationship);
       if (r.tended) { const b = document.createElement("span"); b.className = "ins-thin"; b.textContent = "likely tended"; b.title = "You sent a Goobi reply to them after they engaged you — a lossy handle+time guess (could be a different post), not a confirmed answer."; top.append(b); }
       mid.append(top);
       if (r.text) {
@@ -2626,7 +3645,7 @@ function renderThreadsPanel(d: HTMLElement): void {
       doneBtn.disabled = !r.postId;
       doneBtn.onclick = () => { if (r.postId) { threadsDone.add(r.postId); persistThreadsDone(); toast(`Marked @${r.handle} done.`); renderDock(); } };
       const act = document.createElement("button");
-      act.textContent = "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
+      act.textContent = r.kind === "reply" ? "Reply on your post →" : "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
       act.title = "Open their reply on X so you can respond in-thread (Goobi never posts for you).";
       act.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#e89a3c;background:rgba(232,154,60,.12);border:1px solid rgba(232,154,60,.35);border-radius:6px;padding:3px 8px;cursor:pointer";
       act.onclick = () => { if (r.postId) window.open(`https://x.com/${r.handle}/status/${r.postId}`, "_blank", "noopener"); };
@@ -2634,7 +3653,7 @@ function renderThreadsPanel(d: HTMLElement): void {
       row.append(acts);
       body.append(row);
     }
-    if (rows.length > 3) {
+    if (!opts.topLevel && rows.length > 3) {
       const more = document.createElement("div"); more.className = "ins-more";
       more.style.cursor = "pointer";
       more.setAttribute("role", "button"); more.tabIndex = 0;
@@ -2646,12 +3665,31 @@ function renderThreadsPanel(d: HTMLElement): void {
     }
     // One terse line; the full honesty text stays a hover away (same disclosures, less real estate).
     const foot = document.createElement("div"); foot.className = "ins-foot";
-    foot.textContent = "Freshest first · opens the thread, you reply in your own words · \"tended\" is a guess.";
-    foot.title = "People who replied to or mentioned you, freshest first — a live thread is where a reply still travels. We can't see which of your posts each is on, or confirm you've answered (\"tended\" is a lossy handle+time guess). Opens the thread on X so you reply in your own words; Goobi never posts for you. From your notifications, device-local.";
+    foot.textContent = `${opts.topLevel ? `Showing the freshest ${rows.length}${total > rows.length ? ` of ${total}` : ""} · ` : "Freshest first · "}exact reply-history matches clear automatically · \"likely tended\" is still a guess.`;
+    foot.title = "An exact match means one of your recent RapidAPI replies reports this notification status as its direct parent, so it clears automatically. The provider returns a recent window, so unmatched does not mean unanswered; those rows keep the softer handle+time \"likely tended\" guess. Opens the thread on X so you reply in your own words; Goobi never posts for you.";
     body.append(foot);
     wrap.append(body);
   }
   d.append(wrap);
+}
+
+function buildComments(): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "comments";
+  const intro = document.createElement("section"); intro.className = "comments-intro";
+  const title = document.createElement("div"); title.className = "comments-title"; title.textContent = "Warm conversations first";
+  const copy = document.createElement("div"); copy.className = "comments-copy";
+  copy.textContent = "Comments on your own posts get the strongest warm signal. Goobi labels those separately from mentions because continuing inbound conversation is more important than cold outreach.";
+  intro.append(title, copy); wrap.append(intro);
+  const ranked = rankThreads(inbound as InboundLite[], replyLog.sent, Date.now(), 20, completedThreadIds());
+  if (ranked.total) renderThreadsPanel(wrap, { topLevel: true });
+  else {
+    const empty = document.createElement("div"); empty.className = "comments-empty";
+    const message = document.createElement("div"); message.textContent = "No recent reply or mention is waiting. Goobi learns this queue from the X notifications page you visit; it never reads your private inbox.";
+    const scan = document.createElement("button"); scan.className = "gx-btn"; scan.textContent = "Open X notifications ↗";
+    scan.onclick = () => window.open("https://x.com/notifications", "_blank", "noopener");
+    empty.append(message, scan); wrap.append(empty);
+  }
+  return wrap;
 }
 
 function renderInsightPanel(d: HTMLElement): void {
@@ -2680,17 +3718,18 @@ function renderInsightPanel(d: HTMLElement): void {
     // invisible to us; follows can come from anywhere). The arc is the growth mechanism the
     // 2026 pipeline scores (reply → profile visit → follow-author); the numbers are real.
     {
-      const cutF = dayKey(now - 14 * 24 * HOUR_MS);
-      let sent14 = 0; for (const [k, v] of Object.entries(replyLog.daily)) if (k >= cutF) sent14 += v;
+      const cutMs = now - 14 * 24 * HOUR_MS;
+      const cutF = dayKey(cutMs);
+      const verified = replyVerificationSummary(replyLog.sent, cutMs, now);
+      const sent14 = verified.confirmed;
       if (sent14 > 0) {
-        const cutMs = now - 14 * 24 * HOUR_MS;
         const people = new Set(inbound.filter((e) => e.at >= cutMs).map((e) => e.handle.toLowerCase())).size;
         let fDelta: number | undefined;
         const withF = Object.values(learn.snaps).filter((sn) => sn.followers != null && sn.day >= cutF).sort((a, b) => (a.day < b.day ? -1 : 1));
         if (withF.length >= 2 && withF[0].day !== withF[withF.length - 1].day) fDelta = (withF[withF.length - 1].followers as number) - (withF[0].followers as number);
         const t2 = document.createElement("div"); t2.className = "ins-fact";
-        t2.textContent = `🔀 14d: ${sent14} ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged with you` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : ""); // "engaged with you" (all inbound), deliberately NOT the join's stricter "engaged back"
-        t2.title = "Measured totals that co-occurred over the last 14 days — correlation, NOT attribution: profile clicks aren't visible to us and follows can come from anywhere. The arc is the growth mechanism (reply → profile visit → follow); the numbers are real, the causality is not claimed. Engaged-back is matched from your notifications (visit-dependent, undercounts if you don't visit).";
+        t2.textContent = `🔀 14d: ${sent14} verified ${sent14 === 1 ? "reply" : "replies"} → ${people} ${people === 1 ? "person" : "people"} engaged with you` + (fDelta != null ? ` → ${fDelta >= 0 ? "+" : ""}${fDelta} followers` : ""); // "engaged with you" (all inbound), deliberately NOT the join's stricter "engaged back"
+        t2.title = `Replies are actual X posts matched through RapidAPI or manually confirmed; ${verified.pending} recent attempt${verified.pending === 1 ? " is" : "s are"} still pending and excluded. The other totals co-occurred over 14 days — correlation, NOT attribution: profile clicks aren't visible and follows can come from anywhere.`;
         body.append(t2);
       }
     }
@@ -2714,7 +3753,7 @@ function renderInsightPanel(d: HTMLElement): void {
     // Profile check — the conversion surface (replies earn the click; the PROFILE converts it to a
     // follow). Measured facts only: pinned-vs-your-best + bio presence. Silent without a harvest —
     // it fills in the first time the user visits their own profile with Goobi on.
-    for (const f of profileCheck(profileState, ownStats ?? []).slice(0, 3)) {
+    for (const f of profileCheck(profileStateForCurrentOwner(), ownStats ?? []).slice(0, 3)) {
       const li = document.createElement("div"); li.className = f.level === "good" ? "ins-trend" : "ins-fact"; // green only for the ✓
       li.textContent = (f.level === "act" ? "\u2192 " : "\u2713 ") + f.text;
       li.title = f.why;
@@ -2745,7 +3784,7 @@ function renderInsightPanel(d: HTMLElement): void {
         const meta = document.createElement("div"); meta.className = "ins-meta";
         const days = Math.max(0, Math.round((now - r.lastAt) / (24 * HOUR_MS)));
         meta.textContent = `${r.replies} ${r.replies === 1 ? "reply" : "replies"} · last ${days}d` + (r.backs ? ` · ↩ engaged back ×${r.backs}` : "") + (r.followers ? ` · ${fmtCount(r.followers)} followers` : "");
-        meta.title = "Replies you inserted through Goobi" + (r.backs ? `; "engaged back" = they replied to you within 72h of your reply (matched from your notifications — visit-dependent, may undercount, and can include replies to your own posts).` : "") + (r.followers ? "; their follower count when you replied — not a reach estimate." : ".");
+        meta.title = "Reply attempts recorded through Goobi" + (r.backs ? `; "engaged back" = they replied to you within 72h of your reply (matched from your notifications — visit-dependent, may undercount, and can include replies to your own posts).` : "") + (r.followers ? "; their follower count when you replied — not a reach estimate." : ".");
         mid.append(meta);
         const bar = document.createElement("div"); bar.className = "ins-bar"; const fill = document.createElement("div"); fill.className = "ins-fill"; fill.style.width = Math.round(r.share * 100) + "%"; bar.append(fill); mid.append(bar);
         row.append(mid);
@@ -2830,14 +3869,10 @@ function renderSupportersPanel(d: HTMLElement): void {
   d.append(wrap);
 }
 
-/** The three relationship surfaces as ONE horizontal accordion tab row with count badges (the "top
- *  level notifications"), replacing three stacked collapsible panels. At most one body open at a
- *  time; tapping the active tab collapses it. Threads carries the actionable amber badge (untended);
- *  the other two carry a muted account count. */
+/** Secondary relationship analytics. The actionable reply/mention queue graduated to the primary
+ *  Comments workspace; this compact accordion now contains only Circle and Supporters context. */
 function renderRelationshipTabs(d: HTMLElement): void {
   const now = Date.now();
-  const th = rankThreads(inbound as InboundLite[], replyLog.sent, now, 8, threadsDone);
-  const showThreads = th.total > 0;
   const invAgg = aggregateAccounts(replyLog.sent, now);
   const invRanked = rankAccounts(invAgg).ranked.length;
   const invLearning = invAgg.attributed < GLOBAL_THIN;
@@ -2845,23 +3880,35 @@ function renderRelationshipTabs(d: HTMLElement): void {
   for (const e of inbound) if (e.kind === "reply" || e.kind === "mention") { supScored++; supHandles.add(e.handle); }
   const supLearning = supScored < SUP_GLOBAL_THIN;
 
-  const tabs = document.createElement("div"); tabs.className = "rel-tabs";
+  // Relationships matter, but they are supporting context for the reply queue. One
+  // quiet summary replaces the permanently visible three-tab analytics layer.
+  const summary = document.createElement("button"); summary.className = "rel-summary";
+  summary.setAttribute("aria-expanded", String(relationshipsOpen));
+  const summaryTitle = document.createElement("span"); summaryTitle.className = "rel-summary-title"; summaryTitle.textContent = relationshipsOpen ? "‹ Back to replies" : "Relationships";
+  const facts = document.createElement("span"); facts.className = "rel-summary-facts";
+  const factBits = [!invLearning ? `${invRanked} in your circle` : "", !supLearning ? `${supHandles.size} supporters` : ""].filter(Boolean);
+  facts.textContent = relationshipsOpen ? "Circle and supporters" : (factBits.join(" · ") || "Insights appear as you reply");
+  const caret = document.createElement("span"); caret.className = "rel-summary-caret"; caret.textContent = relationshipsOpen ? "▾" : "▸";
+  summary.append(summaryTitle, facts, caret);
+  summary.onclick = () => { relationshipsOpen = !relationshipsOpen; renderDock(); };
+  d.append(summary);
+  if (!relationshipsOpen) return;
+
+  const tabs = document.createElement("div"); tabs.className = "rel-tabs"; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Relationships");
   const mkTab = (id: Exclude<RelTab, null>, label: string, tip: string, badge: string | null, amber: boolean) => {
     const on = relTab === id;
     const b = document.createElement("button"); b.className = "rel-tab" + (on ? " on" : "");
-    b.title = tip; b.setAttribute("aria-expanded", String(on));
+    b.title = tip; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(on)); b.setAttribute("aria-expanded", String(on));
     const t = document.createElement("span"); t.textContent = label; b.append(t);
     if (badge) { const bd = document.createElement("span"); bd.className = "rel-badge" + (amber ? " amber" : ""); bd.textContent = badge; b.append(bd); }
     b.onclick = () => { relTab = on ? null : id; renderDock(); };
     return b;
   };
-  if (showThreads) tabs.append(mkTab("threads", "Threads", "Reply to the people who replied to you — the top-ranked growth move (author-engaged replies grade highest; keeps the thread alive).", th.untended ? (th.untended > 20 ? "20+" : String(th.untended)) : null, true));
   tabs.append(mkTab("invest", "Your circle", "Who you show up with — the accounts your replies invest in, upgraded to measured (✓) as outcomes settle.", invLearning ? null : String(invRanked), false));
   tabs.append(mkTab("supporters", "Supporters", "Who shows up for you — accounts that reply to / mention you (from your notifications).", supLearning ? null : String(supHandles.size), false));
   d.append(tabs);
 
-  if (relTab === "threads" && showThreads) renderThreadsPanel(d);
-  else if (relTab === "invest") renderInsightPanel(d);
+  if (relTab === "invest") renderInsightPanel(d);
   else if (relTab === "supporters") renderSupportersPanel(d);
 }
 
@@ -2908,7 +3955,8 @@ async function generateIdeas() {
       posts: winners.map((t) => ({ author: t.author, text: t.text, likes: t.likes, reposts: t.reposts, followers: t.followers, shape: t.shape })),
       ownPosts,
       followers: myFollowers || undefined,
-      shapeLine: measuredShapeLine()?.line,
+      shapeLine: (measuredIdeaShapeLine() ?? measuredShapeLine())?.line,
+      strategyLine: (() => { const gx = activeGrowthExperiment(growthStore); if (!gx) return undefined; const s = growthStrategy(gx.strategyId); return `${s.label}. Hypothesis: ${s.hypothesis} Post brief: ${s.postBrief}`; })(),
     });
     if (resp?.error === "no-key") { ideasError = "Add your Anthropic key in the Goobi panel to write post ideas."; return; }
     if (!resp || resp.error || !resp.ideas?.length) { ideasError = resp?.error ? `Couldn't write ideas: ${friendlyErr(resp.error)}` : "Couldn't write ideas — try again."; return; }
@@ -2933,7 +3981,7 @@ async function generateIdeas() {
         band, basis, sortScore: sort, grade: d.grade,
         shape: classifyShape(d.text),
         src: w ? { handle: w.author, id: w.id, text: w.text, likes: w.likes, reposts: w.reposts, views: w.views } : undefined,
-        status: "working", createdAt: now, lastEditedAt: now };
+        origin: "generated", status: "working", createdAt: now, lastEditedAt: now };
     });
     // Drop a fresh idea that duplicates one of YOUR recent posts, an earlier sibling, OR a working idea
     // already in the queue (cross-batch dedup).
@@ -2962,10 +4010,18 @@ function ideaBandView(idea: IdeaRecord): { band: Band; color: string; basis: str
   return { band, color: BAND_COLOR[band], basis: idea.basis || "Goobi's read on how far this could go." };
 }
 function togglePin(rec: IdeaRecord): void { rec.pinned = !rec.pinned; rec.lastEditedAt = Date.now(); persistIdeas(); renderDock(); }
+function deleteIdea(rec: IdeaRecord): void {
+  ideaQueue = ideaQueue.filter((i) => i.id !== rec.id);
+  expandedIdeas.delete(rec.id); expandedSources.delete(rec.id); ideaUndo.delete(rec.id);
+  persistIdeas(); renderDock();
+}
 function markPosted(rec: IdeaRecord, posted: boolean): void {
   rec.status = posted ? "posted" : "working";
   rec.postedAt = posted ? Date.now() : undefined;
-  if (posted) goobiReact("cheer", "Shipped! 🎉", "keep the streak alive", 3200);
+  if (!posted) { rec.publication = undefined; rec.growthExperimentId = undefined; rec.growthStrategyId = undefined; }
+  else tagIdeaGrowth(rec, rec.postedAt);
+  if (posted) reconcileIdeasWithOwnPosts();
+  if (posted) goobiReact("cheer", "Posted! 🎉", "saved to your history", 3200);
   persistIdeas(); renderDock();
 }
 /** Consecutive days you've shipped a post (today or yesterday anchored), like the reply streak. */
@@ -3009,35 +4065,29 @@ function steerRow(rec: IdeaRecord): HTMLElement {
   return wrap;
 }
 
-/** The collapsible proof: the ACTUAL over-performing post this idea remixed. */
+/** Source proof shown inside the card's single "Why this suggestion" disclosure. */
 function sourceBlock(idea: IdeaRecord): HTMLElement {
   const wrap = document.createElement("div");
   if (!idea.src) {
     const s = document.createElement("div"); s.className = "idea-src";
-    s.textContent = `↺ Pattern borrowed from your niche${idea.pattern ? ` · ${idea.pattern}` : ""}`;
+    s.textContent = idea.origin === "seed" ? `Built from your rough idea${idea.pattern ? ` · ${idea.pattern}` : ""}` : `↺ Pattern borrowed from your niche${idea.pattern ? ` · ${idea.pattern}` : ""}`;
     wrap.append(s); return wrap;
   }
-  const open = expandedSources.has(idea.id);
-  const tog = document.createElement("div"); tog.className = "idea-src idea-srctog";
-  tog.textContent = `↺ Remixing @${idea.src.handle}'s post${idea.pattern ? ` · ${idea.pattern}` : ""}  ${open ? "▾" : "▸"}`;
-  tog.onclick = () => { open ? expandedSources.delete(idea.id) : expandedSources.add(idea.id); renderDock(); };
-  wrap.append(tog);
-  if (open) {
-    const q = document.createElement("div"); q.className = "idea-quote";
-    const qt = document.createElement("div"); qt.className = "idea-qtext"; qt.textContent = idea.src.text; q.append(qt);
-    const f = document.createElement("div"); f.className = "idea-qfoot";
-    const eng = document.createElement("span"); eng.textContent = `❤ ${fmtCount(idea.src.likes) || 0} · 🔁 ${fmtCount(idea.src.reposts) || 0}${idea.src.views != null ? ` · 👁 ${fmtCount(idea.src.views)}` : ""} on this one`;
-    const link = document.createElement("a"); link.className = "idea-qlink"; link.textContent = "Open post ↗";
-    link.href = `https://x.com/${idea.src.handle}/status/${idea.src.id}`; link.target = "_blank"; link.rel = "noopener";
-    f.append(eng, link); q.append(f); wrap.append(q);
-  }
+  const s = document.createElement("div"); s.className = "idea-src"; s.textContent = `Source pattern · @${idea.src.handle}${idea.pattern ? ` · ${idea.pattern}` : ""}`; wrap.append(s);
+  const q = document.createElement("div"); q.className = "idea-quote";
+  const qt = document.createElement("div"); qt.className = "idea-qtext"; qt.textContent = idea.src.text; q.append(qt);
+  const f = document.createElement("div"); f.className = "idea-qfoot";
+  const eng = document.createElement("span"); eng.textContent = `❤ ${fmtCount(idea.src.likes) || 0} · 🔁 ${fmtCount(idea.src.reposts) || 0}${idea.src.views != null ? ` · 👁 ${fmtCount(idea.src.views)}` : ""}`;
+  const link = document.createElement("a"); link.className = "idea-qlink"; link.textContent = "View source ↗";
+  link.href = `https://x.com/${idea.src.handle}/status/${idea.src.id}`; link.target = "_blank"; link.rel = "noopener";
+  f.append(eng, link); q.append(f); wrap.append(q);
   return wrap;
 }
 
-/** Open X's composer prefilled with the (edited) draft — you review + post. Marks shipped. */
-function openInComposer(idea: IdeaRecord, shipped: boolean): void {
+/** Open X's composer prefilled with the edited draft. Opening is not proof of
+ * posting, so the draft stays working until the user explicitly marks it Posted. */
+function openInComposer(idea: IdeaRecord, _shipped: boolean): void {
   window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
-  if (!shipped) markPosted(idea, true);
 }
 const firstLine = (s: string): string => s.split("\n").map((l) => l.trim()).find(Boolean) || s;
 
@@ -3046,6 +4096,15 @@ const TIER_UI: Record<string, { icon: string; color: string; label: string; rank
   ok:     { icon: "~", color: "#a89a85", label: "ok",     rank: 1 },
   weak:   { icon: "!", color: "#e89a3c", label: "weak",   rank: 2 },
 };
+
+function publicationMetrics(p: IdeaPublication): string {
+  const bits: string[] = [];
+  if (p.views != null) bits.push(`${fmtCount(p.views)} views`);
+  if (p.likes != null) bits.push(`${fmtCount(p.likes)} likes`);
+  if (p.replies != null) bits.push(`${fmtCount(p.replies)} replies`);
+  if (p.reposts != null) bits.push(`${fmtCount(p.reposts)} reposts`);
+  return bits.join(" · ");
+}
 
 /** A scannable idea ROW: virality rail + one-line hook + source meta + one-tap ↗. Click the
  *  row to expand IN PLACE into the editor (draft hero + why + steer + source + actions). */
@@ -3059,79 +4118,91 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   if (shipped) c.classList.add("shipped");
   if (ideaBusy.has(idea.id)) c.classList.add("busy");
   // Click the collapsed row (or the hook when open) to toggle — single-open.
-  c.onclick = () => { const was = expandedIdeas.has(idea.id); expandedIdeas.clear(); if (!was) expandedIdeas.add(idea.id); renderDock(); };
+  const toggle = () => { const was = expandedIdeas.has(idea.id); expandedIdeas.clear(); if (!was) expandedIdeas.add(idea.id); renderDock(); };
+  c.onclick = toggle;
 
-  // Left rail = the honest virality band (color), tooltip cites the real source rank.
-  const pip = document.createElement("div"); pip.className = "idea-pip"; pip.style.background = vv.color;
-  pip.title = vv.basis;
-  c.append(pip);
-
-  // Main column — hook + meta (the scannable part).
-  const main = document.createElement("div"); main.className = "idea-main";
-  const hook = document.createElement("div"); hook.className = "idea-hook"; hook.textContent = firstLine(idea.text); main.append(hook);
+  // Main column — a readable preview and one human quality line.
+  const main = document.createElement("div"); main.className = "idea-main"; main.setAttribute("role", "button"); main.tabIndex = 0; main.setAttribute("aria-expanded", String(open));
+  main.setAttribute("aria-label", `${open ? "Collapse" : "Edit"} post idea: ${firstLine(idea.text)}`);
+  main.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggle(); } };
+  const hook = document.createElement("div"); hook.className = "idea-hook"; hook.textContent = idea.text; main.append(hook);
   const meta = document.createElement("div"); meta.className = "idea-meta";
-  if (idea.grade) {
-    // The quality CALL-OUT is the primary triage signal (the user asked to "call things out"): a
-    // colored tier chip + the one-line reason. The virality band stays as the left pip color.
+  if (shipped && idea.publication) {
+    const metrics = publicationMetrics(idea.publication);
+    meta.textContent = `✓ Matched on X${metrics ? ` · ${metrics}` : " · measurement pending"}`;
+    meta.title = "Exact text match to your real post from RapidAPI — these measured results can safely improve future ideas.";
+  } else if (shipped) {
+    meta.textContent = "Posted manually · waiting for an exact X match";
+    meta.title = "Goobi only attributes a result when one real post uniquely matches this text. Edited or ambiguous posts stay unclaimed.";
+  } else if (idea.grade) {
     const t = TIER_UI[idea.grade.tier] ?? TIER_UI.ok;
-    const chip = document.createElement("b"); chip.textContent = `${t.icon} ${t.label}`; chip.style.color = t.color;
+    const chip = document.createElement("b"); chip.textContent = `${t.icon} ${t.label === "ok" ? "Worth editing" : t.label === "strong" ? "Strong draft" : "Needs a personal detail"}`; chip.style.color = t.color;
     chip.title = `Quality: how much this reads as uniquely YOU (vs generic niche filler). Graded by the same judge that drives the auto-rewrite. Separate from the virality band (that's the source post's reach).`;
     meta.append(chip);
     if (idea.grade.callout) { const co = document.createElement("span"); co.textContent = " · " + idea.grade.callout; co.title = idea.grade.callout + (idea.grade.lever ? ` — aimed at a ${idea.grade.lever}` : ""); meta.append(co); }
   } else {
-    const vl = document.createElement("b"); vl.textContent = vv.band; vl.style.color = vv.color; meta.append(vl);
-    const tail = [idea.pattern, idea.src ? `↺ @${idea.src.handle}` : (!idea.pattern ? "↺ your niche" : "")].filter(Boolean).join(" · ");
-    if (tail) meta.append(document.createTextNode(" · " + tail));
+    meta.textContent = idea.origin === "seed" ? "Your draft · built from your rough idea" : idea.src ? `Suggested from a pattern working in your niche` : "Niche suggestion · ready for your edit";
   }
   main.append(meta); c.append(main);
 
-  // Collapsed-row right actions — quick open + chevron.
+  // One clear collapsed action: edit. Publishing stays inside the editor.
   const rowact = document.createElement("div"); rowact.className = "idea-rowact";
-  const quick = document.createElement("button"); quick.className = "idea-quickopen"; quick.textContent = "↗"; quick.title = "Open in X's composer — you review and post.";
-  quick.onclick = (e) => { e.stopPropagation(); openInComposer(idea, shipped); };
-  const chev = document.createElement("span"); chev.className = "idea-chev"; chev.textContent = "▸";
-  rowact.append(quick, chev); c.append(rowact);
+  const edit = document.createElement("button"); edit.className = "idea-edit"; edit.textContent = open ? "Close" : "Edit"; edit.setAttribute("aria-expanded", String(open));
+  edit.onclick = (e) => { e.stopPropagation(); toggle(); };
+  rowact.append(edit); c.append(rowact);
 
   // Expandable body — the editor.
   const body = document.createElement("div"); body.className = "idea-body";
   body.onclick = (e) => e.stopPropagation(); // editing must never collapse the card
-  const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text;
+  const draftLabel = document.createElement("label"); draftLabel.className = "idea-draft-label"; draftLabel.textContent = "Draft";
+  const ta = document.createElement("textarea"); ta.className = "idea-ta"; ta.value = idea.text; ta.setAttribute("aria-label", "Editable post draft");
   ta.rows = Math.min(10, Math.max(3, idea.text.split("\n").length + Math.ceil(idea.text.length / 42)));
   const autosize = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
-  ta.oninput = () => { idea.text = ta.value; hook.textContent = firstLine(ta.value); autosize(); };
+  ta.oninput = () => { idea.text = ta.value; hook.textContent = ta.value; autosize(); };
   ta.onchange = () => { idea.lastEditedAt = Date.now(); persistIdeas(); };
-  body.append(ta);
+  body.append(draftLabel, ta);
   if (open) requestAnimationFrame(autosize); // size to content once it's visible
-  if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = idea.why; body.append(w); }
+  if (idea.grade?.callout) { const qn = document.createElement("div"); qn.className = "idea-quality"; qn.textContent = idea.grade.tier === "strong" ? `Strong: ${idea.grade.callout}` : idea.grade.callout; body.append(qn); }
   if (!shipped) body.append(steerRow(idea)); // quick-shape (working drafts only)
-  body.append(sourceBlock(idea));            // the over-performing source post it remixed
+  if (shipped && idea.publication) {
+    const outcome = document.createElement("div"); outcome.className = "idea-outcome";
+    const link = document.createElement("a"); link.href = `https://x.com/i/status/${idea.publication.postId}`; link.target = "_blank"; link.rel = "noopener"; link.textContent = "✓ Exact post matched on X ↗";
+    const metrics = publicationMetrics(idea.publication);
+    outcome.append(link, document.createTextNode(metrics ? ` · ${metrics}` : " · X has not reported metrics yet"));
+    outcome.title = "Measured through RapidAPI. Counts refresh with your cached own-post scan; no extra API request is made for attribution.";
+    body.append(outcome);
+  }
+  const whyOpen = expandedSources.has(idea.id);
+  const whyToggle = document.createElement("button"); whyToggle.className = "idea-why-toggle"; whyToggle.textContent = `Why this suggestion ${whyOpen ? "▾" : "▸"}`; whyToggle.setAttribute("aria-expanded", String(whyOpen));
+  whyToggle.onclick = () => { whyOpen ? expandedSources.delete(idea.id) : expandedSources.add(idea.id); renderDock(); };
+  body.append(whyToggle);
+  if (whyOpen) {
+    const details = document.createElement("div"); details.className = "idea-details";
+    if (idea.why) { const w = document.createElement("div"); w.className = "idea-why"; w.textContent = idea.why; details.append(w); }
+    const band = document.createElement("div"); band.className = "idea-detail-meta"; band.textContent = `${vv.band} potential · ${vv.basis}`; details.append(band, sourceBlock(idea));
+    body.append(details);
+  }
   const actions = document.createElement("div"); actions.className = "idea-actions";
-  const openBtn = document.createElement("button"); openBtn.className = "idea-open"; openBtn.textContent = "Open in composer ↗";
-  openBtn.title = "Opens X's composer with your edited draft prefilled — you review and post (never auto-posts). Marks it shipped.";
+  const openBtn = document.createElement("button"); openBtn.className = "idea-open"; openBtn.textContent = "Open in X ↗";
+  openBtn.title = "Opens X's composer with your edited draft prefilled — you review and post. An exact RapidAPI match can move it to Posted on the next stats refresh.";
   openBtn.onclick = () => openInComposer(idea, shipped);
   const copy = document.createElement("button"); copy.className = "idea-copy"; copy.textContent = "Copy";
   copy.onclick = async () => { try { await navigator.clipboard.writeText(idea.text); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
   actions.append(openBtn, copy);
+  const quiet = document.createElement("div"); quiet.className = "idea-quiet-actions";
   if (shipped) {
-    const back = document.createElement("button"); back.className = "idea-pin"; back.textContent = "↩"; back.title = "Move back to working drafts (didn't post it)";
-    back.onclick = () => markPosted(idea, false); actions.append(back);
+    const back = document.createElement("button"); back.className = "idea-pin"; back.textContent = "Move to drafts"; back.title = "Move back to working drafts (didn't post it)";
+    back.onclick = () => markPosted(idea, false); quiet.append(back);
   } else {
-    // Improve = one-click "fix the flagged weakness" on ok/weak ideas — reuses the rewrite, seeded
-    // with the call-out so the model targets exactly what the judge flagged.
-    if (idea.grade && idea.grade.tier !== "strong") {
-      const imp = document.createElement("button"); imp.className = "idea-improve";
-      imp.textContent = ideaBusy.has(idea.id) ? "Improving…" : "✎ Improve"; imp.disabled = ideaBusy.has(idea.id);
-      imp.title = "Rewrite it to be more specific to you" + (idea.grade.callout ? ` — fixing: ${idea.grade.callout}` : "") + ". Clears the flag after (the rewrite targets exactly what was called out).";
-      imp.onclick = () => void rewriteIdea(idea, `Make this unmistakably THIS user's post — force in a concrete specific (a real number, a named tool, an exact moment they'd know), on their own point. ${idea.grade?.callout ? `The current weakness to fix: ${idea.grade.callout}.` : "It reads too generic right now."}`);
-      actions.append(imp);
-    }
-    const pin = document.createElement("button"); pin.className = "idea-pin" + (idea.pinned ? " on" : ""); pin.textContent = "📌";
+    const pin = document.createElement("button"); pin.className = "idea-pin" + (idea.pinned ? " on" : ""); pin.textContent = idea.pinned ? "Pinned" : "Pin";
     pin.title = idea.pinned ? "Kept — won't be replaced on a reroll." : "Keep this one — survives a reroll.";
     pin.onclick = () => togglePin(idea);
-    const done = document.createElement("button"); done.className = "idea-pin"; done.textContent = "✓"; done.title = "I posted this (e.g. via Copy) — mark it shipped.";
+    const done = document.createElement("button"); done.className = "idea-pin"; done.textContent = "Posted"; done.title = "I posted this (e.g. via Copy) — move it to history now. Goobi will attach measured results after an exact X match.";
     done.onclick = () => markPosted(idea, true);
-    actions.append(pin, done);
+    const del = document.createElement("button"); del.className = "idea-pin idea-delete"; del.textContent = "Delete"; del.title = "Delete this draft"; del.onclick = () => deleteIdea(idea);
+    quiet.append(pin, done, del);
   }
+  actions.append(quiet);
   body.append(actions); c.append(body);
   return c;
 }
@@ -3158,13 +4229,185 @@ function mountIdeasGoobi(): void {
 
 /* ---------- Target accounts: comment early on big in-reach niche accounts ---------- */
 let targetStore: TargetStore = freshStore("");
-const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number }>(); // fetched latest post per handle (session) — counts kept for the free early/buried read
+const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number; reposts?: number; views?: number }>(); // fetched latest post per handle; all provider metrics feed measured momentum
 const targetDrafts = new Map<string, string>(); // generated reply draft per handle (session)
 const targetBusy = new Set<string>();           // handles currently fetching/drafting
 let targetAdding = false;
 let targetAddMsg = "";
 const dismissedSuggestions = new Set<string>(); // session-only (resets on reload) — "× not interested"
 function persistTargets(): void { safeSet({ [CONFIG.X_TARGETS_KEY]: targetStore }); }
+
+/* ---------- DM workspace: deliberate, draft-only relationship growth ---------- */
+let dmStore: DmStore = freshDmStore("");
+const dmExpanded = new Set<string>();
+const dmBusy = new Set<string>();
+const dmContextDrafts = new Map<string, string>();
+let dmAdding = false;
+let dmAddMsg = "";
+let dmContextRefreshes = 0;
+let dmPersistChain: Promise<void> = Promise.resolve();
+
+function dmStorageKey(owner = dmStore.ownerHandle): string { return `${CONFIG.X_DM_WORKSPACE_KEY}:${owner.toLowerCase()}`; }
+function persistDms(snapshot: DmStore = dmStore): void {
+  const owner = snapshot.ownerHandle;
+  if (!owner) return;
+  dmPersistChain = dmPersistChain.then(async () => {
+    const stored = await getLocal(dmStorageKey(owner)) as DmStore | undefined;
+    const merged = mergeDmStores(stored, snapshot, owner, Date.now());
+    if (invalidated || !contextOK()) return;
+    try { await chrome.storage.local.set({ [dmStorageKey(owner)]: merged }); } catch { return; }
+    if (dmStore.ownerHandle === owner) dmStore = mergeDmStores(dmStore, merged, owner, Date.now());
+  }).catch(() => { /* best-effort local CRM persistence */ });
+}
+async function ensureDmOwner(): Promise<void> {
+  const owner = (await myHandle()).toLowerCase();
+  if (!owner) { if (dmStore.ownerHandle) { dmStore = freshDmStore(""); dmExpanded.clear(); dmContextDrafts.clear(); renderDock(); } return; }
+  if (owner === dmStore.ownerHandle) return;
+  dmStore = pruneDmStore(await getLocal(dmStorageKey(owner)) as DmStore | undefined, owner, Date.now());
+  dmExpanded.clear(); dmContextDrafts.clear();
+  if (dockView === "dms") renderDock();
+}
+function dmMutate(next: DmStore): void { dmStore = next; persistDms(); renderDock(); }
+function dmAge(at?: number): string {
+  if (!at) return "";
+  const mins = Math.max(0, Math.floor((Date.now() - at) / 60_000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60); if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+function dmDueLabel(candidate: DmCandidate): string {
+  const at = candidate.snoozedUntil ?? candidate.dueAt; if (!at) return "";
+  const days = Math.ceil((at - Date.now()) / DAY_MS);
+  return days <= 0 ? "follow-up due" : candidate.snoozedUntil ? `snoozed ${days}d` : `follow-up in ${days}d`;
+}
+
+function dmSuggestions(): ReturnType<typeof rankDmSuggestions> {
+  const owner = dmStore.ownerHandle;
+  const inputs: DmSuggestionInput[] = [];
+  for (const handle of Object.keys(relationshipMemory.owners[owner]?.accounts ?? {})) {
+    const e = connectionEvidence(relationshipMemory, owner, handle, Date.now());
+    if (!e) continue;
+    const reach = authorReach.get(handle);
+    inputs.push({ handle, followers: reach?.followers, bio: reach?.bio, source: "relationship", exactExchanges: e.completed, activeWeeks: e.activeWeeks, lastAt: e.lastAt });
+  }
+  if (targetStore.handle.toLowerCase() === owner) for (const target of targetStore.targets) {
+    const reach = authorReach.get(target.handle.toLowerCase()), post = targetPosts.get(target.handle);
+    inputs.push({ handle: target.handle, followers: target.followers, bio: reach?.bio, source: "target", publicContext: post?.text, lastAt: post?.postedAt });
+  }
+  return rankDmSuggestions(inputs, new Set(dmStore.candidates.map((c) => c.handle)), Date.now(), 5);
+}
+
+function planDm(input: Parameters<typeof addDmCandidate>[2]): void {
+  const result = addDmCandidate(dmStore, dmStore.ownerHandle, input, Date.now());
+  if (result.error && !result.candidate) { toast(result.error); return; }
+  dmStore = result.store;
+  if (result.candidate) { dmExpanded.add(result.candidate.handle); dmAddMsg = ""; }
+  persistDms();
+  if (dockView !== "dms") dockView = "dms";
+  renderDock();
+}
+
+function planDmFromTarget(handle: string): void {
+  if (targetStore.handle.toLowerCase() !== dmStore.ownerHandle) { toast("That Target list belongs to another configured account. Reopen Goobi on the current account first."); return; }
+  const target = targetStore.targets.find((t) => t.handle.toLowerCase() === handle.toLowerCase());
+  if (!target) return;
+  const now = Date.now(), post = targetPosts.get(target.handle), reach = authorReach.get(target.handle.toLowerCase());
+  planDm({ handle: target.handle, followers: target.followers, bioSnapshot: reach?.bio, source: "target", stage: "warming", intent: "connect",
+    reasons: [{ id: `target:${target.handle}`, label: "Saved target · research before reaching out", detail: post?.text, source: post?.text ? "observed" : "user", capturedAt: now }],
+    context: post?.text ? [{ id: `post:${post.id || now}`, kind: "public_post", source: "observed", text: post.text, postId: post.id, url: post.id ? `https://x.com/${target.handle}/status/${post.id}` : undefined, capturedAt: now }] : [],
+  });
+}
+
+function planDmFromReplySpot(opportunity: Opp): void {
+  const now = Date.now();
+  const connection = connectionEvidence(relationshipMemory, dmStore.ownerHandle, opportunity.author, now);
+  planDm({ handle: opportunity.author, name: opportunity.name, avatar: opportunity.avatar, followers: knownFollowers(opportunity),
+    source: connection?.established ? "relationship" : "reply_spot", stage: connection?.established ? "ready" : "warming", intent: "connect",
+    reasons: [{ id: `reply-spot:${opportunity.id}`, label: connection?.established ? `${connection.completed} exact exchanges across ${connection.activeWeeks} weeks` : "Relevant public post · warm up before moving private", detail: opportunity.text, source: connection?.established ? "measured" : "observed", sourceRef: opportunity.id, capturedAt: now }],
+    context: [{ id: `post:${opportunity.id}`, kind: "public_post", source: "observed", text: opportunity.text, postId: opportunity.id, url: `https://x.com/${opportunity.author}/status/${opportunity.id}`, capturedAt: now }],
+  });
+}
+
+async function addDmByHandle(raw: string, why: string): Promise<void> {
+  if (dmAdding) return;
+  const handle = raw.replace(/^@+/, "").trim();
+  if (!handle) { dmAddMsg = "Enter an @handle."; renderDock(); return; }
+  if (why.replace(/\s/g, "").length < 20) { dmAddMsg = "Add a specific ‘why now?’ note (at least 20 characters)."; renderDock(); return; }
+  const owner = dmStore.ownerHandle;
+  dmAdding = true; dmAddMsg = `Checking @${handle}…`; renderDock();
+  let profile: ReturnType<typeof parseUser> = null;
+  try {
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
+    if (dmStore.ownerHandle !== owner) return;
+    if (res?.ok) profile = parseUser(res.data);
+    else if (res?.error && res.error !== "no-twttr-config") { dmAddMsg = `Couldn't refresh @${handle}; saved from your note instead.`; }
+    const now = Date.now();
+    const result = addDmCandidate(dmStore, owner, {
+      handle: profile?.handle || handle, name: profile?.name, userId: profile?.id, followers: profile?.followers, bioSnapshot: profile?.bio,
+      source: "manual", stage: "research", goal: why, intent: "connect",
+      reasons: [{ id: `note:${now}`, label: "Why now", detail: why, source: "user", capturedAt: now }],
+      context: profile?.bio ? [{ id: `profile:${profile.id || now}`, kind: "profile", source: "observed", text: profile.bio, capturedAt: now }] : [],
+    }, now);
+    dmStore = result.store;
+    if (result.error) dmAddMsg = result.error;
+    else if (result.candidate) { dmExpanded.add(result.candidate.handle); dmAddMsg = ""; persistDms(); }
+  } finally { dmAdding = false; renderDock(); }
+}
+
+async function refreshDmContext(handle: string): Promise<void> {
+  if (dmBusy.has(handle) || dmContextRefreshes >= 2) { if (dmContextRefreshes >= 2) toast("Public-context refresh is capped at two people per session."); return; }
+  const owner = dmStore.ownerHandle;
+  dmBusy.add(handle); dmContextRefreshes++; renderDock();
+  try {
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: true });
+    if (dmStore.ownerHandle !== owner) return;
+    if (!res?.ok) { toast(res?.error === "no-twttr-config" ? "Add your RapidAPI key to refresh public context." : "Couldn't refresh public context."); return; }
+    const post = parseTimelineTweets(res.data).filter((t) => t.author.toLowerCase() === handle && !t.isReply && t.text).sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))[0];
+    if (!post) { toast(`No recent original post found for @${handle}.`); return; }
+    dmStore = appendDmContext(dmStore, handle, "public_post", "observed", post.text, Date.now(), { postId: post.id, url: `https://x.com/${handle}/status/${post.id}` });
+    persistDms();
+  } finally { dmBusy.delete(handle); renderDock(); }
+}
+
+async function draftDmFor(candidate: DmCandidate, phase: DmPhase): Promise<void> {
+  const owner = dmStore.ownerHandle;
+  candidate = dmStore.candidates.find((c) => c.handle === candidate.handle) ?? candidate;
+  const check = canDraftDm(candidate, phase, Date.now());
+  if (!check.ok) { toast(check.reason || "Add more context before drafting."); return; }
+  const sendGate = canMarkDmSend(dmStore, phase, Date.now()); if (!sendGate.ok) { toast(sendGate.reason || "Pause DMs for now."); return; }
+  if (dmBusy.has(candidate.handle)) return;
+  dmBusy.add(candidate.handle); renderDock();
+  try {
+    const product = xProducts.find((p) => p.name === candidate.productName);
+    const resp = await send<{ text?: string; error?: string }>({ type: "DRAFT_DM", handle: candidate.handle, intent: candidate.intent, phase, goal: candidate.goal,
+      recipient: { name: candidate.name, bio: candidate.bioSnapshot, followers: candidate.followers }, product,
+      reasons: candidate.reasons, context: candidate.context.filter((x) => !x.removedAt), priorMessages: candidate.touches });
+    if (dmStore.ownerHandle !== owner) return;
+    if (resp?.error) { toast(`Couldn't draft: ${friendlyErr(resp.error)}.`); return; }
+    if (resp?.text) { dmStore = updateDmCandidate(dmStore, candidate.handle, { draft: resp.text, draftPhase: phase }, Date.now()); persistDms(); }
+  } finally { dmBusy.delete(candidate.handle); renderDock(); }
+}
+
+function markCurrentDmSent(handle: string): void {
+  const candidate = dmStore.candidates.find((c) => c.handle === handle);
+  if (!candidate) return;
+  const text = candidate.draft?.trim(), phase = candidate.draftPhase;
+  if (!text || !phase) return;
+  const lifecycle = canDraftDm(candidate, phase, Date.now());
+  if (!lifecycle.ok && !window.confirm(`${lifecycle.reason}\n\nIf you already sent it on X, record that fact anyway?`)) return;
+  const dupe = findDmDuplicate(dmStore, text);
+  if (dupe && !window.confirm(`This is too similar to a recent DM to @${dupe.handle}. Goobi recommends editing it.\n\nIf you already sent it on X, record it anyway?`)) return;
+  const sendGate = canMarkDmSend(dmStore, phase, Date.now());
+  if (!sendGate.ok && !window.confirm(`${sendGate.reason}\n\nIf you already sent it on X, record that fact anyway?`)) return;
+  dmMutate(markDmSent(dmStore, candidate.handle, text, phase, Date.now()));
+}
+
+function saveDmContext(candidate: DmCandidate, kind: DmContextKind, asReply = false): void {
+  const text = (dmContextDrafts.get(candidate.handle) || "").trim();
+  if (!text) { toast("Paste a message or write a note first."); return; }
+  dmStore = asReply ? markDmReplied(dmStore, candidate.handle, text, Date.now()) : appendDmContext(dmStore, candidate.handle, kind, "user", text, Date.now());
+  dmContextDrafts.delete(candidate.handle); persistDms(); renderDock();
+}
 
 /** The ONLY measured-on-our-data factor: how our replies to this handle have actually done.
  *  Neutral (undefined → 1.0 in the ranker) for a new candidate — never imputed. */
@@ -3234,10 +4477,12 @@ async function findTargetPost(handle: string, ambient = false): Promise<void> {
     // degrade ladder is the budget guard); an explicit user click stays intent:true.
     const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: !ambient });
     if (res?.ok) {
-      const newest = parseTimelineTweets(res.data)
+      const originals = parseTimelineTweets(res.data)
         .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
-        .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))[0];
-      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes } : { id: "", text: "", author: handle });
+        .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0));
+      observeOpportunityTweets(originals); // snapshot every returned original; newest may change between polls
+      const newest = originals[0];
+      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes, reposts: newest.reposts, views: newest.views } : { id: "", text: "", author: handle });
       if (!ambient) targetDrafts.delete(handle); // an explicit refresh invalidates the old draft; an ambient poll never touches the user's draft
       // TTL bookkeeping on the PERSISTED target — this is what makes remounts/second tabs free
       // (selectPollBatch skips anything polled within TARGET_POLL_TTL_MS).
@@ -3428,12 +4673,15 @@ function buildTargets(): HTMLElement {
   }
   if (!locked) void pollTargets(); // ambient freshness — ≤5 budgeted polls, per-target 12-min TTL, conserve-mode-aware
   // Live posts float to the top: the whole point is catching the early window without clicking.
+  const targetSortNow = Date.now();
   const trackedSorted = [...targetStore.targets].sort((a, b) => {
     const pa = targetPosts.get(a.handle), pb = targetPosts.get(b.handle);
-    const la = pa?.postedAt && freshnessLabel(pa.postedAt, Date.now())?.live ? 1 : 0;
-    const lb = pb?.postedAt && freshnessLabel(pb.postedAt, Date.now())?.live ? 1 : 0;
+    const la = pa?.postedAt && freshnessLabel(pa.postedAt, targetSortNow)?.live ? 1 : 0;
+    const lb = pb?.postedAt && freshnessLabel(pb.postedAt, targetSortNow)?.live ? 1 : 0;
     if (la !== lb) return lb - la;
-    return (pb?.postedAt ?? 0) - (pa?.postedAt ?? 0);
+    const ta = adjustedTargetTime(pa?.postedAt, pa ? opportunityMomentum(pa.id, targetSortNow) : undefined);
+    const tb = adjustedTargetTime(pb?.postedAt, pb ? opportunityMomentum(pb.id, targetSortNow) : undefined);
+    return tb - ta || (pb?.postedAt ?? 0) - (pa?.postedAt ?? 0) || a.handle.localeCompare(b.handle);
   });
   for (const tg of trackedSorted) {
     const c = document.createElement("div"); c.className = "tg-card";
@@ -3453,6 +4701,7 @@ function buildTargets(): HTMLElement {
     rm.onclick = () => { targetStore = removeTarget(targetStore, tg.handle); targetPosts.delete(tg.handle); targetDrafts.delete(tg.handle); persistTargets(); renderDock(); };
     top.append(rm); c.append(top);
     const st = targetStanding(tg.handle, agg); const stEl = document.createElement("div"); stEl.className = `tg-stand ${st.cls}`; stEl.textContent = st.text; c.append(stEl);
+    const planDmB = document.createElement("button"); planDmB.className = "tg-find dm-from-target"; planDmB.textContent = "Plan a DM"; planDmB.title = "Keep this target and add a separate, draft-only private conversation plan."; planDmB.onclick = () => planDmFromTarget(tg.handle); c.append(planDmB);
 
     const busy = targetBusy.has(tg.handle);
     const post = targetPosts.get(tg.handle);
@@ -3466,6 +4715,13 @@ function buildTargets(): HTMLElement {
       const pv = document.createElement("div"); pv.className = "tg-post"; pv.textContent = post.text; c.append(pv);
       const fl = freshnessLabel(post.postedAt, now);
       if (fl) { const f = document.createElement("div"); f.className = `tg-fresh ${fl.live ? "tg-live" : ""}`; f.textContent = (fl.live ? "● " : "") + fl.text; c.append(f); }
+      const rising = opportunityMomentum(post.id, now);
+      if (rising && rising.score >= 0.25 && !!fl?.live && slotOdds(post.replies) > 0.45) {
+        const mv = document.createElement("div"); mv.className = "tg-fresh tg-live";
+        const pace = rising.viewsPerHour != null ? `${fmtCount(Math.round(rising.viewsPerHour))} views/hr` : `${fmtCount(Math.round(rising.engagementsPerHour ?? 0))} engagements/hr`;
+        mv.textContent = `↗ Picking up · ~${pace}`;
+        mv.title = "Measured from two RapidAPI snapshots. This gives the target a small freshness tie-break only; it does not override fit or reply competition."; c.append(mv);
+      }
       // The FREE competition read (reply count came with the fetch): early = high-impression window.
       const early = earlyLabel(post.replies, post.postedAt, now);
       if (early) { const e = document.createElement("div"); e.className = `tg-fresh ${early.level === "early" ? "tg-live" : ""}`; e.textContent = (early.level === "early" ? "◔ " : "") + early.text; c.append(e); }
@@ -3478,12 +4734,16 @@ function buildTargets(): HTMLElement {
         c.append(ta);
         const warn = replyQualityWarning(draft); if (warn) { const w = document.createElement("div"); w.className = "tg-warn"; w.textContent = warn; c.append(w); }
         const row = document.createElement("div"); row.className = "idea-actions";
-        const openB = document.createElement("button"); openB.className = "idea-open"; openB.textContent = "Open post to reply ↗";
-        openB.onclick = () => window.open(`https://x.com/${tg.handle}/status/${post.id}`, "_blank", "noopener");
-        const copyB = document.createElement("button"); copyB.className = "idea-copy"; copyB.textContent = "Copy";
-        copyB.onclick = async () => { try { await navigator.clipboard.writeText(targetDrafts.get(tg.handle) || ""); copyB.textContent = "Copied ✓"; setTimeout(() => (copyB.textContent = "Copy"), 1400); } catch { /* ignore */ } };
-        row.append(openB, copyB); c.append(row);
-        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = "Draft only — opens the post so you review and reply there. Nothing posts on its own. Goobi can't count replies you post directly on X, so keep your own pace.";
+        const handoff = document.createElement("button"); handoff.className = "idea-open"; handoff.textContent = xReplyInsertOn ? "Like + insert reply in X" : "Copy reply & open post ↗";
+        handoff.onclick = () => {
+          const liveDraft = targetDrafts.get(tg.handle) || "";
+          draftOppId = post.id; draftOppAuthor = tg.handle; lastDraft = null;
+          void runReplyDraftAction(liveDraft);
+        };
+        row.append(handoff); c.append(row);
+        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = xReplyInsertOn
+          ? "Your click tries Like + insert first and updates local activity on success; off-page posts fall back to copy + open. Nothing submits on its own."
+          : "Copy + open mode. You paste, review, and submit on X, then confirm it in Goobi.";
         c.append(foot);
       }
     }
@@ -3493,39 +4753,265 @@ function buildTargets(): HTMLElement {
   return wrap;
 }
 
+function buildDms(): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "ideas dm-workspace";
+  const head = document.createElement("div"); head.className = "ideahead dm-head";
+  const sub = document.createElement("div"); sub.className = "ideasub";
+  sub.textContent = "Turn real public signals into thoughtful private conversations. Goobi finds context and drafts; you decide whom to contact and send every message yourself.";
+  head.append(sub);
+  if (!dmStore.ownerHandle) {
+    const gate = document.createElement("div"); gate.className = "idea-gate";
+    const gt = document.createElement("div"); gt.className = "ideagate-t"; gt.textContent = "Set your X handle first";
+    const gp = document.createElement("div"); gp.className = "ideasub"; gp.textContent = "The DM workspace is isolated per account. Add your handle in the Goobi side panel, then reopen it here.";
+    gate.append(gt, gp); head.append(gate); wrap.append(head); return wrap;
+  }
+
+  const pace = dmPacingStatus(dmStore, Date.now()), due = dueFollowUps(dmStore, Date.now());
+  const visibleCandidates = dmStore.candidates.filter((c) => !c.removedAt);
+  const stats = document.createElement("div"); stats.className = "dm-stats";
+  const stat = (label: string, value: number, hot = false) => { const s = document.createElement("span"); s.className = "dm-stat" + (hot ? " hot" : ""); s.textContent = `${label} ${value}`; return s; };
+  stats.append(stat("Due", due.length, due.length > 0), stat("Ready", visibleCandidates.filter((c) => c.stage === "ready").length), stat("Conversations", visibleCandidates.filter((c) => c.stage === "active").length));
+  const paceEl = document.createElement("span"); paceEl.className = `dm-pace ${pace.level}`; paceEl.textContent = `${pace.firstDay} first · ${pace.totalDay} total today`; paceEl.title = "Based only on messages you marked sent in Goobi."; stats.append(paceEl); head.append(stats);
+
+  // One decision, not a dashboard wall: real conversations and due follow-ups always beat new outreach.
+  const intelligence = deriveDmMetrics(dmStore), nextAction = rankDmNextActions(dmStore, Date.now())[0];
+  if (nextAction) {
+    const next = document.createElement("div"); next.className = "dm-next";
+    const mark = document.createElement("span"); mark.className = "dm-next-mark"; mark.textContent = "NEXT";
+    const copy = document.createElement("div"); copy.className = "dm-next-copy";
+    const label = document.createElement("div"); label.className = "dm-next-label"; label.textContent = nextAction.label;
+    const whyNext = document.createElement("div"); whyNext.className = "dm-next-why"; whyNext.textContent = nextAction.why; copy.append(label, whyNext); next.append(mark, copy);
+    const act = document.createElement("button"); act.className = "idea-open dm-next-act";
+    act.textContent = nextAction.kind === "reply" ? "Reply" : nextAction.kind === "follow_up" ? "Follow up" : nextAction.kind === "draft_first" ? "Draft" : nextAction.kind === "mark_ready" ? "Mark ready" : "Open plan";
+    act.onclick = () => {
+      const candidate = dmStore.candidates.find((c) => c.handle === nextAction.handle); if (!candidate) return;
+      dmExpanded.add(candidate.handle);
+      if (nextAction.kind === "mark_ready") dmMutate(updateDmCandidate(dmStore, candidate.handle, { stage: "ready" }, Date.now()));
+      else if (nextAction.kind === "reply" && !candidate.draft) void draftDmFor(candidate, "reply");
+      else if (nextAction.kind === "follow_up" && !candidate.draft) void draftDmFor(candidate, "follow_up");
+      else if (nextAction.kind === "draft_first" && !candidate.draft) void draftDmFor(candidate, "first");
+      else renderDock();
+    };
+    next.append(act); head.append(next);
+  }
+  const outcomes = document.createElement("div"); outcomes.className = "dm-outcomes";
+  if (intelligence.firstSent) {
+    const rate = document.createElement("b"); rate.textContent = `${Math.round(intelligence.replyRate * 100)}% marked reply rate`;
+    outcomes.append(rate, document.createTextNode(` · ${intelligence.conversations} conversations · ${intelligence.wins} won`));
+  }
+  const learning = document.createElement("span"); learning.className = "dm-learning"; learning.textContent = intelligence.insight; outcomes.append(learning); outcomes.title = "Based only on first messages, replies, and outcomes you manually marked in Goobi. Display-only; this does not change ranking or automate outreach."; head.append(outcomes);
+  if (intelligence.peopleInsight) { const people = document.createElement("span"); people.className = "dm-learning dm-people-learning"; people.textContent = intelligence.peopleInsight; outcomes.append(people); }
+
+  const add = document.createElement("div"); add.className = "dm-add";
+  const handle = document.createElement("input"); handle.className = "idea-steerin"; handle.placeholder = "@handle"; handle.setAttribute("aria-label", "X handle to add");
+  const why = document.createElement("input"); why.className = "idea-steerin dm-why-input"; why.placeholder = "Why now? Add a specific reason…"; why.setAttribute("aria-label", "Why contact this person now");
+  const addB = document.createElement("button"); addB.className = "scanb"; addB.textContent = dmAdding ? "Checking…" : "Add person"; addB.disabled = dmAdding;
+  const doAdd = () => { const h = handle.value, note = why.value; handle.value = ""; why.value = ""; void addDmByHandle(h, note); };
+  addB.onclick = doAdd; why.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
+  add.append(handle, why, addB); head.append(add);
+  if (dmAddMsg) { const msg = document.createElement("div"); msg.className = "dm-message"; msg.textContent = dmAddMsg; head.append(msg); }
+  wrap.append(head);
+
+  const body = document.createElement("div"); body.className = "dl dm-list";
+  const suggestions = dmSuggestions();
+  if (suggestions.length) {
+    const block = document.createElement("section"); block.className = "dm-suggestions";
+    const sh = document.createElement("div"); sh.className = "dm-section-title"; sh.textContent = "People worth considering"; block.append(sh);
+    const note = document.createElement("div"); note.className = "dm-section-sub"; note.textContent = "Warm relationships first; saved targets stay research—not assumed interest."; block.append(note);
+    for (const s of suggestions) {
+      const row = document.createElement("div"); row.className = "dm-suggestion"; row.append(avatarChip(s.handle, s.avatar));
+      const mid = document.createElement("div"); mid.className = "dm-suggestion-main";
+      const name = document.createElement("a"); name.className = "ins-h"; name.textContent = `@${s.handle}`; name.href = `https://x.com/${s.handle}`; name.target = "_blank"; name.rel = "noopener";
+      const reason = document.createElement("div"); reason.className = "ins-meta"; reason.textContent = s.reason; mid.append(name, reason); row.append(mid);
+      const badge = document.createElement("span"); badge.className = `dm-warm ${s.warm ? "warm" : "research"}`; badge.textContent = s.warm ? "Warm" : "Research"; row.append(badge);
+      const plan = document.createElement("button"); plan.className = "scanb dm-plan"; plan.textContent = "+ Plan";
+      plan.onclick = () => { const now = Date.now(); planDm({ handle: s.handle, name: s.name, avatar: s.avatar, followers: s.followers, bioSnapshot: s.bio, source: s.source, intent: s.intent, stage: s.warm ? "ready" : "research", reasons: [{ id: `suggest:${s.handle}`, label: s.reason, detail: s.publicContext, source: s.warm ? "measured" : "observed", capturedAt: now }], context: s.publicContext ? [{ id: `suggest-context:${s.handle}`, kind: "public_post", source: "observed", text: s.publicContext, capturedAt: now }] : [] }); };
+      row.append(plan); block.append(row);
+    }
+    body.append(block);
+  }
+
+  const candidates = sortDmCandidates(dmStore, Date.now());
+  if (!candidates.length) {
+    const empty = document.createElement("div"); empty.className = "idea-empty dm-empty";
+    empty.textContent = suggestions.length ? "Plan someone above, add an @handle, or move a person here from Targets." : "Add an @handle or move someone here from Targets. Start with a real reason—not a list.";
+    body.append(empty);
+  }
+  for (const candidate of candidates) {
+    const open = dmExpanded.has(candidate.handle), isDue = due.some((c) => c.handle === candidate.handle);
+    const card = document.createElement("article"); card.className = `dm-card${open ? " open" : ""}${isDue ? " due" : ""}`;
+    const top = document.createElement("div"); top.className = "dm-card-top"; top.append(avatarChip(candidate.handle, candidate.avatar));
+    const ident = document.createElement("div"); ident.className = "dm-ident";
+    const name = document.createElement("a"); name.className = "ins-h"; name.textContent = `@${candidate.handle}`; name.href = `https://x.com/${candidate.handle}`; name.target = "_blank"; name.rel = "noopener";
+    const meta = document.createElement("div"); meta.className = "ins-meta"; meta.textContent = [DM_INTENT_LABEL[candidate.intent], candidate.followers != null ? `${fmtCount(candidate.followers)} followers` : "", candidate.touches.length ? `${candidate.touches.length} logged touch${candidate.touches.length === 1 ? "" : "es"}` : "No private history yet", dmDueLabel(candidate)].filter(Boolean).join(" · ");
+    ident.append(name, meta); top.append(ident);
+    const stage = document.createElement("span"); stage.className = `dm-stage ${candidate.stage}`; stage.textContent = isDue ? "Follow-up due" : DM_STAGE_LABEL[candidate.stage]; top.append(stage);
+    const toggle = document.createElement("button"); toggle.className = "dm-toggle"; toggle.textContent = open ? "▾" : "▸"; toggle.title = open ? "Collapse" : "Open plan"; toggle.setAttribute("aria-expanded", String(open));
+    toggle.onclick = () => { open ? dmExpanded.delete(candidate.handle) : dmExpanded.add(candidate.handle); renderDock(); }; top.append(toggle); card.append(top);
+
+    const evidence = document.createElement("div"); evidence.className = "dm-evidence";
+    evidence.textContent = candidate.reasons.length ? candidate.reasons.map((r) => `◆ ${r.label}${r.detail ? ` — ${r.detail}` : ""}`).join("\n") : "Add a real reason before drafting."; card.append(evidence);
+    const learnedSignals = candidateDmSignal(candidate, intelligence);
+    if (learnedSignals.length) { const signal = document.createElement("div"); signal.className = "dm-candidate-signal"; signal.textContent = `✓ Your marked history · ${learnedSignals.join(" · ")}`; signal.title = "Observed correlation from your manually marked first messages and replies. It does not prove this person will reply and does not change their rank."; card.append(signal); }
+    if (!open) { body.append(card); continue; }
+
+    const controls = document.createElement("div"); controls.className = "dm-controls";
+    const intent = document.createElement("select"); intent.className = "dm-select"; intent.setAttribute("aria-label", "DM angle");
+    (Object.keys(DM_INTENT_LABEL) as DmIntent[]).forEach((id) => { const o = document.createElement("option"); o.value = id; o.textContent = DM_INTENT_LABEL[id]; o.selected = candidate.intent === id; intent.append(o); });
+    intent.onchange = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { intent: intent.value as DmIntent, draft: undefined, draftPhase: undefined, stage: candidate.stage === "ready" ? "research" : candidate.stage }, Date.now())); controls.append(intent);
+    if (xProducts.length) {
+      const product = document.createElement("select"); product.className = "dm-select dm-product"; product.setAttribute("aria-label", "Product or resource");
+      const none = document.createElement("option"); none.value = ""; none.textContent = "No product/resource"; product.append(none);
+      xProducts.forEach((p) => { const o = document.createElement("option"); o.value = p.name; o.textContent = p.name; o.selected = candidate.productName === p.name; product.append(o); });
+      product.onchange = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { productName: product.value || undefined, draft: undefined, draftPhase: undefined, stage: candidate.stage === "ready" ? "research" : candidate.stage }, Date.now())); controls.append(product);
+    }
+    card.append(controls);
+    const goal = document.createElement("textarea"); goal.className = "dm-goal"; goal.rows = 2; goal.value = candidate.goal || ""; goal.placeholder = "Goal and angle: what would make this conversation useful for both of you?";
+    goal.oninput = () => { dmStore = updateDmCandidate(dmStore, candidate.handle, { goal: goal.value, draft: undefined, draftPhase: undefined, stage: candidate.stage === "ready" ? "research" : candidate.stage }, Date.now()); };
+    goal.onblur = () => { persistDms(); renderDock(); }; card.append(goal);
+
+    const visibleContext = candidate.context.filter((x) => !x.removedAt);
+    if (visibleContext.length) {
+      const context = document.createElement("div"); context.className = "dm-context";
+      const label = document.createElement("div"); label.className = "dm-mini-title"; label.textContent = "Saved context"; context.append(label);
+      for (const item of visibleContext.slice().reverse()) {
+        const row = document.createElement("div"); row.className = "dm-context-row";
+        const copy = document.createElement("div"); copy.className = "dm-context-copy"; copy.textContent = `${item.kind.replace("_", " ")} · ${item.text || item.url || ""}`; row.append(copy);
+        const rm = document.createElement("button"); rm.className = "dm-remove"; rm.textContent = "×"; rm.title = "Remove this saved context"; rm.onclick = () => dmMutate(removeDmContext(dmStore, candidate.handle, item.id, Date.now())); row.append(rm); context.append(row);
+      }
+      card.append(context);
+    }
+
+    if (candidate.draft) {
+      const draft = document.createElement("textarea"); draft.className = "idea-ta dm-draft"; draft.rows = Math.min(9, Math.max(4, Math.ceil(candidate.draft.length / 60))); draft.value = candidate.draft; draft.setAttribute("aria-label", "Editable DM draft");
+      draft.oninput = () => { dmStore = updateDmCandidate(dmStore, candidate.handle, { draft: draft.value }, Date.now()); };
+      draft.onblur = () => persistDms(); card.append(draft);
+      const duplicate = findDmDuplicate(dmStore, candidate.draft);
+      if (duplicate) { const warning = document.createElement("div"); warning.className = "dm-warning"; warning.textContent = `Too similar to a recent DM to @${duplicate.handle}. Add something specific before marking sent.`; card.append(warning); }
+      const actions = document.createElement("div"); actions.className = "dm-actions";
+      const draftLifecycle = candidate.draftPhase ? canDraftDm(candidate, candidate.draftPhase, Date.now()) : { ok: false, reason: "Regenerate this draft." };
+      const copy = document.createElement("button"); copy.className = "idea-copy"; copy.textContent = "Copy"; copy.disabled = !!duplicate || !draftLifecycle.ok; copy.title = duplicate ? "Edit this draft until it is specific enough to differ from recent DMs." : draftLifecycle.reason || "Copy this draft"; copy.onclick = async () => { try { const live = dmStore.candidates.find((c) => c.handle === candidate.handle); const gate = live?.draftPhase ? canDraftDm(live, live.draftPhase, Date.now()) : { ok: false }; if (!live?.draft || !gate.ok || findDmDuplicate(dmStore, live.draft)) { toast("This draft is stale or too similar. Regenerate or edit it before copying."); return; } await navigator.clipboard.writeText(live.draft); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1400); } catch { /* ignore */ } };
+      const openProfile = document.createElement("button"); openProfile.className = "idea-copy"; openProfile.textContent = "Open profile ↗"; openProfile.onclick = () => window.open(`https://x.com/${candidate.handle}`, "_blank", "noopener");
+      const sent = document.createElement("button"); sent.className = "idea-open"; sent.textContent = "Mark sent"; sent.title = "Manual record only—Goobi cannot verify DM delivery or reads."; sent.onclick = () => markCurrentDmSent(candidate.handle);
+      actions.append(copy, openProfile, sent); card.append(actions);
+    } else {
+      const actions = document.createElement("div"); actions.className = "dm-actions";
+      const phase: DmPhase = candidate.stage === "active" ? "reply" : candidate.stage === "waiting" ? "follow_up" : "first";
+      const draft = document.createElement("button"); draft.className = "idea-open"; draft.textContent = dmBusy.has(candidate.handle) ? "Drafting…" : candidate.stage === "research" || candidate.stage === "warming" ? "Mark ready first" : candidate.stage === "closed" || candidate.stage === "won" ? "Reopen first" : phase === "follow_up" ? "Draft follow-up" : phase === "reply" ? "Draft reply" : "Draft first DM"; draft.disabled = dmBusy.has(candidate.handle) || (phase === "follow_up" && !isDue) || candidate.stage === "research" || candidate.stage === "warming" || candidate.stage === "closed" || candidate.stage === "won"; draft.onclick = () => void draftDmFor(candidate, phase); actions.append(draft);
+      const profile = document.createElement("button"); profile.className = "idea-copy"; profile.textContent = "Open profile ↗"; profile.onclick = () => window.open(`https://x.com/${candidate.handle}`, "_blank", "noopener"); actions.append(profile); card.append(actions);
+    }
+
+    const secondary = document.createElement("div"); secondary.className = "dm-secondary";
+    if (candidate.stage === "research" || candidate.stage === "warming") {
+      const ready = document.createElement("button"); ready.className = "idea-pin"; ready.textContent = "Mark ready"; ready.onclick = () => { const live = dmStore.candidates.find((c) => c.handle === candidate.handle) ?? candidate; const gate = canMoveDmReady(live); if (!gate.ok) { toast(gate.reason || "Add specific context first."); return; } dmMutate(updateDmCandidate(dmStore, candidate.handle, { stage: "ready", draft: undefined, draftPhase: undefined }, Date.now())); }; secondary.append(ready);
+    }
+    if (candidate.stage === "waiting") {
+      const snooze = document.createElement("button"); snooze.className = "idea-pin"; snooze.textContent = "Snooze 7d"; snooze.onclick = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { snoozedUntil: Date.now() + 7 * DAY_MS, draft: undefined, draftPhase: undefined }, Date.now())); secondary.append(snooze);
+    }
+    if (candidate.stage === "active") {
+      const won = document.createElement("button"); won.className = "idea-pin"; won.textContent = "Mark won"; won.onclick = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { stage: "won", draft: undefined, draftPhase: undefined, dueAt: undefined, snoozedUntil: undefined }, Date.now())); secondary.append(won);
+    }
+    if (candidate.stage === "won" || candidate.stage === "closed") {
+      const reopen = document.createElement("button"); reopen.className = "idea-pin"; reopen.textContent = "Reopen"; reopen.onclick = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { stage: "research", draft: undefined, draftPhase: undefined }, Date.now())); secondary.append(reopen);
+    } else {
+      const close = document.createElement("button"); close.className = "idea-pin"; close.textContent = "Close"; close.onclick = () => dmMutate(updateDmCandidate(dmStore, candidate.handle, { stage: "closed", draft: undefined, draftPhase: undefined, dueAt: undefined, snoozedUntil: undefined }, Date.now())); secondary.append(close);
+    }
+    const refresh = document.createElement("button"); refresh.className = "idea-pin"; refresh.textContent = dmBusy.has(candidate.handle) ? "Refreshing…" : "Refresh public context"; refresh.disabled = dmBusy.has(candidate.handle) || dmContextRefreshes >= 2; refresh.onclick = () => void refreshDmContext(candidate.handle); secondary.append(refresh);
+    const remove = document.createElement("button"); remove.className = "idea-pin idea-delete"; remove.textContent = "Remove"; remove.onclick = () => { if (window.confirm(`Remove @${candidate.handle} and its locally saved DM context?`)) dmMutate(removeDmCandidate(dmStore, candidate.handle, Date.now())); }; secondary.append(remove); card.append(secondary);
+
+    const capture = document.createElement("div"); capture.className = "dm-capture";
+    const captureInput = document.createElement("textarea"); captureInput.className = "dm-goal"; captureInput.rows = 2; captureInput.placeholder = "Paste what they said, or add a private conversation note…"; captureInput.value = dmContextDrafts.get(candidate.handle) || ""; captureInput.oninput = () => dmContextDrafts.set(candidate.handle, captureInput.value); capture.append(captureInput);
+    const captureActions = document.createElement("div"); captureActions.className = "dm-actions compact";
+    const reply = document.createElement("button"); reply.className = "idea-copy"; reply.textContent = "They replied"; reply.onclick = () => saveDmContext(candidate, "message", true);
+    const noteB = document.createElement("button"); noteB.className = "idea-copy"; noteB.textContent = "Save note"; noteB.onclick = () => saveDmContext(candidate, "note"); captureActions.append(reply, noteB); capture.append(captureActions); card.append(capture);
+
+    if (candidate.touches.length) {
+      const timeline = document.createElement("div"); timeline.className = "dm-timeline";
+      const tl = document.createElement("div"); tl.className = "dm-mini-title"; tl.textContent = "Conversation history (you marked)"; timeline.append(tl);
+      for (const touch of candidate.touches.slice().reverse()) {
+        const row = document.createElement("div"); row.className = `dm-touch ${touch.direction}`;
+        const copy = document.createElement("span"); copy.textContent = `${touch.direction === "outbound" ? "You" : "Them"} · ${touch.phase.replace("_", " ")} · ${dmAge(touch.at)}${touch.text ? ` — ${touch.text}` : " · text removed"}`; row.append(copy);
+        if (touch.text) { const redact = document.createElement("button"); redact.className = "dm-remove"; redact.textContent = "×"; redact.title = "Remove the saved private message text; keep the manual event marker"; redact.onclick = () => dmMutate(redactDmTouch(dmStore, candidate.handle, touch.id, Date.now())); row.append(redact); }
+        timeline.append(row);
+      }
+      card.append(timeline);
+    }
+    const disclosure = document.createElement("div"); disclosure.className = "dm-disclosure"; disclosure.textContent = `Manual record · ${followUpCount(candidate)}/1 unanswered follow-up used. Private context stays in Chrome local storage; only the most recent 8 visible context items and 12 visible message texts go to Claude when you click Draft.`; card.append(disclosure);
+    body.append(card);
+  }
+  const foot = document.createElement("div"); foot.className = "dm-footer"; foot.textContent = "Goobi never sends DMs automatically. X delivery, reads, and replies are not verified; the pipeline reflects what you mark."; body.append(foot);
+  wrap.append(body); return wrap;
+}
+
 function buildIdeas(): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "ideas";
-  // No-niche gate — without it, Generate is a no-op. Make that explicit, not a silent toast.
-  if (!xNiche.trim()) {
-    const head = document.createElement("div"); head.className = "ideahead";
-    const gate = document.createElement("div"); gate.className = "idea-gate";
-    const t = document.createElement("div"); t.className = "ideagate-t"; t.textContent = "Tell Goobi your niche first";
-    const p = document.createElement("div"); p.className = "ideasub"; p.textContent = "That's how it knows whose posts to learn from. Open the Goobi side panel and set “What's worth replying to / your niche.”"; p.style.marginTop = "8px";
-    gate.append(t, p); head.append(gate); wrap.append(head);
-    return wrap;
-  }
+  const nicheReady = !!xNiche.trim();
   const working = workingIdeas(); const posted = postedIdeas();
+  const seedDrafts = working.filter((i) => i.origin === "seed");
+  const suggestions = working.filter((i) => i.origin !== "seed");
+
+  // Primary creation path: one thought in, one editable post out.
+  const compose = document.createElement("section"); compose.className = "idea-compose"; compose.setAttribute("aria-labelledby", "rough-idea-title");
+  const composeTop = document.createElement("div"); composeTop.className = "idea-compose-top";
+  const composeCopy = document.createElement("div");
+  const composeTitle = document.createElement("div"); composeTitle.className = "idea-compose-title"; composeTitle.id = "rough-idea-title"; composeTitle.textContent = "Start with a rough idea";
+  const composeSub = document.createElement("div"); composeSub.className = "idea-compose-sub"; composeSub.textContent = "Goobi will shape the thought in your voice. You review every word.";
+  composeCopy.append(composeTitle, composeSub); composeTop.append(composeCopy); compose.append(composeTop);
+  const rough = document.createElement("textarea"); rough.className = "idea-rough"; rough.rows = 3; rough.value = roughIdea;
+  rough.placeholder = "e.g. Shipping faster got easier when I stopped treating every feature like a launch…";
+  rough.setAttribute("aria-label", "Rough post idea"); rough.disabled = roughBusy;
+  rough.oninput = () => { roughIdea = rough.value; polish.disabled = !rough.value.trim() || roughBusy; roughCount.textContent = `${rough.value.trim().length} characters`; };
+  rough.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && rough.value.trim() && !roughBusy) { e.preventDefault(); roughIdea = rough.value; void polishRoughIdea(); } };
+  const composeActions = document.createElement("div"); composeActions.className = "idea-compose-actions";
+  const roughCount = document.createElement("span"); roughCount.className = "idea-rough-count"; roughCount.textContent = `${roughIdea.trim().length} characters`;
+  const polish = document.createElement("button"); polish.className = "idea-polish"; polish.textContent = roughBusy ? "Polishing…" : "Polish into a post"; polish.disabled = !roughIdea.trim() || roughBusy; polish.title = "Polish this idea (⌘/Ctrl + Enter)";
+  polish.onclick = () => { roughIdea = rough.value; void polishRoughIdea(); };
+  composeActions.append(roughCount, polish); compose.append(rough, composeActions);
+  if (roughBusy) { const busy = document.createElement("div"); busy.className = "idea-compose-status"; busy.setAttribute("role", "status"); busy.textContent = "Shaping one editable post from your thought…"; compose.append(busy); }
+  if (roughError) { const er = document.createElement("div"); er.className = "idea-compose-error"; er.setAttribute("role", "alert"); er.textContent = roughError; compose.append(er); }
+  wrap.append(compose);
+
+  if (seedDrafts.length) {
+    const seeds = document.createElement("section"); seeds.className = "idea-seeds";
+    const st = document.createElement("div"); st.className = "idea-section-title"; st.textContent = `Your drafts (${seedDrafts.length})`; seeds.append(st);
+    for (const idea of seedDrafts) seeds.append(ideaCard(idea));
+    wrap.append(seeds);
+  }
+
   const head = document.createElement("div"); head.className = "ideahead";
+  const activeStrategy = activeGrowthExperiment(growthStore);
+  if (activeStrategy) {
+    const strategy = growthStrategy(activeStrategy.strategyId);
+    const test = document.createElement("div"); test.className = "idea-trend";
+    test.textContent = `14-day test · ${strategy.label}: 3 ideas follow this bet; 2 stay exploratory.`;
+    test.title = `Active hypothesis: ${strategy.hypothesis}`;
+    head.append(test);
+  }
   // Row 1 — streak (left) + the Generate action anchored top-right (no longer buried mid-stack).
   const top = document.createElement("div"); top.className = "ideahead-top";
   const left = document.createElement("div");
   if (posted.length) {
     left.className = "idea-streak";
     const streak = postedStreak();
-    left.append(document.createTextNode(`Shipped ${posted.length}`));
+    left.append(document.createTextNode(`Posted ${posted.length}`));
     if (streak) { left.append(document.createTextNode(" · ")); const b = document.createElement("b"); b.textContent = `🔥 ${streak}-day`; left.append(b); }
   }
+  const sectionTitle = document.createElement("div"); sectionTitle.className = "idea-section-title"; sectionTitle.textContent = `Suggestions (${suggestions.length})`;
+  left.prepend(sectionTitle);
   const gen = document.createElement("button"); gen.className = "scanb";
-  gen.textContent = ideasLoading ? "Thinking…" : working.length ? "+ New batch" : "✨ Generate ideas";
-  gen.disabled = ideasLoading; gen.onclick = () => void generateIdeas();
-  const car = document.createElement("button"); car.className = "iconb"; car.textContent = ideasInsightsOpen ? "▾" : "▸";
-  car.title = ideasInsightsOpen ? "Hide batch insights (show more ideas)" : "Show batch insights (shapes, measured signal, biggest gainer)";
-  car.setAttribute("aria-label", ideasInsightsOpen ? "Hide insights" : "Show insights");
-  car.onclick = () => { ideasInsightsOpen = !ideasInsightsOpen; renderDock(); };
-  const rgrp = document.createElement("div"); rgrp.style.cssText = "display:flex;align-items:center;gap:6px"; rgrp.append(gen, car);
+  gen.textContent = ideasLoading ? "Finding…" : "Generate 5";
+  gen.disabled = ideasLoading || !nicheReady; gen.title = nicheReady ? "Find fresh post suggestions from what's working in your niche" : "Set your niche in the Goobi panel first"; gen.onclick = () => void generateIdeas();
+  const pinnedSuggestions = suggestions.filter((i) => i.pinned).length;
+  const clear = document.createElement("button"); clear.className = "idea-clear" + (clearIdeasArmed ? " armed" : "");
+  clear.textContent = clearIdeasArmed ? `Clear ${suggestions.length}${pinnedSuggestions ? ` (${pinnedSuggestions} pinned)` : ""}?` : "Clear suggestions";
+  clear.title = "Clear generated suggestions only; your rough-idea drafts and posted history are preserved";
+  clear.disabled = !suggestions.length || ideasLoading; clear.onclick = clearWorkingIdeas;
+  const undoClear = document.createElement("button"); undoClear.className = "idea-clear"; undoClear.textContent = "Undo clear"; undoClear.hidden = !clearedSuggestions.length; undoClear.onclick = undoClearSuggestions;
+  const rgrp = document.createElement("div"); rgrp.className = "idea-head-actions"; rgrp.append(gen, clear, undoClear);
   top.append(left, rgrp); head.append(top);
+  if (!nicheReady) { const n = document.createElement("div"); n.className = "idea-niche-note"; n.textContent = "Set your niche in the Goobi panel to generate suggestions. You can still polish your own idea above."; head.append(n); }
   // Batch call-out summary — always visible so you triage at a glance ("2 strong to ship, 1 weak to fix").
-  const graded = working.filter((i) => i.grade);
+  const graded = suggestions.filter((i) => i.grade);
   if (graded.length) {
     const counts: Record<"strong" | "ok" | "weak", number> = { strong: 0, ok: 0, weak: 0 };
     for (const i of graded) counts[i.grade!.tier]++;
@@ -3544,10 +5030,17 @@ function buildIdeas(): HTMLElement {
   sub.textContent = "Remixes your niche's winning patterns into your voice — you review and post." + (myFollowers > 0 ? ` · tuned to ~${fmtCount(myFollowers)} followers` : "");
   head.append(sub);
   // Row 3 — the batch's shapes (MODEL-picked patterns; distinct from the measured line below).
-  const pats = Array.from(new Set(working.map((i) => i.pattern).filter(Boolean))).slice(0, 3);
+  const pats = Array.from(new Set(suggestions.map((i) => i.pattern).filter(Boolean))).slice(0, 3);
   if (pats.length) { const tr = document.createElement("div"); tr.className = "idea-trend"; tr.append(document.createTextNode("Batch shapes (model-picked): ")); const b = document.createElement("b"); b.textContent = pats.join(" · "); tr.append(b); head.append(tr); }
-  // Row 4 — the MEASURED shape signal (settled own posts, one metric, min-N; silent below the gates).
-  const msl = measuredShapeLine();
+  // Row 4 — exact idea outcomes take precedence; until enough settle, use all own posts as context.
+  const ideaMsl = measuredIdeaShapeLine();
+  if (ideaMsl) {
+    const tr = document.createElement("div"); tr.className = "idea-trend";
+    tr.textContent = `✓ Verified idea results: ${ideaMsl.line.split("their ").join("your ")}`;
+    tr.title = `Only drafts uniquely matched to real X posts, settled >48h, using X-reported ${ideaMsl.metric}. This is the signal future idea batches receive.`;
+    head.append(tr);
+  }
+  const msl = ideaMsl ? null : measuredShapeLine();
   if (msl) {
     const tr = document.createElement("div"); tr.className = "idea-trend";
     tr.textContent = `📐 Measured: ${msl.line.split("their ").join("your ")}`;
@@ -3572,30 +5065,167 @@ function buildIdeas(): HTMLElement {
   } // end ideasInsightsOpen — the collapsed insight rows
   wrap.append(head);
 
-  const body = document.createElement("div"); body.className = "dl";
+  const body = document.createElement("div"); body.className = "dl idea-list";
   if (ideasLoading) {
     const stage = document.createElement("div"); stage.className = "idea-load"; // Goobi dances here (mounted after the dock is in the DOM)
     const cap = document.createElement("div"); cap.className = "idea-loadcap"; cap.textContent = "Reading the top posts in your niche, then writing in your voice…";
     body.append(stage, cap);
-    for (const idea of working) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // your queue stays visible through a generate
+    for (const idea of suggestions) { const card = ideaCard(idea); card.classList.add("dimmed"); body.append(card); } // your queue stays visible through a generate
   } else if (ideasError) {
     const err = document.createElement("div"); err.className = "idea-err";
     const et = document.createElement("div"); et.className = "idea-err-t"; et.textContent = ideasError; err.append(et);
     const retry = document.createElement("button"); retry.className = "scanb"; retry.textContent = "Try again"; retry.onclick = () => void generateIdeas(); err.append(retry);
     body.append(err);
+    for (const idea of suggestions) body.append(ideaCard(idea));
   } else {
-    if (!working.length && !posted.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Tap Generate — Goobi finds what's working in your niche and remixes it into posts you can publish."; body.append(e); }
-    else if (!working.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = "Queue's clear — nice. Tap “+ New batch” for fresh ideas."; body.append(e); }
-    for (const idea of working) body.append(ideaCard(idea));
+    if (!suggestions.length) { const e = document.createElement("div"); e.className = "idea-empty"; e.textContent = nicheReady ? "No suggestions yet. Generate five when you want fresh angles from your niche." : "Set your niche in the Goobi panel when you want generated suggestions."; body.append(e); }
+    for (const idea of suggestions) body.append(ideaCard(idea));
     // Shipped — collapsed.
     if (posted.length) {
-      const tog = document.createElement("div"); tog.className = "idea-shiptog"; tog.textContent = `${shippedOpen ? "▾" : "▸"} Shipped (${posted.length})`;
+      const tog = document.createElement("div"); tog.className = "idea-shiptog"; tog.textContent = `${shippedOpen ? "▾" : "▸"} Posted history (${posted.length})`;
       tog.onclick = () => { shippedOpen = !shippedOpen; renderDock(); };
       body.append(tog);
       if (shippedOpen) for (const idea of posted) body.append(ideaCard(idea, { shipped: true }));
     }
   }
   wrap.append(body);
+  return wrap;
+}
+
+/* ---------- Growth loop: one account-level strategy bet at a time ---------- */
+
+function growthDecisionLabel(decision: ReturnType<typeof evaluateGrowthExperiment>["decision"]): string {
+  return decision === "double-down" ? "Double down" : decision === "switch" ? "Shake it up" : decision === "tighten" ? "Tighten one lever" : "Keep collecting";
+}
+function growthExecutionInsights(experimentId: string, now: number): string[] {
+  const lines: string[] = [];
+  const fl = learnFeatures(replyLog.sent.filter((r) => r.growthExperimentId === experimentId), now);
+  const strongAngle = fl.angles.find((a) => a.rel >= 1.15);
+  const weakAngle = [...fl.angles].reverse().find((a) => a.rel <= 0.85);
+  if (strongAngle) lines.push(`${catLabel(strongAngle.angle)} replies ran at ${strongAngle.rel.toFixed(1)}× this test's average (n=${strongAngle.n})`);
+  if (weakAngle && weakAngle.angle !== strongAngle?.angle) lines.push(`${catLabel(weakAngle.angle)} replies ran at ${weakAngle.rel.toFixed(1)}× this test's average (n=${weakAngle.n})`);
+  const ideaPosts = ideaQueue.filter((i) => i.growthExperimentId === experimentId && i.publication).map((i) => ({ text: i.text, postedAt: i.publication!.postedAt ?? i.postedAt, views: i.publication!.views, likes: i.publication!.likes, reposts: i.publication!.reposts }));
+  const shapes = shapePerformance(ideaPosts, now);
+  const strongShape = shapes?.shapes.find((s) => s.rel >= 1.15);
+  if (strongShape) lines.push(`${strongShape.shape} posts ran at ${strongShape.rel.toFixed(1)}× this test's median (${shapes!.metric}, n=${strongShape.n})`);
+  return lines.slice(0, 2);
+}
+function buildGrowth(): HTMLElement {
+  const now = Date.now();
+  const wrap = document.createElement("div"); wrap.className = "growth";
+  const current = summarizeGrowthWindow(growthStore, now - GROWTH_WINDOW_DAYS * DAY_MS, now);
+  const prior = summarizeGrowthWindow(growthStore, now - 2 * GROWTH_WINDOW_DAYS * DAY_MS, now - GROWTH_WINDOW_DAYS * DAY_MS - 1);
+  const currentProfileState = profileStateForCurrentOwner();
+  const findings = profileCheck(currentProfileState, ownStats ?? []);
+  const profileNeedsWork = findings.some((f) => f.level === "act");
+  const active = activeGrowthExperiment(growthStore);
+
+  const hero = document.createElement("section"); hero.className = "gx-hero";
+  const kick = document.createElement("div"); kick.className = "gx-kicker"; kick.textContent = "Your profile · last 14 days";
+  const title = document.createElement("div"); title.className = "gx-title";
+  title.textContent = myFollowers ? `${fmtCount(myFollowers)} followers${current.followerDelta != null ? ` · ${current.followerDelta >= 0 ? "+" : ""}${current.followerDelta}` : ""}` : "Growth tracking is warming up";
+  const copy = document.createElement("div"); copy.className = "gx-copy";
+  copy.textContent = "Goobi compares one strategic bet with the previous window. Profile clicks are not exposed, so follower and post changes are reported as co-movement, never attribution. Growth history stays local to this browser and X account.";
+  const metrics = document.createElement("div"); metrics.className = "gx-metrics";
+  const metric = (value: string, label: string, tip: string) => { const m = document.createElement("div"); m.className = "gx-metric"; m.title = tip; const b = document.createElement("b"); b.textContent = value; const s = document.createElement("span"); s.textContent = label; m.append(b, s); return m; };
+  metrics.append(
+    metric(current.followerDelta == null ? "—" : `${current.followerDelta >= 0 ? "+" : ""}${current.followerDelta}`, "followers", "First vs latest observed follower snapshot in this 14-day window."),
+    metric(current.viewsPerPost == null ? "—" : fmtCount(Math.round(current.viewsPerPost))!, "views / post", `${current.measuredPosts} measured post${current.measuredPosts === 1 ? "" : "s"}; prior window ${prior.viewsPerPost == null ? "unavailable" : `~${fmtCount(Math.round(prior.viewsPerPost))}`}.`),
+    metric(current.engagementPerPost == null ? "—" : current.engagementPerPost.toFixed(1), "eng / post", `${current.posts} post${current.posts === 1 ? "" : "s"} captured by their actual publish dates.`),
+  );
+  hero.append(kick, title, copy, metrics); wrap.append(hero);
+
+  const bet = document.createElement("section"); bet.className = "gx-card";
+  if (active) {
+    const strategy = growthStrategy(active.strategyId);
+    const elapsed = Math.max(1, Math.min(GROWTH_WINDOW_DAYS, Math.ceil((now - active.startedAt) / DAY_MS)));
+    const evaluation = evaluateGrowthExperiment(growthStore, active, growthActions(), now);
+    const head = document.createElement("div"); head.className = "gx-head";
+    const h3 = document.createElement("h3"); h3.textContent = strategy.label;
+    const day = document.createElement("span"); day.className = "gx-day"; day.textContent = `Day ${elapsed} / ${GROWTH_WINDOW_DAYS}`; head.append(h3, day);
+    const hyp = document.createElement("div"); hyp.className = "gx-hyp"; hyp.textContent = strategy.hypothesis;
+    const play = document.createElement("div"); play.className = "gx-play";
+    [strategy.profileBrief, strategy.postBrief, strategy.replyBrief].forEach((line) => { const d = document.createElement("div"); d.textContent = line; play.append(d); });
+    const read = document.createElement("div"); read.className = "gx-read";
+    const rb = document.createElement("b"); rb.textContent = `${growthDecisionLabel(evaluation.decision)} · ${evaluation.headline}`; read.append(rb);
+    const adherence = document.createElement("div"); adherence.textContent = `Execution recorded: ${evaluation.taggedPosts} on-strategy post${evaluation.taggedPosts === 1 ? "" : "s"} · ${evaluation.taggedReplies} confirmed repl${evaluation.taggedReplies === 1 ? "y" : "ies"}`; read.append(adherence);
+    for (const reason of evaluation.reasons.filter((r) => !r.startsWith("Execution recorded:")).slice(0, 2)) { const d = document.createElement("div"); d.textContent = reason; read.append(d); }
+    for (const signal of growthExecutionInsights(active.id, now)) { const d = document.createElement("div"); d.textContent = `Angle signal: ${signal}`; d.title = "Measured within this strategy window, shrunk and sample-gated. Correlation, not causation."; read.append(d); }
+    const actions = document.createElement("div"); actions.className = "gx-actions";
+    const endingEarly = now < active.endsAt;
+    const endArmed = endingEarly && Date.now() < growthEndArmedUntil;
+    const end = document.createElement("button"); end.className = "gx-btn secondary"; end.textContent = endingEarly ? (endArmed ? "End early?" : "End test") : "Review window";
+    end.title = "Freeze this experiment's comparison. Early endings may stay 'keep collecting' when the sample is thin.";
+    end.onclick = () => {
+      if (endingEarly && Date.now() >= growthEndArmedUntil) {
+        growthEndArmedUntil = Date.now() + 4_000;
+        renderDock();
+        window.setTimeout(() => { if (Date.now() >= growthEndArmedUntil && dockView === "growth") renderDock(); }, 4_100);
+        return;
+      }
+      growthEndArmedUntil = 0;
+      growthStore = finishGrowthExperiment(growthStore, active.id, growthActions(), Date.now());
+      void persistGrowth(); renderDock();
+    };
+    const ideas = document.createElement("button"); ideas.className = "gx-btn"; ideas.textContent = "Make on-strategy ideas"; ideas.onclick = () => { dockView = "ideas"; renderDock(); };
+    actions.append(end, ideas); bet.append(head, hyp, play, read, actions);
+  } else {
+    const recommended = recommendedGrowthStrategy(growthStore, profileNeedsWork);
+    const chosen = growthStrategy(growthStrategyChoice ?? recommended.id);
+    const head = document.createElement("div"); head.className = "gx-head";
+    const h3 = document.createElement("h3"); h3.textContent = "Next 14-day bet";
+    const rec = document.createElement("span"); rec.className = "gx-day"; rec.textContent = chosen.id === recommended.id ? "Recommended" : "Your choice"; head.append(h3, rec);
+    const hyp = document.createElement("div"); hyp.className = "gx-hyp"; hyp.textContent = `${chosen.label}: ${chosen.hypothesis}`;
+    const play = document.createElement("div"); play.className = "gx-play";
+    [chosen.profileBrief, chosen.postBrief, chosen.replyBrief].forEach((line) => { const d = document.createElement("div"); d.textContent = line; play.append(d); });
+    const actions = document.createElement("div"); actions.className = "gx-actions";
+    const select = document.createElement("select"); select.className = "gx-select"; select.setAttribute("aria-label", "Growth strategy to test");
+    for (const s of GROWTH_STRATEGIES) { const o = document.createElement("option"); o.value = s.id; o.textContent = s.label; o.selected = s.id === chosen.id; select.append(o); }
+    select.onchange = () => { growthStrategyChoice = select.value as GrowthStrategyId; renderDock(); };
+    const start = document.createElement("button"); start.className = "gx-btn"; start.textContent = "Start test";
+    start.disabled = !!growthOwnerProblem || !growthStore.ownerHandle;
+    start.title = start.disabled ? growthOwnerProblem || "Goobi needs your X account before it can save this test." : "Start this 14-day strategy test.";
+    start.onclick = () => {
+      captureGrowthData();
+      const result = startGrowthExperiment(growthStore, chosen.id, Date.now());
+      if (result.error) { toast(result.error); return; }
+      growthStore = result.store; growthStrategyChoice = undefined; void persistGrowth(); renderDock();
+    };
+    actions.append(select, start); bet.append(head, hyp, play, actions);
+    if (growthOwnerProblem) { const setup = document.createElement("div"); setup.className = "gx-find act"; setup.textContent = growthOwnerProblem; bet.append(setup); }
+  }
+  wrap.append(bet);
+
+  const profile = document.createElement("section"); profile.className = "gx-card";
+  const ph = document.createElement("div"); ph.className = "gx-head"; const ptitle = document.createElement("h3"); ptitle.textContent = "What makes the profile click";
+  const open = document.createElement("button"); open.className = "gx-btn secondary"; open.textContent = "Open profile ↗"; open.onclick = () => { const h = growthStore.ownerHandle || selfHandle; if (h) window.open(`https://x.com/${h}`, "_blank", "noopener"); };
+  ph.append(ptitle, open); profile.append(ph);
+  const core = document.createElement("div"); core.className = "gx-copy"; core.textContent = "Specific competence earns curiosity. A clear promise, believable proof, and a strong pin give that curiosity a reason to follow."; profile.append(core);
+  if (!currentProfileState) { const f = document.createElement("div"); f.className = "gx-find act"; f.textContent = "Visit your own X profile once so Goobi can inspect this account's conversion surface locally."; profile.append(f); }
+  else if (!findings.length) { const f = document.createElement("div"); f.className = "gx-find good"; f.textContent = "No measurable profile blocker found. Test the content promise next."; profile.append(f); }
+  else for (const finding of findings.slice(0, 3)) { const f = document.createElement("div"); f.className = `gx-find ${finding.level}`; f.textContent = `${finding.level === "good" ? "✓" : "→"} ${finding.text}`; f.title = finding.why; profile.append(f); }
+  wrap.append(profile);
+
+  const history = growthStore.experiments.filter((e) => e.status === "completed").slice(0, 3);
+  if (history.length) {
+    const card = document.createElement("section"); card.className = "gx-card";
+    const h = document.createElement("div"); h.className = "gx-head"; const ht = document.createElement("h3"); ht.textContent = "What Goobi learned"; h.append(ht); card.append(h);
+    const rows = document.createElement("div"); rows.className = "gx-history";
+    for (const exp of history) {
+      const row = document.createElement("div"); row.className = "gx-hrow"; row.tabIndex = 0;
+      const top = document.createElement("div"); top.className = "gx-hmain";
+      const s = document.createElement("b"); s.textContent = growthStrategy(exp.strategyId).label;
+      const result = document.createElement("span"); result.textContent = exp.outcome ? growthDecisionLabel(exp.outcome.decision) : "Not enough data"; top.append(s, result);
+      const meta = document.createElement("div"); meta.className = "gx-hmeta";
+      const ended = exp.endedAt ?? exp.endsAt;
+      const evidence = exp.outcome ? `${exp.outcome.taggedPosts} posts · ${exp.outcome.taggedReplies} replies` : "No settled evidence";
+      meta.textContent = `${new Date(exp.startedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}–${new Date(ended).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${evidence}${exp.outcome?.reasons[0] ? ` · ${exp.outcome.reasons[0]}` : ""}`;
+      row.title = [...(exp.outcome?.reasons ?? []), ...growthExecutionInsights(exp.id, ended)].join(" · ") || "The window ended before a comparable result settled.";
+      row.setAttribute("aria-label", `${s.textContent}: ${result.textContent}. ${meta.textContent}`);
+      row.append(top, meta); rows.append(row);
+    }
+    card.append(rows); wrap.append(card);
+  }
   return wrap;
 }
 
@@ -3627,6 +5257,8 @@ function renderDock() {
       // pass reads a warm cache (no double-bill), then the once-a-day trend + measure-pass.
       void refreshOwnStats().catch(() => {}).then(() => { if (!invalidated) void maybeRunDailyLearn(); });
       void ensureTargetOwner(); // reset the target list if the account changed
+      void ensureDmOwner(); // load the signed-in account's isolated DM workspace
+      void ensureGrowthOwner(); // refresh account-level experiment snapshots + settle due windows
       renderDock();
     };
     const gh = document.createElement("span"); gh.className = "lgoobi"; l.append(gh); // Goobi IS the launcher icon
@@ -3654,35 +5286,72 @@ function renderDock() {
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
   }
-  const d = document.createElement("div"); d.className = "d" + (dockView === "ideas" || dockView === "targets" ? " wide" : "");
+  const d = document.createElement("div"); d.className = "d" + (dockView === "comments" || dockView === "ideas" || dockView === "targets" || dockView === "dms" || dockView === "growth" ? " wide" : "");
   const gstat = goobiStatus();
-  const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to play`; gh.onclick = () => togglePlay();
+  const gh = document.createElement("div"); gh.className = "dhgoobi"; gh.title = `${gstat.line} — tap Goobi to play`; gh.setAttribute("role", "button"); gh.tabIndex = 0; gh.setAttribute("aria-label", `${gstat.line}. Open Goobi's playground`); gh.onclick = () => togglePlay();
+  gh.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); togglePlay(); } };
   const h = document.createElement("div"); h.className = "dh";
   const t = document.createElement("div"); t.className = "dt";
   const today = repliesToday();
+  const now = Date.now();
+  const commentQueue = rankThreads(inbound as InboundLite[], replyLog.sent, now, 20, completedThreadIds());
+  const startToday = new Date(now); startToday.setHours(0, 0, 0, 0);
+  const verifiedToday = replyVerificationSummary(replyLog.sent, startToday.getTime(), now);
+  const title = document.createElement("div"); title.className = "dtitle";
+  title.textContent = dockView === "replies" ? `${n} reply ${n === 1 ? "spot" : "spots"}` : dockView === "comments" ? "Comments to reply to" : dockView === "ideas" ? "Post ideas" : dockView === "targets" ? "Target accounts" : dockView === "dms" ? "DM workspace" : "Growth loop";
   const sub = document.createElement("div"); sub.className = "dsub";
   const cnt = document.createElement("span");
-  cnt.textContent = `${n} ready · ${today} sent today`;
-  cnt.title = "Posts ready to reply to · replies you've inserted through Goobi today (resets at local midnight).";
-  sub.append(cnt);
+  cnt.textContent = today > 0
+    ? `${verifiedToday.confirmed} verified${verifiedToday.pending ? ` · ${verifiedToday.pending} pending` : ""}`
+    : "0 today";
+  cnt.title = `${verifiedToday.confirmed} actual ${verifiedToday.confirmed === 1 ? "reply" : "replies"} matched through RapidAPI or manually confirmed today; ${verifiedToday.pending} successful Like + insert ${verifiedToday.pending === 1 ? "attempt is" : "attempts are"} awaiting a match. Copy/open drafts do not count until manually confirmed.`;
   // Live pace chip — surfaces the account-safety status in the moment you're replying.
   const rhh = replyLog.times.filter((tm) => Date.now() - tm < HOUR_MS).length;
   const stt = reputationStatus(rhh);
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
-  if (paused) { chip.textContent = "⏸ paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
-  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = `● ${stt.label}`; chip.title = `${rhh} repl${rhh === 1 ? "y" : "ies"} you sent through Goobi this hour. X reads ~30/hr as automated — this counts your Goobi replies, so pace your native ones too.`; }
-  sub.append(document.createTextNode(" · "), chip);
-  t.append(sub);
+  if (paused) { chip.textContent = "Paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
+  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = stt.label; chip.title = `${rhh} reply ${rhh === 1 ? "attempt" : "attempts"} recorded through Goobi this hour. Goobi uses a conservative ${REPLY_HARD_PER_HOUR}/hr pause; X publishes no guaranteed safe hourly rate, so pace native replies too.`; }
+  if (dockView === "dms") {
+    const dmPace = dmPacingStatus(dmStore, now);
+    chip.style.color = dmPace.level === "pause" ? "#d6604a" : dmPace.level === "caution" ? "#e89a3c" : "#6fcf7f";
+    chip.textContent = dmPace.level === "pause" ? "DM pause" : dmPace.level === "caution" ? "DM caution" : "Thoughtful pace";
+    chip.title = `${dmPace.firstHour} first DMs marked this hour; ${dmPace.firstDay} first and ${dmPace.totalDay} total marked today.`;
+    cnt.textContent = `${dueFollowUps(dmStore, now).length} due · ${dmStore.candidates.filter((c) => !c.removedAt).length} people`;
+    cnt.title = "DM state is based on actions you mark manually; Goobi cannot verify delivery, reads, or replies.";
+  }
+  if (dockView === "comments") {
+    chip.style.color = commentQueue.untended ? "#6fcf7f" : "#8c7d68";
+    chip.textContent = commentQueue.untended ? "Warm first" : "Caught up";
+    chip.title = "Recent replies and mentions from the X notifications page, freshest first.";
+    cnt.textContent = `${commentQueue.untended} open · ${commentQueue.total} recent`;
+    cnt.title = "Open excludes rows Goobi can exactly match to a reply or softly identifies as likely tended. Notifications are a recent sample, not a complete inbox.";
+  }
+  if (dockView === "growth") {
+    const gx = activeGrowthExperiment(growthStore);
+    chip.style.color = gx ? "#e89a3c" : "#8c7d68"; chip.textContent = gx ? "Experiment live" : "Ready to test";
+    chip.title = gx ? `${growthStrategy(gx.strategyId).label}, day ${Math.max(1, Math.ceil((now - gx.startedAt) / DAY_MS))} of ${GROWTH_WINDOW_DAYS}.` : "Choose one reason to follow and hold it long enough to compare with the prior window.";
+    const recent = summarizeGrowthWindow(growthStore, now - GROWTH_WINDOW_DAYS * DAY_MS, now);
+    cnt.textContent = recent.followerDelta == null ? "collecting baseline" : `${recent.followerDelta >= 0 ? "+" : ""}${recent.followerDelta} followers · 14d`;
+    cnt.title = "Follower change between the first and latest observed snapshots in the last 14 days. Profile clicks are unavailable, so this is not attributed to Goobi.";
+  }
+  sub.append(chip, document.createTextNode(" · "), cnt);
+  if (dockView === "replies") {
+    sub.setAttribute("role", "button"); sub.tabIndex = 0; sub.setAttribute("aria-expanded", String(todayOpen));
+    sub.title += todayOpen ? " Hide pace details." : " Show pace details.";
+    const toggleHealth = () => { todayOpen = !todayOpen; renderDock(); };
+    sub.onclick = toggleHealth; sub.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleHealth(); } };
+  }
+  t.append(title, sub);
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
   if (!paused && !dockPlayOpen && dockView === "replies") {
-    const re = document.createElement("button"); re.className = "scanb"; re.textContent = findingSpots ? "Searching…" : "↻ Scan again";
-    re.title = "Rescan the page for new posts worth replying to";
-    re.disabled = findingSpots;
-    re.onclick = () => rescan();
-    acts.append(re);
+    const find = document.createElement("button"); find.className = "findb"; find.textContent = findingSpots ? "Searching…" : "✦ Find spots";
+    find.title = xNiche.trim() ? "Search X for fresh posts in your niche" : "Set your niche in the Goobi panel first";
+    find.disabled = findingSpots || !xNiche.trim();
+    find.onclick = () => void findSpots();
+    acts.append(find);
   }
   const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear"; kb.setAttribute("aria-label", "More actions");
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
@@ -3693,13 +5362,30 @@ function renderDock() {
   h.append(dhl, acts);
   d.append(h);
 
+  // One dominant workspace switcher sits directly under the header. Everything
+  // else is contextual to the selected workspace.
+  const modes = document.createElement("div"); modes.className = "modes"; modes.setAttribute("role", "tablist"); modes.setAttribute("aria-label", "Goobi workspace");
+  const mkMode = (id: DockView, label: string, count?: number) => {
+    const selected = dockView === id || (id === "replies" && dockView === "targets");
+    const b = document.createElement("button"); b.className = "mode" + (selected ? " on" : "");
+    const l = document.createElement("span"); l.textContent = label; b.append(l);
+    if (count != null && count > 0) { const badge = document.createElement("span"); badge.className = "mode-count"; badge.textContent = String(count); b.append(badge); }
+    b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(selected));
+    b.onclick = () => { if (dockView !== id) { dockView = id; relationshipsOpen = false; replyToolsOpen = false; renderDock(); } };
+    return b;
+  };
+  modes.append(mkMode("replies", "Replies", n), mkMode("comments", "Comments", commentQueue.untended), mkMode("ideas", "Post ideas"), mkMode("dms", "DMs", dueFollowUps(dmStore, Date.now()).length), mkMode("growth", "Growth"));
+  d.append(modes);
+  const postProgress = Math.max(postedToday(), ownStats !== undefined ? ownViewsToday().posts : 0);
+  d.append(dailyGoalTracker({ replies: verifiedToday.confirmed + verifiedToday.pending, posts: postProgress, dms: dmPeopleToday() }));
+
   // Today strip — the same data the old six-line stack showed, TIERED so it stops burying the work
   // queue: one compact summary row (momentum bar + state + today's facts), ONE "next best move"
   // coach line, and the full detail (cue / shape / activity dots / callout, tooltips intact) behind
   // a caret. The coach slot has a deterministic priority and SAFETY ALWAYS WINS it — at ease-off or
   // caution the safety message owns the line, so the honesty keystone is front and center even
   // collapsed (the pace chip + red state label agree with it, same stt).
-  {
+  if (dockView === "replies" && todayOpen) {
     const lastReply = replyLog.times.length ? Math.max(...replyLog.times) : 0;
     const lastPost = ideaQueue.reduce((mx, i) => (i.postedAt && i.postedAt > mx ? i.postedAt : mx), 0);
     const lastAt = Math.max(lastReply, lastPost);
@@ -3790,10 +5476,6 @@ function renderDock() {
     d.append(mom);
   }
 
-  // Relationship surfaces — one horizontal accordion tab row (Threads / Your circle / Supporters)
-  // with count badges, replacing the three stacked collapsible panels.
-  renderRelationshipTabs(d);
-
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {
     const back = document.createElement("div"); back.className = "kback"; back.onclick = () => { kebabOpen = false; renderDock(); };
@@ -3804,7 +5486,7 @@ function renderDock() {
       menu.append(b);
     };
     item(paused ? "▶ Resume" : "⏸ Pause", () => setPaused(!paused));
-    item(findingSpots ? "Searching…" : "✦ Find spots", () => void findSpots(), paused || findingSpots);
+    if (!paused && dockView === "replies") item("↻ Rescan this page", () => rescan());
     if (n) item("🗑 Clear all", () => { opps.clear(); toast("Cleared all reply spots."); renderDock(); });
     d.append(back, menu);
   }
@@ -3833,15 +5515,19 @@ function renderDock() {
     return;
   }
 
-  // Top-level mode: reply opportunities vs original post ideas.
-  const modes = document.createElement("div"); modes.className = "modes";
-  const mkMode = (id: DockView, label: string) => {
-    const b = document.createElement("button"); b.className = "mode" + (dockView === id ? " on" : ""); b.textContent = label;
-    b.onclick = () => { if (dockView !== id) { dockView = id; renderDock(); } };
-    return b;
-  };
-  modes.append(mkMode("replies", "💬 Replies"), mkMode("ideas", "✨ Post ideas"), mkMode("targets", "🎯 Targets"));
-  d.append(modes);
+  if (dockView === "growth") {
+    d.append(buildGrowth());
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    return;
+  }
+
+  if (dockView === "comments") {
+    d.append(buildComments());
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    return;
+  }
 
   if (dockView === "ideas") {
     d.append(buildIdeas());
@@ -3856,9 +5542,36 @@ function renderDock() {
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
     return;
   }
+  if (dockView === "dms") {
+    d.append(buildDms());
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    return;
+  }
 
-  // Sort tabs.
-  const tabs = document.createElement("div"); tabs.className = "tabs";
+  // Relationship drill-in replaces the queue and its tools instead of competing with them.
+  if (relationshipsOpen) {
+    renderRelationshipTabs(d);
+    root.appendChild(d);
+    goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(gstat.mood);
+    return;
+  }
+
+  // Contextual reply tools: the queue gets the space; sort/filter expand only on request.
+  const toolrow = document.createElement("div"); toolrow.className = "reply-tools";
+  const toolLabel = document.createElement("span"); toolLabel.className = "reply-tools-label"; toolLabel.textContent = n ? "Reply queue" : "Watching for reply spots";
+  const toolButton = document.createElement("button"); toolButton.className = "reply-tools-btn";
+  const sortNames: Record<DockSort, string> = { best: "Best fit", recent: "Recent", reach: "High reach", easy: "Easy replies" };
+  toolButton.textContent = `${sortNames[dockSort]}${dockFilter ? " · filtered" : ""} ${replyToolsOpen ? "▴" : "▾"}`;
+  toolButton.setAttribute("aria-expanded", String(replyToolsOpen));
+  toolButton.onclick = () => { replyToolsOpen = !replyToolsOpen; renderDock(); };
+  const secondary = document.createElement("div"); secondary.style.cssText = "display:flex;gap:6px;align-items:center";
+  const targets = document.createElement("button"); targets.className = "reply-tools-btn"; targets.textContent = "Find people";
+  targets.title = "Secondary discovery: track larger relevant accounts after warm comments and strong reply spots are handled.";
+  targets.onclick = () => { dockView = "targets"; renderDock(); };
+  secondary.append(targets, toolButton); toolrow.append(toolLabel, secondary); d.append(toolrow);
+
+  const tabs = document.createElement("div"); tabs.className = "tabs"; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Sort reply spots");
   const TABS: { id: DockSort; label: string; title: string }[] = [
     { id: "best", label: "Best", title: "Best reply-fit first" },
     { id: "recent", label: "Recent", title: "Newest posts first" },
@@ -3867,28 +5580,28 @@ function renderDock() {
   ];
   for (const td of TABS) {
     const tb2 = document.createElement("button"); tb2.className = "tab" + (dockSort === td.id ? " on" : ""); tb2.textContent = td.label; tb2.title = td.title;
+    tb2.setAttribute("role", "tab"); tb2.setAttribute("aria-selected", String(dockSort === td.id));
     tb2.onclick = () => { if (dockSort !== td.id) { dockSort = td.id; renderDock(); } };
     tabs.append(tb2);
   }
-  d.append(tabs);
-
-  const f = document.createElement("input"); f.className = "df"; f.placeholder = "Filter posts…"; f.value = dockFilter;
+  const f = document.createElement("input"); f.className = "df"; f.placeholder = "Search these reply spots…"; f.setAttribute("aria-label", "Search reply spots"); f.value = dockFilter;
   const list = document.createElement("div"); list.className = "dl";
   f.oninput = () => { dockFilter = f.value; renderList(list); };
-  d.append(f, list);
+  if (replyToolsOpen) d.append(tabs, f);
+  d.append(list);
+  renderRelationshipTabs(d); // collapsed summary after the work queue
 
   const foot = document.createElement("div"); foot.className = "foot";
   const f1 = document.createElement("div"); f1.className = "foot1";
   const f2 = document.createElement("div"); f2.className = "foot2";
-  if (n) { // there ARE reply spots — this is the end of the list, not "caught up"
-    f1.textContent = "✦ End of the list";
-    f2.textContent = "Scroll your feed for more, or ↻ Scan again to refresh.";
-  } else { // no spots surfaced — the genuine "nothing to do" / watching state
+  if (!n) { // no spots surfaced — the genuine "nothing to do" / watching state
     f1.textContent = "✦ You're all caught up";
-    f2.textContent = "New reply spots appear as you scroll — or tap ✦ to find some in your niche.";
+    f2.textContent = "New reply spots appear as you scroll, or search your niche now.";
+    const find = document.createElement("button"); find.className = "findb"; find.textContent = findingSpots ? "Searching X…" : "Find spots in my niche";
+    find.disabled = findingSpots || !xNiche.trim(); find.title = xNiche.trim() ? "Search X for fresh, high-fit reply spots" : "Set your niche in the Goobi panel first";
+    find.onclick = () => void findSpots();
+    foot.append(f1, f2, find); d.append(foot);
   }
-  foot.append(f1, f2);
-  d.append(foot);
 
   root.appendChild(d);
   renderList(list);
@@ -3904,7 +5617,7 @@ function buildLearnExport(): unknown {
   const sent = replyLog.sent || [];
   const measuredN = sent.filter((r) => r.outcome && (r.outcome.likes != null || r.outcome.replies != null)).length;
   const settledN = sent.filter((r) => r.outcome?.frozen).length;
-  return { replyLog, learn, meta: { exportedAt: Date.now(), handle: learn?.handle || selfHandle || "", n: sent.length, measuredN, settledN } };
+  return { replyLog, learn, growth: growthStore, meta: { exportedAt: Date.now(), handle: learn?.handle || selfHandle || "", n: sent.length, measuredN, settledN } };
 }
 
 /** Expose window.__goobiExport() when the debug flag is on (dev only). Returns the
@@ -3927,18 +5640,28 @@ function installDebugHook(): void {
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
-  enabled = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false; // default on
-  if (!enabled) return;
+  const xDataConsent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
+  const hasAnthropicKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
+  const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
+  if (!requestedOn) return;
+  if (!xDataConsent || !hasAnthropicKey) {
+    renderSetupGate(!xDataConsent ? "Review data use in the side panel" : "Add your Anthropic key in the side panel");
+    watchSetupGate();
+    return;
+  }
+  enabled = true;
   paused = (await getLocal(CONFIG.X_PAUSED_KEY)) === true; // default not paused
   const storedProducts = await getLocal(CONFIG.X_PRODUCTS_KEY);
   xProducts = Array.isArray(storedProducts) ? (storedProducts as ProductItem[]) : [];
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
+  xReplyInsertOn = (await getLocal(CONFIG.X_REPLY_INSERT_KEY)) !== false; // absent = on for fresh and existing installs
   learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — flips on only once the backtest proves the learned signal predicts
   debugOn = (await getLocal(CONFIG.X_DEBUG_KEY)) === true;
   installDebugHook(); // dev-only window.__goobiExport() when debugOn (no-op otherwise)
   xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
+  dailyGoals = normalizeDailyGoals(await getLocal(CONFIG.X_DAILY_GOALS_KEY));
   premiumTier = ((await getLocal(CONFIG.X_PREMIUM_KEY)) as string) || "";
   profileState = (await getLocal(CONFIG.X_PROFILE_KEY)) as ProfileState | undefined;
   myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
@@ -3969,13 +5692,16 @@ async function boot() {
   const storedIdeas = await getLocal(CONFIG.X_IDEAS_KEY); // the post-ideas drafts queue
   if (Array.isArray(storedIdeas)) ideaQueue = (storedIdeas as IdeaRecord[]).filter((r) => r && r.id && typeof r.text === "string");
   const storedOwn = await getLocal(CONFIG.X_MY_POSTS_KEY) as { stats?: OwnPost[] } | undefined; // seed the views stat from cache (no fetch on boot — that happens on dock-open, to save budget)
-  if (storedOwn?.stats) ownStats = storedOwn.stats;
+  if (storedOwn?.stats) { ownStats = storedOwn.stats; reconcileIdeasWithOwnPosts(); }
   const storedLearn = await getLocal(CONFIG.X_LEARN_STATS_KEY) as LearnStore | undefined; // engagement learning store (own-post trend + scan gates)
   if (storedLearn?.handle) learn = storedLearn;
   hydrateInbound(await getLocal(CONFIG.X_SUPPORTERS_KEY)); // who engages with me (reciprocity)
+  relationshipMemory = pruneRelationshipMemory(await getLocal(CONFIG.X_RELATIONSHIP_MEMORY_KEY) as RelationshipMemoryStore | undefined, Date.now());
+  foldRelationshipMemory(); // backfill any exact joins already present in the two older stores
   hydrateThreadsDone(await getLocal(CONFIG.X_THREADS_DONE_KEY)); // threads I've marked done
   { // cross-session coverage caches (public author data + niche-stamped heavy hitters), TTL-pruned on load
     const now = Date.now();
+    opportunityMetrics = pruneOpportunityMetrics((await getLocal(CONFIG.X_OPPORTUNITY_METRICS_KEY)) as OpportunityMetricStore | undefined, now);
     const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, { followers?: number; following?: number; bio?: string; at: number }> | undefined;
     for (const [k, v] of Object.entries(storedR ?? {})) if (v?.at && now - v.at < AUTHOR_REACH_TTL_MS && !authorReach.has(k)) authorReach.set(k, v);
     const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as { niche?: string; entries?: Record<string, { followers: number; engRate: number; n: number; at?: number }> } | undefined;
@@ -3987,6 +5713,8 @@ async function boot() {
   const storedTargets = await getLocal(CONFIG.X_TARGETS_KEY) as TargetStore | undefined; // big-account target list
   if (storedTargets && Array.isArray(storedTargets.targets) && (!storedTargets.handle || !ownHandle || storedTargets.handle === ownHandle)) targetStore = { ...storedTargets, handle: ownHandle || storedTargets.handle };
   else if (ownHandle) targetStore = freshStore(ownHandle); // a different account's list — don't bleed it across users
+  dmStore = pruneDmStore(ownHandle ? await getLocal(dmStorageKey(ownHandle)) as DmStore | undefined : undefined, ownHandle, Date.now());
+  await ensureGrowthOwner();
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
@@ -3994,26 +5722,57 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_LEARN_LOOP_KEY]) { learnLoopOn = changes[CONFIG.X_LEARN_LOOP_KEY].newValue === true; renderDock(); } // flip the loop live (no reload), and re-rank the dock under the new weighting
+    if (changes[CONFIG.X_REPLY_INSERT_KEY]) xReplyInsertOn = changes[CONFIG.X_REPLY_INSERT_KEY].newValue !== false;
+    if (changes[CONFIG.X_DAILY_GOALS_KEY]) { dailyGoals = normalizeDailyGoals(changes[CONFIG.X_DAILY_GOALS_KEY].newValue); renderDock(); }
+    if (changes[CONFIG.X_LEARN_LOOP_KEY]) { learnLoopOn = changes[CONFIG.X_LEARN_LOOP_KEY].newValue === true; invalidateLearnedMults(); renderDock(); } // flip the loop live (no reload), and re-rank the dock under the new weighting
     if (changes[CONFIG.X_DEBUG_KEY]) { debugOn = changes[CONFIG.X_DEBUG_KEY].newValue === true; installDebugHook(); }
     if (changes[CONFIG.X_PREMIUM_KEY]) premiumTier = (changes[CONFIG.X_PREMIUM_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_PROFILE_KEY]) profileState = changes[CONFIG.X_PROFILE_KEY].newValue as ProfileState | undefined;
+    if (changes[CONFIG.X_PROFILE_KEY]) {
+      profileState = changes[CONFIG.X_PROFILE_KEY].newValue as ProfileState | undefined;
+      if (!dockInputFocused()) renderDock();
+    }
     if (changes[CONFIG.X_NICHE_KEY]) {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
       heavyHitters = new Map(); heavyTried = false; // niche-derived pool no longer applies; auto-search re-fires for the new niche (persisted copy is niche-stamped, so it can't bleed back)
     }
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
-    if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; renderDock(); }
-    if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; renderDock(); } } // synced from another tab's daily scan
+    if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; captureGrowthData(); renderDock(); }
+    if (changes[CONFIG.X_MY_HANDLE_KEY]) {
+      selfHandle = ""; ownStats = undefined; growthOwnerProblem = "";
+      void ensureTargetOwner(); void ensureDmOwner(); void ensureGrowthOwner().then(() => renderDock());
+    }
+    if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; foldRelationshipMemory(); renderDock(); } } // synced from another tab's daily scan
     if (changes[CONFIG.X_REPLY_LOG_KEY]) {
       // Another tab wrote the reply ledger. MERGE (union), never adopt — a stale tab's blob must not
       // reset the rolling-hour count the ease-off safety guard reads, or defeat the daily tally.
       const nv = changes[CONFIG.X_REPLY_LOG_KEY].newValue as Partial<ReplyLog> | undefined;
-      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
+      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); invalidateLearnedMults(); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
     }
-    if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
+    if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); foldRelationshipMemory(); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
+    if (changes[CONFIG.X_RELATIONSHIP_MEMORY_KEY]) {
+      relationshipMemory = mergeRelationshipMemory(relationshipMemory, changes[CONFIG.X_RELATIONSHIP_MEMORY_KEY].newValue as RelationshipMemoryStore | undefined, Date.now());
+      if (!dockInputFocused()) renderDock();
+    }
     if (changes[CONFIG.X_THREADS_DONE_KEY]) { hydrateThreadsDone(changes[CONFIG.X_THREADS_DONE_KEY].newValue); renderDock(); } // marked-done threads synced from another tab
-    if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets)) { targetStore = nv; renderDock(); } } // synced from another tab
+    if (changes[CONFIG.X_OPPORTUNITY_METRICS_KEY]) {
+      opportunityMetrics = mergeOpportunityMetricStores(opportunityMetrics, changes[CONFIG.X_OPPORTUNITY_METRICS_KEY].newValue as OpportunityMetricStore | undefined, Date.now());
+      if (!dockInputFocused()) renderDock();
+    }
+    if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets) && (!dmStore.ownerHandle || !nv.handle || nv.handle.toLowerCase() === dmStore.ownerHandle)) { targetStore = nv; renderDock(); } } // synced only for the active owner
+    const liveDmKey = dmStore.ownerHandle ? dmStorageKey(dmStore.ownerHandle) : "";
+    if (liveDmKey && changes[liveDmKey]) {
+      const incoming = pruneDmStore(changes[liveDmKey].newValue as DmStore | undefined, dmStore.ownerHandle, Date.now());
+      const merged = mergeDmStores(dmStore, incoming, dmStore.ownerHandle, Date.now());
+      const needsRepair = JSON.stringify(merged) !== JSON.stringify(incoming);
+      dmStore = merged;
+      if (needsRepair) persistDms(merged); // converge a last-writer-wins storage race back to the union
+      if (!dockInputFocused()) renderDock();
+    }
+    const liveGrowthKey = growthStore.ownerHandle ? growthStorageKey(growthStore.ownerHandle) : "";
+    if (liveGrowthKey && changes[liveGrowthKey]) {
+      growthStore = mergeGrowthStores(growthStore, changes[liveGrowthKey].newValue as GrowthStore | undefined, growthStore.ownerHandle, Date.now());
+      if (!dockInputFocused()) renderDock();
+    }
     if (changes[CONFIG.TWTTR_KEY_KEY]) {
       // RapidAPI key changed — let lookups try again and drop the failed-lookup backoff.
       twttrUnconfigured = false;

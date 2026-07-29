@@ -37,6 +37,7 @@ export interface TwttrTweet {
   followers?: number;    // author follower count, when the shape carries it
   authorId?: string;     // author rest_id
   isReply: boolean;      // a reply to someone (vs an original post)
+  replyToId?: string;    // direct parent tweet id when the provider returns it (exact thread completion join)
   lang?: string;         // tweet language code (e.g. "en"), when the shape carries it
 }
 
@@ -128,8 +129,10 @@ function flattenTweet(result: any): TwttrTweet | null {
     if (!Number.isNaN(t)) postedAt = t;
   }
 
+  const replyToIdRaw = lg.in_reply_to_status_id_str ?? result.reply_to_results?.rest_id ?? result.reply_to_results?.result?.rest_id;
+  const replyToId = replyToIdRaw != null && String(replyToIdRaw) ? String(replyToIdRaw) : undefined;
   const isReply = Boolean(
-    lg.in_reply_to_status_id_str ||
+    replyToId ||
       lg.in_reply_to_user_id_str ||
       result.reply_to_results ||
       result.reply_to_user_results ||
@@ -151,6 +154,7 @@ function flattenTweet(result: any): TwttrTweet | null {
     followers,
     authorId,
     isReply,
+    replyToId,
     lang,
   };
 }

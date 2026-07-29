@@ -5,8 +5,8 @@
  * the service worker. Lives in the worker (not the content script) so the budget
  * survives navigation and is shared across every x.com tab.
  *
- * v1 is a budget + rate governor (no persistent response cache yet — callers
- * dedupe in memory; a storage-backed per-resource cache is the planned v2).
+ * The governor also owns a bounded persistent per-resource cache (policy/TTLs
+ * live in twttr-policy.ts), so repeated identical reads do not spend requests.
  */
 import { TWTTR_CLASS, TWTTR_BUDGET, classForPath, degradeMode, canFetch, monthKeyOf,
   type TwttrCache, cacheExpiry, cacheFresh, pruneCache, TWTTR_CACHE_MAX_ENTRY } from "./twttr-policy";

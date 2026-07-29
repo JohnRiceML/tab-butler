@@ -26,6 +26,9 @@ ok(full.startsWith("\n\n"), "block is append-ready for the user message");
 const partial = m.buildDraftContext({ reason: "sharp take available" });
 ok(partial.includes("sharp take available") && !partial.includes("niche") && !partial.includes("author"), "partial context renders only what's known");
 
+const ownThread = m.buildDraftContext({ threadLine: "This is a direct comment on one of the user's own posts." });
+ok(ownThread.includes("Conversation relationship") && ownThread.includes("direct comment"), "comments on the user's post become explicit drafter relationship context");
+
 ok(m.buildDraftContext({ measuredLine: "your ask-angle replies earned 1.4x your average (n=9)" }).includes("Measured on this user's own past replies"), "the stage-2 measured line is labeled as measured");
 
 console.log(fail === 0 ? `\n✓ draft-context: ${pass} assertions passed` : `\n✗ draft-context: ${fail} failed, ${pass} passed`);

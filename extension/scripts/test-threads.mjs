@@ -120,5 +120,17 @@ ok(m.ageLabel(2 * DAY) === "2d ago", "days label");
   ok(m.rankThreads(inbound, [], NOW).total === 2, "no done set → nothing excluded (back-compat)");
 }
 
+// ---- exact RapidAPI parent match clears only that status, not every row from the handle ----
+{
+  const inbound = [
+    { at: NOW - 10 * MIN, handle: "alice", kind: "reply", postId: "answered-parent" },
+    { at: NOW - 20 * MIN, handle: "alice", kind: "reply", postId: "still-open" },
+    { at: NOW - 30 * MIN, handle: "bob", kind: "mention", postId: "manual-done" },
+  ];
+  const exactPlusManual = new Set(["answered-parent", "manual-done"]);
+  const r = m.rankThreads(inbound, [], NOW, 8, exactPlusManual);
+  ok(r.total === 1 && r.rows[0].postId === "still-open", "exact + manual done IDs union without clearing another thread from the same handle");
+}
+
 console.log(fail === 0 ? `\n✓ threads: ${pass} assertions passed` : `\n✗ threads: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

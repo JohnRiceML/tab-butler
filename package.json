@@ -1,0 +1,16 @@
+{
+  "name": "goobi-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Goobi X reply copilot and local-first tab manager workspace",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "npm --prefix extension ci",
+    "build": "npm --prefix extension run build",
+    "test": "npm --prefix extension test",
+    "typecheck": "npm --prefix extension run typecheck",
+    "verify": "npm --prefix extension run verify"
+  }
+}

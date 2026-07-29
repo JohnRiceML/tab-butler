@@ -100,6 +100,22 @@ const DAY = 86_400_000;
   ok(m.matchOutcomes([{ text: "nothing in common whatsoever", at: NOW }], sent).length === 0, "match: a non-match is dropped, never guessed");
 }
 
+// ---- RapidAPI verification: attempts stay pending until an actual reply match exists ----
+{
+  const HR = 3_600_000;
+  const sent = [
+    { at: NOW - HR, norm: "pending reply text" },
+    { at: NOW - 2 * HR, norm: "api matched reply", outcome: { at: NOW, likes: 0, replies: 0, tweetId: "reply-1" } },
+    { at: NOW - 3 * HR, confirmation: "manual", confirmedAt: NOW - 3 * HR },
+    { at: NOW - 80 * HR, norm: "too old to keep pending" },
+    { at: NOW - HR }, // no text: an old proxy record cannot be verified automatically
+  ];
+  const s = m.replyVerificationSummary(sent, NOW - 7 * DAY, NOW);
+  ok(s.attempted === 5 && s.confirmed === 2 && s.pending === 1, "verification separates confirmed, pending, and stale/unmatchable attempts");
+  ok(m.isConfirmedReply({ at: NOW, outcome: { at: NOW, likes: 0, replies: 0 } }), "legacy measured outcomes count as RapidAPI-confirmed");
+  ok(!m.isConfirmedReply({ at: NOW, outcome: { at: NOW, authorReplied: true } }), "notification-only engaged-back join is not posting proof");
+}
+
 /* ---- outcome upgrade: views/reposts/id ride the match; fitCorrViews tracks distribution ---- */
 {
   const fetched = [{ text: "ship daily measure what sticks today", at: NOW, likes: 5, replies: 1, views: 900, reposts: 2, id: "t123" }];

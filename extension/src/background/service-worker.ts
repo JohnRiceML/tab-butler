@@ -1,9 +1,11 @@
 import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast } from "../lib/archive";
-import { advise, classify, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
+import { advise, classify, draftDm, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter } from "../lib/twttr-governor";
 import { buildDraftContext } from "../lib/draft-context";
+import { allowedTwttrPath } from "../lib/twttr-policy";
+import { normalizeDailyGoals } from "../lib/daily-goals";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -41,11 +43,12 @@ async function seedFromLocalFile(): Promise<void> {
     ["handle", K.X_MY_HANDLE_KEY],
     ["niche", K.X_NICHE_KEY],
     ["voice", K.X_VOICE_KEY],
+    ["soul", K.X_SOUL_KEY],
     ["defaultAngle", K.X_DEFAULT_ANGLE_KEY],
     ["defaultProduct", K.X_DEFAULT_PRODUCT_KEY],
     ["premium", K.X_PREMIUM_KEY],
   ];
-  const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY]);
+  const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY, K.X_DAILY_GOALS_KEY]);
   const set: Record<string, unknown> = {};
   for (const [from, to] of strMap) {
     const v = cfg[from];
@@ -62,6 +65,7 @@ async function seedFromLocalFile(): Promise<void> {
       .map((p) => ({ name: p.name.trim(), url: typeof p.url === "string" ? p.url.trim() : "", blurb: typeof p.blurb === "string" ? p.blurb.trim() : "" }));
     if (clean.length) set[K.X_PRODUCTS_KEY] = clean;
   }
+  if (cfg["dailyGoals"] && typeof cfg["dailyGoals"] === "object" && !cur[K.X_DAILY_GOALS_KEY]) set[K.X_DAILY_GOALS_KEY] = normalizeDailyGoals(cfg["dailyGoals"]);
   if (Object.keys(set).length) await chrome.storage.local.set(set);
 }
 
@@ -265,6 +269,7 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
  *  storage (popup settings) and is never bundled. Routed through the governor
  *  (monthly budget meter + 8/sec token bucket + degradation + coalescing). */
 async function twttrFetch(path: string, query?: Record<string, string>, intent = false): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
+  if (!allowedTwttrPath(path)) return { ok: false, error: "endpoint-not-allowed" };
   const store = await chrome.storage.local.get(CONFIG.TWTTR_KEY_KEY);
   const key = (store[CONFIG.TWTTR_KEY_KEY] as string) || "";
   if (!key) return { ok: false, error: "no-twttr-config" };
@@ -273,9 +278,16 @@ async function twttrFetch(path: string, query?: Record<string, string>, intent =
 
 /* ---------- popup messaging ---------- */
 
-chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
   (async () => {
     switch (msg.type) {
+      case "OPEN_SIDE_PANEL": {
+        const tabId = sender.tab?.id;
+        if (tabId == null || !chrome.sidePanel?.open) { sendResponse({ ok: false }); break; }
+        try { await chrome.sidePanel.open({ tabId }); sendResponse({ ok: true }); }
+        catch { sendResponse({ ok: false }); }
+        break;
+      }
       case "GROUP_NOW":
         sendResponse(await groupNow());
         break;
@@ -302,15 +314,25 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "DRAFT_REPLY":
         try {
-          const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
+          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY]);
+          const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
+          const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
           // The content script resolves the relevant product(s) and sends them; fall back to the legacy single-product string.
           const product = msg.product ?? (((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "");
           // Stage-1 draft context (niche + scorer rationale + author line): specificity is a ranked
           // variable in the 2026 pipeline (LLM reply grading + slop score), and these strings are
           // already known — user-message only, X_DRAFT_SYSTEM stays byte-stable.
           const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, authorLine: msg.authorLine });
-          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, extra) });
+          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, authorLine: msg.authorLine, threadLine: msg.threadLine });
+          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, extra, soul) });
+        } catch (e) {
+          sendResponse({ error: (e as Error).message });
+        }
+        break;
+      case "DRAFT_DM":
+        try {
+          const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
+          sendResponse({ text: await draftDm(msg, voice) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
@@ -326,17 +348,21 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case "POST_IDEAS":
         try {
-          const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
-          const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche, msg.ownPosts, msg.followers, msg.shapeLine) });
+          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_NICHE_KEY]);
+          const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
+          const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
+          const niche = (profile[CONFIG.X_NICHE_KEY] as string) || "";
+          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche, msg.ownPosts, msg.followers, msg.shapeLine, msg.strategyLine, soul) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
         break;
       case "POST_IDEA_REWRITE":
         try {
-          const voice = ((await chrome.storage.local.get(CONFIG.X_VOICE_KEY))[CONFIG.X_VOICE_KEY] as string) || "";
-          sendResponse({ text: await generatePostIdeaRewrite(msg.text, msg.steer, voice, msg.source, msg.pattern) });
+          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY]);
+          const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
+          const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
+          sendResponse({ text: await generatePostIdeaRewrite(msg.text, msg.steer, voice, msg.source, msg.pattern, soul) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }

@@ -8,24 +8,24 @@ export const CONFIG = {
   /** chrome.alarms minimum is 0.5 min; we scan every few minutes. */
   SCAN_PERIOD_MIN: 5,
 
-  /** Your deployed proxy. Defaults to local dev (dedicated port to avoid the
-   *  common :3000 collision — keep in sync with proxy's `dev` script + manifest). */
-  PROXY_BASE_URL: "http://localhost:3210",
-
   // storage.local keys
   SMART_ENABLED_KEY: "smartEnabled", // privacy opt-in — Claude calls are gated on this
   ARCHIVE_KEY: "archive", // ArchivedTab[]
   UNDO_KEY: "lastArchiveBatch", // ArchivedTab[] from the most recent archive pass
   AUTO_DEDUPE_KEY: "autoDedupe", // background duplicate-tab merge (default on)
-  ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — lets Smart run with no proxy
-  X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (default on)
+  ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — shipping Claude features call Anthropic directly
+  X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (on only after versioned consent)
+  X_DATA_CONSENT_KEY: "xDataConsentV1", // explicit disclosure acceptance before X content can be sent to Claude
   X_PAUSED_KEY: "xPaused", // temporary pause — halts scanning/surfacing/API + the on-page actions until resumed
   X_NICHE_KEY: "xNiche", // what posts are worth replying to
   X_VOICE_KEY: "xVoice", // reply voice / examples
+  X_SOUL_KEY: "xSoulMd", // user-authored beliefs, themes, earned experience, and creative boundaries
+  X_DAILY_GOALS_KEY: "xDailyGoals", // {replies,posts,dms}; zero disables a goal
   X_PRODUCT_KEY: "xProduct", // legacy single-product string (fallback)
   X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
   X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
   X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
+  X_REPLY_INSERT_KEY: "xReplyInsertEnabled", // user-clicked like + one-shot composer fill (default on; false uses copy/open)
   TWTTR_KEY_KEY: "twttrKey", // BYO RapidAPI key for the Twttr X-data API (read-only enrichment)
   TWTTR_HOST: "twitter241.p.rapidapi.com", // fixed provider host — the parsers are written for this shape. Not a secret, not user-set.
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
@@ -39,11 +39,15 @@ export const CONFIG = {
   X_SUPPORTERS_KEY: "xSupporters", // reciprocity engine: who engages with ME (reply/mention events harvested from the notifications page DOM), device-local
   X_THREADS_DONE_KEY: "xThreadsDone", // reply postIds the user has explicitly marked DONE in "tend your threads" (device-local; pruned to the live harvest)
   X_TARGETS_KEY: "xTargets", // "Target accounts" mode: large in-reach niche accounts to comment on early, device-local
+  X_DM_WORKSPACE_KEY: "goobi_x_dm_workspace_v1", // prefix for per-account, device-local DM planning + user-marked conversation history
   X_AUTHOR_REACH_KEY: "xAuthorReach", // persisted author-reach cache (PUBLIC data: followers/following/bio per handle) — compounds target-selection coverage across sessions
   X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted heavy-hitter engagement rates, stamped with the niche that produced them
+  X_OPPORTUNITY_METRICS_KEY: "xOpportunityMetrics", // compact public-post metric snapshots — two observations power a short-lived momentum lift
+  X_RELATIONSHIP_MEMORY_KEY: "xRelationshipMemory", // exact completed reply exchanges, account-scoped and text-free; powers the ongoing-connection context chip
   X_PROFILE_KEY: "xProfile", // own-profile harvest (pinned post id + bio length) — the profile coach's $0 input
   X_PREMIUM_KEY: "xPremium", // the user's X Premium tier ("", "premium", "premium+") — an honest covariate, NEVER a score input
   X_LEARN_LOOP_KEY: "xLearnLoop", // close-the-loop flag: when on, MEASURED per-account/per-angle outcomes influence ranking + the drafter's default angle (default OFF until the backtest proves the signal is predictive). Reversible kill switch.
+  X_GROWTH_LOOP_KEY: "xGrowthLoop", // account-scoped 14-day strategy experiments + daily follower/post snapshots
   X_DEBUG_KEY: "xDebug", // dev-only: exposes window.__goobiExport() to dump the learning data (reply log + trend snaps) for backtesting. No effect on the product.
 } as const;
 

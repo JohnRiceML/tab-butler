@@ -1,15 +1,14 @@
-import { CONFIG, isLocalhost } from "./config";
+import { CONFIG } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, POST_IDEAS_JUDGE_SYSTEM, POST_IDEAS_REGEN_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, DM_DRAFT_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, POST_IDEAS_JUDGE_SYSTEM, POST_IDEAS_REGEN_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import { cleanDraft } from "./text-clean";
+import { soulPrompt } from "./soul";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
 
 /**
- * Smart features run one of two ways, gated on the `smartEnabled` opt-in:
- *  - BYO-key: the user's Anthropic key is in storage → call the API directly
- *    (no server to run). This is the default, simplest path.
- *  - Proxy: no key set → fall back to the managed-tier proxy.
- * Either way we only ever send id/title/url/idle — never page content.
+ * Smart features are BYO-key and gated on the `smartEnabled` opt-in. The user's
+ * Anthropic key stays in extension storage and calls the API directly. The parked
+ * managed proxy is intentionally not part of the shipping extension.
  */
 
 export async function isSmartEnabled(): Promise<boolean> {
@@ -18,11 +17,6 @@ export async function isSmartEnabled(): Promise<boolean> {
 
 export async function getKey(): Promise<string | null> {
   return ((await chrome.storage.local.get(CONFIG.ANTHROPIC_KEY_KEY))[CONFIG.ANTHROPIC_KEY_KEY] as string) || null;
-}
-
-async function authHeader(): Promise<Record<string, string>> {
-  // TODO(prod): real auth token for the managed tier.
-  return { Authorization: "Bearer dev-placeholder-token" };
 }
 
 function toTabInput(t: chrome.tabs.Tab, now: number): TabInput | null {
@@ -82,13 +76,7 @@ export async function classify(tabs: chrome.tabs.Tab[]): Promise<ClassifyResult>
   if (key) {
     return callDirect<ClassifyResult>(key, "claude-haiku-4-5", CLASSIFY_SYSTEM, `Organize these ${inputs.length} tabs:\n\n${tabsToText(inputs)}`);
   }
-  const res = await fetch(`${CONFIG.PROXY_BASE_URL}/api/classify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeader()) },
-    body: JSON.stringify({ tabs: inputs }),
-  });
-  if (!res.ok) throw new Error(`classify: proxy ${res.status}`);
-  return (await res.json()) as ClassifyResult;
+  throw new Error("no-key");
 }
 
 export async function advise(tabs: chrome.tabs.Tab[]): Promise<AdviceResult> {
@@ -98,20 +86,7 @@ export async function advise(tabs: chrome.tabs.Tab[]): Promise<AdviceResult> {
   if (key) {
     return callDirect<AdviceResult>(key, "claude-haiku-4-5", ADVISE_SYSTEM, `Tabs:\n${tabsToText(inputs)}`);
   }
-  const localhost = tabs
-    .filter((t) => t.url && isLocalhost(t.url))
-    .map((t) => {
-      let port = 0;
-      try { port = Number(new URL(t.url!).port) || 0; } catch { /* ignore */ }
-      return { port, title: t.title, idleMinutes: idleMinutes(t, now) };
-    });
-  const res = await fetch(`${CONFIG.PROXY_BASE_URL}/api/advise`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeader()) },
-    body: JSON.stringify({ tabs: inputs, localhost }),
-  });
-  if (!res.ok) throw new Error(`advise: proxy ${res.status}`);
-  return (await res.json()) as AdviceResult;
+  throw new Error("no-key");
 }
 
 /* ---------- semantic recall (BYO-key) ---------- */
@@ -171,7 +146,7 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
 
 /** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
  *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
-export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string, steer?: string, extra?: string): Promise<string> {
+export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string, steer?: string, extra?: string, soulMd?: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
@@ -186,10 +161,33 @@ export async function draftReply(post: { author: string; text: string; context?:
     key,
     "claude-sonnet-4-6",
     X_DRAFT_SYSTEM,
-    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${extra ?? ""}${prod}${angleLine}${steerLine}`,
+    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}${soulPrompt(soulMd)}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${extra ?? ""}${prod}${angleLine}${steerLine}`,
     400,
   );
   return cleanDraft(reply); // dashes + quote-wrapping net (prompt says it, this guarantees it)
+}
+
+export interface DmDraftInput {
+  handle: string; intent: string; phase: "first" | "follow_up" | "reply"; goal?: string;
+  recipient?: { name?: string; bio?: string; followers?: number };
+  product?: { name: string; url?: string; blurb?: string };
+  reasons?: { label: string; detail?: string; source?: string }[];
+  context?: { kind: string; text?: string; url?: string }[];
+  priorMessages?: { direction: string; phase: string; text?: string; at?: number }[];
+}
+
+/** Draft-only private outreach. Context is sent to Claude only after this explicit user action. */
+export async function draftDm(input: DmDraftInput, voice: string): Promise<string> {
+  const key = await getKey(); if (!key) throw new Error("no-key");
+  const reasons = (input.reasons ?? []).slice(-8).map((r) => `- ${r.label}${r.detail ? `: ${r.detail}` : ""}`).join("\n") || "- none supplied";
+  const context = (input.context ?? []).filter((c) => !!c.text || !!c.url).slice(-8).map((c) => `- [${c.kind}] ${c.text ?? ""}${c.url ? ` (${c.url})` : ""}`).join("\n") || "- none supplied";
+  const history = (input.priorMessages ?? []).filter((m) => !!m.text).slice(-12).map((m) => `- ${m.direction === "inbound" ? "THEM" : "USER"}: ${m.text}`).join("\n") || "- no private history supplied";
+  const product = input.product ? `${input.product.name}${input.product.blurb ? ` — ${input.product.blurb}` : ""}${input.product.url ? ` (${input.product.url})` : ""}` : "none selected";
+  const msg = await rawCall(key, "claude-sonnet-4-6", DM_DRAFT_SYSTEM,
+    `User voice:\n${voice || "(not set — write plainly, warmly, and specifically)"}\n\nRecipient: @${input.handle}${input.recipient?.name ? ` (${input.recipient.name})` : ""}\nPublic bio: ${input.recipient?.bio || "not available"}\nIntent: ${input.intent}\nPhase: ${input.phase}\nUser's goal/note: ${input.goal || "not supplied"}\nSelected product/resource: ${product}\n\nWhy this person / evidence:\n${reasons}\n\nCaptured public or user context:\n${context}\n\nPrivate conversation history the user explicitly saved:\n${history}`,
+    500,
+  );
+  return cleanDraft(msg).slice(0, 2_000);
 }
 
 /** Per-idea quality call-out from the judge — surfaced in the UI so the user can triage (ship the
@@ -202,7 +200,7 @@ export interface OwnPostLite { text: string; likes?: number; reposts?: number; }
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet.
  *  The model scores ONLY hookStrength (0-3); the honest virality band is computed in the
  *  content script from hookStrength + the real measured rank of the source it remixed. */
-export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number, shapeLine?: string): Promise<PostIdea[]> {
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number, shapeLine?: string, strategyLine?: string, soulMd?: string): Promise<PostIdea[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p, i) => {
@@ -218,7 +216,8 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
     : "\n\n(The user's own posts were not available — the VOICE blurb is from REPLIES, so lean on it for tone only. COLD-START RULE: with no real person visible, contrarian / myth-bust / say-the-quiet-part shapes read as an LLM's idea of spicy — prefer plain, concrete, understated observations and questions; earn edge only from specifics you can actually ground.)";
   const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
   const shp = shapeLine?.trim() ? `\n\nMEASURED shape signal for this user (X-reported, settled posts only): ${shapeLine.trim()} When two seeds are equally strong, prefer that shape for 1-2 of the 5 — never force it onto a weak seed.` : "";
-  const userMsg = `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${ownBlock}${fol}${shp}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`;
+  const strategy = strategyLine?.trim() ? `\n\nACTIVE 14-DAY STRATEGY TEST: ${strategyLine.trim()} Make 3 of the 5 ideas valid executions of this bet, while preserving source honesty and never inventing evidence. Keep 2 ideas exploratory so the batch does not become repetitive.` : "";
+  const userMsg = `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${soulPrompt(soulMd)}${ownBlock}${fol}${shp}${strategy}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`;
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
     key,
     "claude-sonnet-4-6",
@@ -279,7 +278,7 @@ async function refinePostIdeas(key: string, ideas: PostIdea[], userMsg: string):
 }
 
 /** Rewrite one post idea per a steer, keeping the same topic + the user's voice. Sonnet, cheap. */
-export async function generatePostIdeaRewrite(text: string, steer: string, voice: string, source?: string, pattern?: string): Promise<string> {
+export async function generatePostIdeaRewrite(text: string, steer: string, voice: string, source?: string, pattern?: string, soulMd?: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const src = source?.trim() ? `\n\nThe source post whose pattern it borrows (for grounding, do NOT copy it):\n${source.trim().slice(0, 280)}` : "";
@@ -288,7 +287,7 @@ export async function generatePostIdeaRewrite(text: string, steer: string, voice
     key,
     "claude-sonnet-4-6",
     POST_IDEA_REWRITE_SYSTEM,
-    `User voice:\n${voice || "(not set — terse and specific; no marketing language, no emojis, no hashtags)"}\n\nCurrent draft:\n${text}\n\nSteer (how to change it): ${steer}${pat}${src}`,
+    `User voice:\n${voice || "(not set — terse and specific; no marketing language, no emojis, no hashtags)"}${soulPrompt(soulMd)}\n\nCurrent draft:\n${text}\n\nSteer (how to change it): ${steer}${pat}${src}`,
     400,
   );
   return cleanDraft(out); // dashes + quote-wrapping net

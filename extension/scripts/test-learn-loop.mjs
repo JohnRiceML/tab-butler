@@ -26,7 +26,8 @@ const NOW = 1_700_000_000_000, DAY = 86_400_000;
 const rep = (i, author, q, scoreCorr = true) => ({
   at: NOW - (30 - i * 0.5) * DAY, author, angle: "reply",
   score: scoreCorr ? q : 1 - q, ageMs: 20 * 60_000, followers: 1000,
-  outcome: { at: NOW - (28 - i * 0.5) * DAY, likes: Math.round(q * 30), replies: Math.round(q * 3), frozen: true },
+  confirmation: "rapidapi",
+  outcome: { at: NOW - (28 - i * 0.5) * DAY, likes: Math.round(q * 30), replies: Math.round(q * 3), views: Math.round(q * 1000), tweetId: `tweet-${author}-${i}`, frozen: true },
 });
 
 // ---- proven dataset: alice strong, bob weak, score tracks fit (fitCorr > 0) ----
@@ -41,6 +42,20 @@ const rep = (i, author, q, scoreCorr = true) => ({
   ok(mult.bob < 1 && mult.bob >= LEARN_MULT_MIN, `weak account tilts DOWN within cap (bob=${mult.bob?.toFixed(3)})`);
   ok(mult.alice > mult.bob, "strong ranks above weak");
   ok(!("carol" in mult), "account below the settled-outcome gate is omitted → neutral 1.0 at the call site");
+}
+
+// ---- behavior-changing path excludes provisional/manual/unknown-context outcomes ----
+{
+  const good = rep(1, "@Alice", 0.8);
+  ok(m.isActionGradeReply(good), "settled RapidAPI-proven row with reach + score is action-grade");
+  ok(!m.isActionGradeReply({ ...good, confirmation: "manual", outcome: { ...good.outcome, tweetId: undefined } }), "manual confirmation cannot reorder opportunities");
+  ok(!m.isActionGradeReply({ ...good, outcome: { ...good.outcome, frozen: false } }), "provisional outcome cannot reorder opportunities");
+  ok(!m.isActionGradeReply({ ...good, followers: undefined }), "unknown reach cannot enter behavior-changing normalization");
+  const mixed = [];
+  for (let i = 0; i < 8; i++) mixed.push(rep(i, i % 2 ? "Alice" : "@ALICE", 0.8));
+  for (let i = 0; i < 8; i++) mixed.push(rep(i, "Bob", 0.2));
+  const { mult } = accountRankMultipliers(mixed, NOW);
+  ok(mult.alice > 1 && !("Alice" in mult) && !("@ALICE" in mult), "account keys are canonicalized across casing and leading @");
 }
 
 // ---- anti-correlated: stage-1 score FIGHTS outcomes → fitCorr < 0 → tilt NOTHING ----

@@ -1,11 +1,11 @@
 # Voice + profile (the popup)
 
-> The X-copilot settings screen where you tell Goobi who you are — handle, niche, voice, products — and one-click "learn" your reply voice from your real X history.
+> The X-copilot settings screen where you tell Goobi who you are — handle, niche, voice, SOUL.md, daily goals, products — and one-click "learn" your reply voice from your real X history.
 
 **Surface:** the extension popup, the **"X copilot"** tab (the second vtab next to "Tabs"). Lives entirely in `src/popup/popup.ts` → rendered into `#view-x`. None of this is on x.com itself; it is the config that the on-page dock and background scoring read.
 
 ## What it does for the user
-This is the one place you describe yourself so every draft sounds like *you* and targets the right posts. You fill in what's worth replying to (niche), your products, draft defaults, your X handle, and a reply-voice sample — or you hit **"Learn my voice"** and Goobi reads your last ~40 replies off X and writes the voice profile for you. A safety panel sits at the top so you can see your reply pace and reputation status at a glance. Everything is stored locally and feeds the reply copilot's scoring and drafting.
+This is the one place you describe yourself so every draft sounds like *you* and targets the right posts. You fill in what's worth replying to (niche), a reply-voice sample, and a user-owned **SOUL.md** for your beliefs/themes/boundaries; set daily Reply/Post/DM-person goals; then optionally add products and draft defaults. **Learn my voice** reads recent replies for style only. Everything is stored locally.
 
 ## How the user uses it
 1. Open the popup and click the **"X copilot"** tab.
@@ -16,15 +16,16 @@ This is the one place you describe yourself so every draft sounds like *you* and
 6. **The profile coach** (renders in the dock's insights panel): visit your OWN profile once with Goobi on and it harvests the conversion surface at $0 (pinned post id + bio length, DOM-only, guarded against half-loaded pages). `profile-check.ts` then reports measured findings — "your pinned post ranks #4 of your last 15 by views — your #1 isn't pinned", empty/thin bio — because replies earn the profile CLICK but the profile converts it into the FOLLOW, and that surface was previously untouched by the product. Silent without a harvest; never guesses.
 7. Paste a **RapidAPI key** (twitter241 provider) to enable reach-aware ranking + voice-learning; a monthly usage meter shows if a key is stored.
 8. Type your **X handle** and click **"Learn my voice."** A toast streams progress ("Reading @handle's recent replies…"); on success the **voice** textarea is filled with your real replies and scrolled into view.
-9. Edit the voice box if desired, then click **"Save copilot settings."** A toast confirms (and counts saved products).
+9. Edit the voice box if desired. Fill **SOUL.md** directly or use the starter template; voice controls style, while SOUL.md controls point of view and boundaries.
+10. Set daily goals for verified Replies, Posts, and unique people DM'd (`0` disables one), then click **Save changes**.
 
 ## Settings survive reinstalls: the local seed file
 A plain extension **reload keeps everything** (`chrome.storage.local` persists). What wipes settings is a **remove + re-add** (needed when permissions change). The fix: copy `extension/goobi.local.example.json` → `extension/goobi.local.json`, fill in your keys / handle / followers / niche / voice / products, and build. The build copies it into `dist/`, and on a fresh install the service worker (`seedFromLocalFile`) fills every **empty** setting from it — it never overwrites values you've since edited in the panel. The file holds real secrets in plaintext, so it is **gitignored** (and `dist/` is too): machine-local only, never commit or share it, rotate anything that leaks.
 
 ## How it works
-**Load:** `getData()` reads all `X_*` keys from `chrome.storage.local` (niche, voice, products, default angle/product, RapidAPI key presence, handle, reply log) plus, if a key is stored, a `GET_TWTTR_METER` round-trip to the service worker. `render()` builds the `#view-x` HTML. Reply stats come from `computeReplyStats()` over the per-day `X_REPLY_LOG_KEY` buckets (pure local read, no API). Account-safety level comes from `reputationStatus(repliesThisHour)` in `reply-hygiene.ts`.
+**Load:** `getData()` reads all `X_*` keys from `chrome.storage.local` (niche, voice, SOUL.md, daily goals, products, default angle/product, RapidAPI key presence, handle, reply log) plus, if a key is stored, a `GET_TWTTR_METER` round-trip to the service worker. `render()` builds the `#view-x` HTML. Reply stats come from `computeReplyStats()` over the per-day `X_REPLY_LOG_KEY` buckets (pure local read, no API). Account-safety level comes from `reputationStatus(repliesThisHour)` in `reply-hygiene.ts`.
 
-**Save** (`dispatch` → `case "save-x"`): reads the DOM fields and writes `X_NICHE_KEY`, `X_VOICE_KEY`, `X_DEFAULT_ANGLE_KEY`, `X_DEFAULT_PRODUCT_KEY`, `X_MY_HANDLE_KEY`; the RapidAPI key is only overwritten when a new value is typed (the field is never pre-filled). The handle is normalized (`replace(/^@+/, "")`); if it changed, `X_MY_FOLLOWERS_KEY` is reset to 0 to drop a stale base. Products persist via `saveProducts()` → `collectProducts()` reads `.prodrow` inputs, writes `X_PRODUCTS_KEY`, and removes the legacy `X_PRODUCT_KEY`. If a handle + key are present, `resolveMyFollowers()` fires best-effort to size the reach sweet-spot.
+**Save** (`dispatch` → `case "save-x"`): reads the DOM fields and writes `X_NICHE_KEY`, `X_VOICE_KEY`, `X_SOUL_KEY`, normalized `X_DAILY_GOALS_KEY`, defaults, tier, and handle. SOUL.md is capped at 6,000 characters; goals are bounded by `daily-goals.ts`. The RapidAPI key is only overwritten when a new value is typed. Products persist separately through `saveProducts()`.
 
 **Learn my voice** (`dispatch` → `case "learn-voice"`) is the marquee pipeline:
 1. Reads the handle from the field (toasts and bails if empty); persists any just-typed RapidAPI key first so the SW sees it.
@@ -34,14 +35,14 @@ A plain extension **reload keeps everything** (`chrome.storage.local` persists).
 
 **API/model costs:** the only network calls here are to the third-party RapidAPI X-data provider (`twitter241.p.rapidapi.com`, host fixed in `CONFIG.TWTTR_HOST`), proxied through the service worker with budget guards (`budget-*` and `no-twttr-config` error codes are handled with specific toasts). **No Claude call happens in the popup's voice/profile flow** — there is no LLM here; `buildVoiceProfile` is pure string assembly. (Claude is only invoked elsewhere: Smart tab grouping, "Suggest cleanup", recall search, and on-page x.com drafting/scoring.) Persistence is entirely `chrome.storage.local`.
 
-**How this feeds other flows:** `xNiche` + `xVoice` + `products` + draft defaults are read by the on-page x.com dock and background scoring to decide *what's worth replying to* and *how to draft it* in the user's voice. `xMyHandle` + `xMyFollowers` size the "in reach" sweet-spot tag on the dock and power reach-aware ranking. `parseUser` is also reused by `resolveMyFollowers()`; `pickOwnPosts`/`pickOwnPostsWithStats`/`pickDiscoveryTweets` in the same `twttr.ts` serve the post-ideas + momentum flows off the same parsers.
+**How this feeds other flows:** `xNiche` decides what is relevant; `xVoice` controls style; `xSoulMd` supplies the user-authored point of view for explicit reply/post generation; products/defaults steer applicable drafts. SOUL.md is not used as evidence and is not sent for DM drafts. `xDailyGoals` powers the cross-workspace daily scorecard. `xMyHandle` + `xMyFollowers` size the reach sweet spot and power account-scoped data.
 
 ## What is honest about it / limits
 - **Voice is MEASURED, not invented:** the profile is built only from replies the API confirms the user authored (`authorId === userId`), with a guard that drops trivial one-word/emoji samples so the drafter learns real prose. The prompt explicitly says "Do not copy them verbatim."
 - **Followers/replies are a third-party PROXY:** all X data comes from twitter241 on RapidAPI, *not* X's official API — the UI states this plainly ("Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key."). `following` is left `undefined` (not 0) when absent so reciprocity logic stays neutral rather than treating the user as a broadcaster.
-- **Draft-only keystone:** the X-tab footer note states *"On x.com, the text of timeline posts is sent to Claude to score & draft. Draft-only — it never posts for you."* The Account-safety card reinforces it: *"Likes & follows are spaced out with human delays, never fired in lockstep — and nothing ever auto-posts."*
-- **Pace honesty guard:** the safety panel surfaces the same numbers the on-page nudges use (replies this hour vs X's ~30/hr automation read, accounts-spread today) so the anti-spam protection is visible, not silent plumbing.
-- **What it cannot know:** reply counts are only what the local per-day log captured (starts at zero — "Draft a reply and hit Insert on X — your count starts here"); follower count is best-effort and can be stale/zero until a successful resolve.
+- **No-auto-submit keystone:** the X-tab footer states that Like + insert may fill X's reply box after the user's click, but Goobi never submits or posts. The Account-safety card reinforces that the user still reviews and controls the final action.
+- **Pace honesty guard:** the safety panel surfaces the same conservative 6/hr caution and 10/hr pause lines the on-page nudges use, explicitly labels them as Goobi guardrails rather than X limits, and shows accounts-spread today.
+- **What it cannot know:** local reply-attempt counts include successful composer fills before provider verification, so abandoning a filled X draft can temporarily overcount. Follower count is best-effort and can be stale/zero until a successful resolve.
 
 ## Key files
 - `src/popup/popup.ts` — all render + dispatch logic for the X-copilot tab (save-x, learn-voice, product rows, safety/showcase cards).

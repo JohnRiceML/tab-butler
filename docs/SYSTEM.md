@@ -18,7 +18,8 @@ cd extension
 npm install
 npm run build        # node build.mjs (esbuild) → dist/   (load dist/ as an unpacked extension)
 npm run typecheck    # tsc --noEmit   ← the type gate
-for t in twttr policy hygiene pacing community momentum learn-stats supporters targets suggest-targets prompts activity draft-context profile-check threads text-clean; do node scripts/test-$t.mjs; done   # pure-lib unit tests
+npm test                 # every zero-cost scripts/test-*.mjs suite
+npm run verify           # typecheck + all tests + production build + dist validation
 node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band eval (Layer A; $0, no key)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-live.mjs --live   # Layer B: live generate→Haiku-judge quality eval (opt-in, ~$0.20/run; no-op without --live)
 # ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-2pass.mjs --live   # Layer B: the reject-and-regenerate SECOND-PASS gate (pass-1 vs pass-2; ~$0.30/run)
@@ -51,17 +52,19 @@ scroll → MutationObserver → requestScan (rAF-coalesced) → scan()
   → collect article[data-testid="tweet"] (skip ads / own / no-text / dedup via seen + inFlight + dataset.tbx)
   → flush() batches ≤12 → SW {type: SCORE_POSTS} → Claude (Haiku) → {score, reason, category}
   → score ≥ 0.6 (THRESHOLD) → Opp (opps map + seen cache)
-       → badge() the post in-feed ("NN% · Category", green "✓ Commented" once replied)
+       → badge() the post in-feed (growth lane pill → expandable evidence/actions; green "✓ Replied" once recorded)
        → dock card, ranked live by effectiveScore = model × freshness × reach × slotOdds × surface × community-tier
          (slotOdds = conversation-dedup winnability; surface = the low_blast_radius reply-grader gate — both from targets.ts)
   → Draft → SW {type: DRAFT_REPLY} → Claude (Sonnet) → reply text
-       → doInsert(): one-shot type into X's reply DraftJS box + like the post + log the reply
+       → runReplyDraftAction(): default like + one-shot reply-composer fill; optional copy + open fallback
+       → successful fill records the assisted attempt, closes Goobi's panel, and refreshes feed/dock/side panel
+       → user reviews/submits in X; RapidAPI can verify the pending attempt later
 ```
 
 Everything that touches Claude or the Twttr (RapidAPI) provider crosses the
 content-script → service-worker boundary via the `send()` wrapper — x.com's CSP
-forbids fetching them from the page. **The copilot only ever drafts/inserts. It
-never submits a reply, never posts.**
+forbids fetching them from the page. **The copilot may like the selected post and
+fill X's reply composer after a user click, but it never submits a reply or posts.**
 
 ## File map
 
@@ -69,9 +72,14 @@ never submits a reply, never posts.**
 One injected script. Sections, by responsibility:
 - **scan → score → badge** — `scan` / `requestScan` / `scheduleFlush` / `flush`; per-session caps (`MAX_SCORE_CALLS`, `THRESHOLD`).
 - **X DOM extraction** — `statusInfo`, `outerText`/`quotedText` (quote-tweet-resilient), `displayName`, `isVerified`, `avatarUrl`, `engagement`/`snapStats`.
-- **in-feed badge** — `badge` (`catId`/`catLabel`); the `✦ score · tag` pill that flips to green `✓ Commented` via `commentedIds`.
-- **draft panel + steering** — `draftFor`, `paintPanel`, `angleRow`, `productRow`, `doInsert`, `insertReply`/`typeInto` (verified one-shot DraftJS insert).
+- **in-feed decision overlay** — `badge` / `addButton` (`catId`/`catLabel`); a compact growth-lane pill that expands into Why now, three decision signals, evidence confidence, cautions, and Draft/Open/Mark replied/Skip controls. A recent confirmed reply to the author lowers all three lanes and turns the pill amber with `↻ Replied X ago` before drafting. Passed posts explain the pass and support an explicit override. It flips to green `✓ Replied` via `commentedIds`.
+- **draft panel + steering** — `draftFor`, `paintPanel`, `angleRow`, `productRow`, `runReplyDraftAction`, `likeAndInsertReply`, `handoffReply`; default user-clicked Like + insert records immediately and closes the panel, while copy/open fallback retains explicit posted confirmation.
 - **dock** — `renderDock`, `renderList`, `topOpps`, `ensureDock`; launcher pill ↔ expanded panel, sort tabs, pace chip, kebab.
+- **Comments workspace** — `buildComments`, `renderThreadsPanel`; a primary warm-conversation queue from recent notification replies/mentions. Targets remains a secondary Replies → Find people drill-in.
+- **daily goals** — `dailyGoalTracker` + `daily-goals.ts`; an always-visible verified Replies / detected-or-marked Posts / unique manually marked DM-people scorecard with locally configurable, conservatively bounded targets.
+- **SOUL.md** — `soul.ts` + the side-panel editor; a user-owned beliefs/themes/earned-experience/boundaries block injected into explicit reply and post generation, separate from learned voice and excluded from DMs.
+- **DM workspace** — `buildDms`, `planDm`, `draftDmFor`, `refreshDmContext`; an account-isolated relationship-planning mode with explicit public enrichment and manually recorded private outcomes.
+- **Growth loop** — `buildGrowth`, `captureGrowthData`, `ensureGrowthOwner`; a fifth dock mode that runs one 14-day profile strategy test, compares it with the prior window, and carries the active bet into Post ideas.
 - **launcher avatar stack** — `launcherAvatars`, `lavInitial`.
 - **Goobi driver** — `goobiMood`, `goobiStatus`, `goobiReact`/`goobiReactLove`, `refreshGoobi`, `touchGoobi` (maps dock signals → mascot moods).
 - **in-dock playground** — `buildPlay`, `feedTreat`, `petGoobi`, `syncPlay`, `openPlay`/`closePlay`/`togglePlay`, `resetPlay`; `fedEver`/`fedTotal` persisted.
@@ -81,12 +89,12 @@ One injected script. Sections, by responsibility:
 - **discovery + routing** — `findSpots` (niche search via Twttr), `urlPoll` (SPA navigation).
 
 ### `src/background/service-worker.ts` — broker
-Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
+Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `DRAFT_DM`, `POST_IDEAS`, `POST_IDEA_REWRITE`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
 
 ### `src/lib/` — pure-ish modules
 | File | Role | Test |
 |---|---|---|
-| `claude-client.ts` | All Claude calls: `scorePosts`, `draftReply` (+ `steer`), `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas). BYO-key direct; parked proxy path. | — |
+| `claude-client.ts` | All shipping Claude calls: `scorePosts`, `draftReply` (+ `steer`), `draftDm`, `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas/DM). BYO-key direct; the parked proxy is excluded from the extension. | — |
 | `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention). | `test-prompts` (invariant guard) |
 | `text-clean.ts` | Deterministic draft cleaners under the prompt rules — `stripDashes` (no em/en dash, no hyphenated compounds; links shielded) + `stripEmphasisQuotes` (unwraps scare/emphasis quotes, preserving apostrophes + possessives) + `cleanDraft` (the combined net). Applied by claude-client to BOTH reply drafts and post ideas. | `test-text-clean` |
 | `types.ts` | The message union + shared types. `XScore.category` is a bare `string` — the enum lives only in the prompt + the `catId` runtime guard. | — |
@@ -99,6 +107,9 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 | `supporters.ts` | Pure **reciprocity engine** ("who shows up for you"): `aggregateSupporters` (scores reply+mention only — likes/reposts are lossy chips), `rankSupporters`, `fuseMutual` (cohort-invariant mutual/fan/one-way labels, fused with learn-stats' invest), `reciprocalConcentration` (anti-pod ring detector), `cadence`. x-copilot harvests the events from the **notifications-page DOM** (`scanNotifications`, zero API) + owns the dock panel. | `test-supporters` |
 | `suggest-targets.ts` | Pure **auto-suggest ranking** for the Targets mode: `suggestionScore` (multiplicative, each factor tied to a real X-ranker mechanism — sweet-spot reach, follow-graph openness, niche overlap, predicted engagement-rate, our own measured outcome; missing signals neutral 1.0), `rankSuggestions`, `suggestionReason` (honest, banded, "two-way account" not "replies to people"). x-copilot builds candidates from the free `authorReach` cache. | `test-suggest-targets` |
 | `targets.ts` | Pure **"Target accounts" logic** (comment early on big in-reach niche accounts): `excludeFromTargets`/`inReachBand`/`reachMultipleLabel`/`bandHiFor` (the size-scaled ~2–25× sweet-spot + `MEGA_CAP` hard mega-exclusion), `addTarget`/`removeTarget` (cap/dedupe), `freshnessLabel` (the early-comment window), `selectPollBatch` (the ≤5/kick + persisted 12-min TTL invariant powering the LIVE ambient poller). **Reply-surface realism** (2026-code-grounded): `gradedSurface`/`surfaceLabel`/`surfaceMult` (the low_blast_radius reply-grader gate — a relationship-only thread can't reach strangers) and `slotOdds` (conversation-dedup: one reply per thread reaches For You). x-copilot owns the dock mode + the (user-initiated, governed) fetches; tracking reuses `learn-stats`. | `test-targets` |
+| `dm-workspace.ts` | Pure **DM relationship workspace**: owner-scoped candidates, six growth intents, evidence gates, stable-ID merge, remove tombstones, manual pipeline transitions, one due follow-up, local duplicate checks, and conservative marked-send pacing. No inbox read/send behavior. | `test-dm-workspace` |
+| `dm-intelligence.ts` | Pure **KISS DM decision layer**: one priority-ordered next move (real reply → due follow-up → grounded Ready plan → research) plus self-reported funnel, angle, and people-source summaries. Send-time snapshots prevent later CRM edits from rewriting attribution; learning is display-only and sample-gated (3 for local evidence, 5 before a source can be called clearest). | `test-dm-intelligence` |
+| `growth-loop.ts` | Pure **account growth learning loop**: account-scoped daily snapshots, five explicit strategy bets, 14-day matched-window experiments, thin-data gates, action tagging, cross-tab merge, and collect/double-down/tighten/switch decisions. Reports co-movement, never profile-click attribution. | `test-growth-loop` |
 | `threads.ts` | Pure **"Tend your threads"** action queue: `rankThreads` ranks the people who replied to / mentioned you (from the notifications harvest, $0) freshest-first into a to-tend list — answering your own repliers is the top-ordered growth action (author-engaged replies grade highest; keeping a convo alive is what dedup promotes). Honest: no parent-thread id (can't group by your post), "tended" is a lossy handle+time guess. x-copilot harvests the reply text + owns the dock panel. | `test-threads` |
 | `idea-quality.ts` | Pure **Post-ideas exemplar quality + honest virality**: `isEnglish`/`looksLikeRT`/`isBait` (drop poison exemplars), `classifyShape` (diversity), `scoreWinner`/`percentile` (genuine-breakout ranking), `ideaTokens`/`jaccard` (de-dupe), `bandFor` (virality band anchored to the source's real measured rank — never a fabricated number). x-copilot's `pickBest` orchestrates these. | `eval-post-ideas` |
 | `human-pacing.ts` | Human-like delays/jitter for likes/follows. | `test-pacing` |
@@ -115,7 +126,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `POST_IDEAS`, `POST_IDEA_REWRITE`
 `popup.ts` + `popup.html`: BYO-key + smart toggle, voice capture (`/user-replies` learning), products, niche, account-safety panel, follower count, the tab list, and the **side-panel Goobi playground** (its own copy, distinct from the dock's).
 
 ## Storage keys (`CONFIG`)
-Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILOT_KEY` (on/off), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_IDEAS_KEY`, `X_MY_POSTS_KEY` (own-posts cache: idea de-dupe + momentum views), `X_LEARN_STATS_KEY` (engagement learning loop: own-post trend + scan gates), `X_SUPPORTERS_KEY` (reciprocity: who engages with me, harvested from the notifications DOM), `X_TARGETS_KEY` ("Target accounts" list: big in-reach accounts to comment on early), `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
+Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILOT_KEY` (on/off), `X_DATA_CONSENT_KEY` (versioned disclosure acceptance required before boot), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_REPLY_INSERT_KEY` (default-on Like + insert; false = copy/open), `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_IDEAS_KEY`, `X_MY_POSTS_KEY` (own-posts cache: idea de-dupe + momentum views), `X_LEARN_STATS_KEY` (engagement learning loop: own-post trend + scan gates), per-owner `X_GROWTH_LOOP_KEY:<handle>` records (account-level strategy experiments), `X_SUPPORTERS_KEY` (reciprocity: who engages with me, harvested from the notifications DOM), `X_TARGETS_KEY` ("Target accounts" list: big in-reach accounts to comment on early), per-owner `X_DM_WORKSPACE_KEY:<handle>` records, `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
 
 ## Conventions & gotchas
 - **Closed shadow roots.** The dock and draft panel mount on hosts appended to

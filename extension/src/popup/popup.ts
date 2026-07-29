@@ -2,9 +2,11 @@ import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { reputationStatus, type RepLevel } from "../lib/reply-hygiene";
+import { reputationStatus, REPLY_HARD_PER_HOUR, REPLY_SOFT_PER_HOUR, type RepLevel } from "../lib/reply-hygiene";
 import { mountGoobi, type GoobiHandle } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
+import { DEFAULT_DAILY_GOALS, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
+import { normalizeSoul, SOUL_TEMPLATE } from "../lib/soul";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -54,11 +56,11 @@ function productRow(p?: ProductItem): string {
   return `<div class="prodrow" style="border:.5px solid var(--line-strong);border-radius:10px;padding:8px;margin-bottom:8px">
     <div style="display:flex;gap:6px;align-items:center">
       ${productIconHTML(p)}
-      <input class="pname" placeholder="Product name" value="${esc(p?.name ?? "")}" style="${ist}"/>
-      <button data-action="del-product" title="Remove product" style="flex:0 0 auto;background:none;border:0;color:#8c7d68;font-size:14px;cursor:pointer;padding:0 4px">✕</button>
+      <input class="pname" aria-label="Product name" placeholder="Product name" value="${esc(p?.name ?? "")}" style="${ist}"/>
+      <button data-action="del-product" title="Remove product" aria-label="Remove product" style="flex:0 0 auto;background:none;border:0;color:#b6a892;font-size:14px;cursor:pointer;padding:7px">✕</button>
     </div>
-    <input class="purl" placeholder="https://yourproduct.com (optional)" value="${esc(p?.url ?? "")}" style="${ist};margin-top:6px"/>
-    <input class="pdesc" placeholder="One-liner: what it does, who it's for" value="${esc(p?.blurb ?? "")}" style="${ist};margin-top:6px"/>
+    <input class="purl" aria-label="Product URL" placeholder="https://yourproduct.com (optional)" value="${esc(p?.url ?? "")}" style="${ist};margin-top:6px"/>
+    <input class="pdesc" aria-label="Product description" placeholder="One-liner: what it does, who it's for" value="${esc(p?.blurb ?? "")}" style="${ist};margin-top:6px"/>
   </div>`;
 }
 /** Read the current product rows from the DOM (named rows only). */
@@ -113,12 +115,16 @@ interface ViewData {
   archivedCount: number;
   dedupe: boolean;
   hasKey: boolean;
+  xConsent: boolean;
   xEnabled: boolean;
   xNiche: string;
   xVoice: string;
+  xSoul: string;
+  dailyGoals: DailyGoals;
   products: ProductItem[];
   xDefaultAngle: string;
   xDefaultProduct: string;
+  xInsertEnabled: boolean;
   twttrKey: string;
   xMyHandle: string;
   xPremium: string;
@@ -160,12 +166,16 @@ const MOCK: ViewData = {
   archivedCount: 6,
   dedupe: true,
   hasKey: false,
-  xEnabled: true,
+  xConsent: false,
+  xEnabled: false,
   xNiche: "",
   xVoice: "",
+  xSoul: "",
+  dailyGoals: DEFAULT_DAILY_GOALS,
   products: [],
   xDefaultAngle: "",
   xDefaultProduct: "",
+  xInsertEnabled: true,
   twttrKey: "",
   xMyHandle: "",
   xPremium: "",
@@ -218,7 +228,7 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.X_REPLY_INSERT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
   const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; outcome?: { likes?: number; replies?: number; authorReplied?: boolean } }[] } | undefined;
@@ -245,12 +255,16 @@ async function getData(): Promise<ViewData> {
     archivedCount: archive?.length ?? 0,
     dedupe: store[CONFIG.AUTO_DEDUPE_KEY] !== false,
     hasKey: Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]),
-    xEnabled: store[CONFIG.X_COPILOT_KEY] !== false,
+    xConsent: store[CONFIG.X_DATA_CONSENT_KEY] === "v1",
+    xEnabled: store[CONFIG.X_DATA_CONSENT_KEY] === "v1" && Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]) && store[CONFIG.X_COPILOT_KEY] !== false,
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
+    xSoul: normalizeSoul(store[CONFIG.X_SOUL_KEY]),
+    dailyGoals: normalizeDailyGoals(store[CONFIG.X_DAILY_GOALS_KEY]),
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
+    xInsertEnabled: store[CONFIG.X_REPLY_INSERT_KEY] !== false,
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
     xPremium: (store[CONFIG.X_PREMIUM_KEY] as string) || "",
@@ -304,7 +318,7 @@ function replyShowcaseHTML(s: ViewData["replyStats"]): string {
     `<div style="flex:1;background:var(--row);border-radius:9px;padding:9px 10px">
       <div style="font-size:21px;font-weight:500;line-height:1">${n}</div>
       <div style="font-size:10.5px;color:var(--t3);margin-top:3px">${l}</div></div>`;
-  const hint = s.total ? "" : `<div class="dim" style="font-size:10.5px;margin-top:8px">Draft a reply and hit Insert on X — your count starts here.</div>`;
+  const hint = s.total ? "" : `<div class="dim" style="font-size:10.5px;margin-top:8px">Draft a reply, post it on X, then confirm it in Goobi — your count starts there.</div>`;
   return `<div class="li" style="display:block">
     <div class="name" style="margin-bottom:8px">Replies sent <span class="dim" style="font-weight:400">— how the copilot is helping</span></div>
     <div style="display:flex;gap:8px">${tile(s.today, "today")}${tile(s.week, "this week")}${tile(s.total, "all time")}</div>
@@ -338,12 +352,13 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
   const HEX: Record<RepLevel, string> = { healthy: "#4fae6a", caution: "#e89a3c", easeoff: "#d6604a" };
   const CAP: Record<RepLevel, string> = { healthy: "Healthy", caution: "Caution", easeoff: "Ease off" };
   const SUB: Record<RepLevel, string> = {
-    healthy: "You're engaging like a person, not a bot — that's what keeps your reach safe.",
-    caution: "Approaching X's pace threshold — ease up a little to stay clearly human.",
-    easeoff: "You're near X's automation line — take a break before replying more.",
+    healthy: "Keep replies specific, varied, and relevant to real conversations.",
+    caution: "Goobi's conservative pace guard is approaching — slow down and favor warm conversations.",
+    easeoff: "Goobi's hourly guard is reached — take a real break before replying more.",
   };
   const c = HEX[s.level];
-  const pacePct = Math.min(100, Math.round((s.repliesThisHour / 30) * 100));
+  const pacePct = Math.min(100, Math.round((s.repliesThisHour / REPLY_HARD_PER_HOUR) * 100));
+  const cautionPct = Math.round((REPLY_SOFT_PER_HOUR / REPLY_HARD_PER_HOUR) * 100);
   // Emoji glyphs (no icon font is bundled, so Tabler <i class="ti …"> rendered as tofu).
   const row = (icon: string, color: string, title: string, detail: string, extra = "") =>
     `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:.5px solid var(--line)">
@@ -352,17 +367,17 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
     </div>`;
   const bar = `<div style="height:5px;border-radius:3px;background:var(--row);margin-top:6px;position:relative;overflow:hidden">
     <div style="height:100%;width:${pacePct}%;background:${c};border-radius:3px"></div>
-    <div style="position:absolute;top:-2px;bottom:-2px;left:66%;width:1.5px;background:var(--t3)" title="pace-yourself line (20/hr)"></div></div>`;
+    <div style="position:absolute;top:-2px;bottom:-2px;left:${cautionPct}%;width:1.5px;background:var(--t3)" title="Goobi's caution line (${REPLY_SOFT_PER_HOUR}/hr)"></div></div>`;
   return `<div class="li" style="display:block">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
       <div class="name">Account safety</div>
       <span style="font-size:10.5px;font-weight:500;color:${c};background:${c}24;padding:3px 9px;border-radius:999px">● ${CAP[s.level]}</span>
     </div>
     <div style="font-size:10.5px;color:var(--t3);line-height:1.4">${SUB[s.level]}</div>
-    ${row("⏱️", c, "Reply pace", `${s.repliesThisHour} in the last hour · X reads ~30/hr as automated`, bar)}
+    ${row("⏱️", c, "Reply pace", `${s.repliesThisHour} in the last hour · Goobi pauses at ${REPLY_HARD_PER_HOUR}/hr; X publishes no guaranteed safe rate`, bar)}
     ${row("👥", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
     ${row("✅", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
-    ${row("🖐️", "#c68a4e", "Human-paced actions", "Likes &amp; follows are spaced out with human delays, never fired in lockstep — and nothing ever auto-posts")}
+    ${row("🖐️", "#c68a4e", "You stay in control", "Like + insert fills the selected reply box after your click; copy + open is optional. Goobi never auto-submits.")}
   </div>`;
 }
 
@@ -403,15 +418,17 @@ function groupRow(g: GroupVM): string {
 
 function keyRow(d: ViewData): string {
   if (d.hasKey) {
-    return `<div class="li"><div class="grow"><div class="name">Anthropic key</div><div class="sub">✓ stored locally · Smart runs with no proxy</div></div><button class="act" data-action="clear-key">Change</button></div>`;
+    return `<div class="li"><div class="grow"><div class="name">Anthropic key</div><div class="sub">✓ stored locally · calls Anthropic directly</div></div><button class="act danger" data-action="clear-key">Remove</button></div>`;
   }
-  return `<div class="li" style="display:block"><div class="name" style="margin-bottom:6px">Anthropic key <span class="dim" style="font-weight:400">— optional, runs Smart with no proxy</span></div>
-    <div style="display:flex;gap:8px"><input id="keyinput" type="password" placeholder="sk-ant-..." autocomplete="off" style="flex:1;background:var(--row);border:0.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px 10px;font-family:inherit;font-size:12px;outline:none"/><button class="btn" data-action="save-key" style="padding:7px 12px">Save</button></div></div>`;
+  return `<div class="li" style="display:block"><label class="field" for="keyinput">Anthropic key <span class="field-hint">— required for Smart</span></label>
+    <div class="input-action"><input class="control" id="keyinput" type="password" placeholder="sk-ant-..." autocomplete="off"/><button class="btn" data-action="save-key">Save</button></div></div>`;
 }
 
 let expanded = false;
 type PanelTab = "tabs" | "x";
-let activeTab: PanelTab = "tabs";
+// The X copilot is the product today; the tab manager remains available as the
+// secondary surface. Starting on Tabs made the first-run path contradict that.
+let activeTab: PanelTab = "x";
 let playground = false;                 // Goobi's playground screen (click the mascot to open)
 let pgGoobi: GoobiHandle | null = null; // the big playground Goobi
 let pgTotal = 0;                        // treats to feed = replies sent today
@@ -425,12 +442,12 @@ function renderPlayground(d: ViewData): string {
     : `<div class="dim" style="font-size:12px;text-align:center">No treats yet — reply to a post and Goobi gets a snack.</div>`;
   return `
   <button class="pg-back" data-action="pg-close">‹ Back</button>
-  <div class="pg-stage" data-action="pg-pet" title="Tap to pet Goobi">
+  <div class="pg-stage" role="button" tabindex="0" data-action="pg-pet" title="Tap to pet Goobi" aria-label="Pet Goobi">
     <div class="pg-shadow"></div>
     <div id="goobi-pg"></div>
   </div>
-  <div class="pg-msg" id="pg-msg">${n ? "Feed Goobi today's replies — tap a treat." : "Reply to a post and come feed Goobi."}</div>
-  <div class="pg-meter"><div class="pg-fill" id="pg-fill" style="width:0%"></div></div>
+  <div class="pg-msg" id="pg-msg" role="status" aria-live="polite">${n ? "Feed Goobi today's replies — tap a treat." : "Reply to a post and come feed Goobi."}</div>
+  <div class="pg-meter" role="progressbar" aria-label="Goobi's belly" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="0"><div class="pg-fill" id="pg-fill" style="width:0%"></div></div>
   <div class="pg-meterlbl"><span>Goobi's belly</span><span id="pg-count">0 / ${n}</span></div>
   <div class="pg-treats" id="pg-treats">${treatsHtml}</div>
   <div class="dim" style="font-size:11px;text-align:center;margin-top:12px">Tap Goobi to pet him · ${n} ${n === 1 ? "reply" : "replies"} today</div>`;
@@ -447,22 +464,20 @@ function render(d: ViewData): string {
   const expandRow = all.length > 3
     ? `<button class="btn" data-action="${expanded ? "collapse" : "expand"}" style="width:100%;margin-top:8px">${expanded ? "Collapse" : `Expand · view all ${all.length} groups`}</button>`
     : "";
+  const setupReady = d.hasKey && d.xConsent && !!d.xNiche.trim();
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><div class="sq" id="goobi-face" data-action="open-playground" title="Open Goobi's playground" style="background:var(--brand);cursor:pointer">${ICON.layout}</div><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Your browser buddy.</div></div></div>
-    <div class="row-flex gap12">
-      <span class="muted" style="font-size:11.5px">Smart</span>
-      <label class="switch"><input type="checkbox" id="smart" aria-label="Smart mode — use Claude for grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label>
-    </div>
+    <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Find the right words on X.</div></div></div>
+    <span class="pill"><span class="dot" style="background:${d.xEnabled && setupReady ? "var(--green)" : "var(--t3)"}"></span>${!d.xEnabled ? "X copilot off" : setupReady ? "Ready for X" : "Finish setup"}</span>
   </header>
 
-  <div class="vtabs">
-    <button class="vtab${activeTab === "tabs" ? " on" : ""}" data-action="switch-tab" data-tab="tabs">Tabs</button>
-    <button class="vtab${activeTab === "x" ? " on" : ""}" data-action="switch-tab" data-tab="x">X copilot</button>
+  <div class="vtabs" role="tablist" aria-label="Goobi tools">
+    <button class="vtab${activeTab === "tabs" ? " on" : ""}" id="tab-tabs" role="tab" aria-selected="${activeTab === "tabs"}" aria-controls="view-tabs" data-action="switch-tab" data-tab="tabs">Tab tools</button>
+    <button class="vtab${activeTab === "x" ? " on" : ""}" id="tab-x" role="tab" aria-selected="${activeTab === "x"}" aria-controls="view-x" data-action="switch-tab" data-tab="x">X replies</button>
   </div>
 
-  <div id="view-tabs"${activeTab === "tabs" ? "" : " hidden"}>
-  <div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search tabs, archive &amp; history…" autocomplete="off"/><span class="kbd">↵ search</span></div>
+  <div id="view-tabs" role="tabpanel" aria-labelledby="tab-tabs"${activeTab === "tabs" ? "" : " hidden"}>
+  <label class="sr-only" for="q">Search tabs, archive and history</label><div class="search" style="margin-top:12px">${ICON.search}<input id="q" placeholder="Search tabs, archive &amp; history…" autocomplete="off"/><span class="kbd">↵ search</span></div>
 
   <div class="toolbar" style="margin-top:10px">
     <button class="btn primary" data-action="group">${ICON.layout} ${d.smart ? "Group with Claude" : "Group by site"}</button>
@@ -480,6 +495,8 @@ function render(d: ViewData): string {
 
   <div class="sec"><h2>Settings</h2></div>
   <div class="list">
+    <div class="li"><div class="grow"><div class="name">Claude grouping &amp; cleanup</div><div class="sub">opt in to AI grouping, suggestions, and archive search</div></div>
+      <label class="switch"><input type="checkbox" id="smart" aria-label="Use Claude for tab grouping and cleanup" ${d.smart ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
     <div class="li"><div class="grow"><div class="name">Auto-merge duplicate tabs</div><div class="sub">switch to the open tab instead of a copy</div></div>
       <label class="switch"><input type="checkbox" id="dedupe" aria-label="Auto-merge duplicate tabs" ${d.dedupe ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
     ${d.smart ? keyRow(d) : ""}
@@ -492,51 +509,95 @@ function render(d: ViewData): string {
   <div class="note">${ICON.lock}<div>RAM is system-wide (per-process detail lives in the <code>tb</code> CLI). Smart features are opt-in and send page titles + URLs to Claude — search also includes recent history.</div></div>
   </div>
 
-  <div id="view-x"${activeTab === "x" ? "" : " hidden"}>
-  <div class="sec"><h2>X reply copilot</h2><label class="switch"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
+  <div id="view-x" role="tabpanel" aria-labelledby="tab-x"${activeTab === "x" ? "" : " hidden"}>
+  <div class="sec"><h2>X reply copilot</h2><label class="switch" title="${d.xConsent ? "Turn the X copilot on or off" : "Review and accept the data disclosure first"}"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""} ${d.xConsent ? "" : "disabled"}/><span class="track"><span class="knob"></span></span></label></div>
+  <div class="setup">
+    <div class="setup-title">${setupReady ? "You're ready to find a good conversation" : "Set up your reply copilot"}</div>
+    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
+    ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. Activity, drafts, DM notes, goals, SOUL.md, and growth history stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
+    ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Anthropic key stored</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Anthropic API key</label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Save key</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
+    <div class="setup-steps">
+      <div class="setup-step${d.hasKey && d.xConsent ? " done" : ""}">${d.hasKey && d.xConsent ? "✓" : "1"} Connect + agree</div>
+      <div class="setup-step${d.xNiche.trim() ? " done" : ""}">${d.xNiche.trim() ? "✓" : "2"} Set your focus</div>
+      <div class="setup-step${d.xVoice.trim() || d.xSoul.trim() ? " done" : ""}">${d.xVoice.trim() || d.xSoul.trim() ? "✓" : "3"} Voice + soul <span aria-hidden="true">·</span> optional</div>
+    </div>
+  </div>
+  <details class="fold profile-fold"${setupReady ? "" : " open"}>
+    <summary>${setupReady ? "Edit focus, voice &amp; SOUL.md" : "Complete your profile"} <span class="field-hint">${d.xSoul.trim() ? "creative brief saved" : "voice and soul are optional"}</span></summary>
   <div class="list">
-    ${replyShowcaseHTML(d.replyStats)}
-    ${accountSafetyHTML(d.safety)}
-    ${signalHealthHTML(d.signals)}
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">What's worth replying to <span class="dim" style="font-weight:400">— search keywords, then ";", then your intent</span></div>
-      <textarea id="xniche" rows="2" placeholder="e.g. AI SaaS, indie founders, MRR; posts I can add a specific build lesson to — words before the ; drive X search, the rest guides scoring" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xNiche)}</textarea>
+      <label class="field" for="xniche">Your focus <span class="field-hint">— topics and conversations to find</span></label>
+      <textarea class="control" id="xniche" rows="2" placeholder="AI SaaS, indie founders, practical build lessons…">${esc(d.xNiche)}</textarea>
     </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">Your products <span class="dim" style="font-weight:400">— name, link &amp; a one-liner each</span></div>
+      <label class="field" for="xvoice">Your reply voice <span class="field-hint">— optional tone notes or 2–3 examples</span></label>
+      <textarea class="control" id="xvoice" rows="3" placeholder="Paste replies you're proud of, or describe your tone…">${esc(d.xVoice)}</textarea>
+    </div>
+    <div class="li" style="display:block">
+      <label class="field" for="xsoul">Your SOUL.md <span class="field-hint">— what you believe, know, return to, and refuse to sound like</span></label>
+      <textarea class="control soul-control" id="xsoul" rows="9" maxlength="6000" spellcheck="true" placeholder="# What I believe&#10;- Specific beats polished&#10;&#10;# What I have earned the right to talk about&#10;- …">${esc(d.xSoul)}</textarea>
+      <div class="soul-foot"><span>Voice controls style. SOUL.md supplies your point of view and creative boundaries.</span><button class="act" data-action="soul-template">${d.xSoul.trim() ? "Replace with template" : "Start with template"}</button></div>
+    </div>
+    <div class="li" style="display:block">
+      <div class="field">Daily goals <span class="field-hint">— zero turns a goal off</span></div>
+      <div class="goal-inputs">
+        <label><span>Replies</span><input class="control" id="xgoalreplies" type="number" min="0" max="30" inputmode="numeric" value="${d.dailyGoals.replies}"/></label>
+        <label><span>Posts</span><input class="control" id="xgoalposts" type="number" min="0" max="5" inputmode="numeric" value="${d.dailyGoals.posts}"/></label>
+        <label><span>DM people</span><input class="control" id="xgoaldms" type="number" min="0" max="5" inputmode="numeric" value="${d.dailyGoals.dms}"/></label>
+      </div>
+      <div class="field-hint" style="margin-top:7px">The X dock counts verified replies, detected/marked posts, and unique people you explicitly mark as DM'd. Safety limits still win over goals.</div>
+      <button class="btn primary" data-action="save-x" style="margin-top:10px">${setupReady ? "Save changes" : "Save profile"}</button>
+    </div>
+  </div>
+  </details>
+
+  <details class="fold">
+    <summary>Optional personalization <span class="field-hint">products &amp; draft defaults</span></summary>
+    <div class="list">
+    <div class="li"><div class="grow"><div class="name">Like + insert reply</div><div class="sub">On your click, like the selected post and fill X's reply box. You still review and submit it.</div></div>
+      <label class="switch"><input type="checkbox" id="xinsert" aria-label="Like the post and insert the reply into X" ${d.xInsertEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
+    <div class="li" style="display:block">
+      <div class="field">Your products <span class="field-hint">— name, link &amp; a one-liner each</span></div>
       <div id="prodrows">${(d.products.length ? d.products : [undefined]).map((p) => productRow(p)).join("")}</div>
       <button class="btn" data-action="add-product" style="padding:6px 11px;font-size:12px">+ Add product</button>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">On a "drop your product" post, the copilot tags the best-fit product and drafts with it.</div>
+      <div class="field-hint" style="margin-top:6px">On a “drop your product” post, the copilot tags the best-fit product and drafts with it.</div>
     </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">Draft defaults <span class="dim" style="font-weight:400">— what each draft opens with</span></div>
+      <div class="field">Draft defaults <span class="field-hint">— what each draft opens with</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <select id="xdefangle" style="flex:1;min-width:130px;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none">
+        <label class="sr-only" for="xdefangle">Default reply angle</label><select class="control" id="xdefangle" style="flex:1;min-width:130px">
           <option value="">Angle: Auto (per post)</option>
           ${REPLY_ANGLES.map((a) => `<option value="${a.id}" ${d.xDefaultAngle === a.id ? "selected" : ""}>Angle: ${esc(a.label)}</option>`).join("")}
         </select>
-        ${d.products.some((p) => p.name) ? `<select id="xdefproduct" style="flex:1;min-width:130px;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px;font-family:inherit;font-size:12px;outline:none">
+        ${d.products.some((p) => p.name) ? `<label class="sr-only" for="xdefproduct">Default product</label><select class="control" id="xdefproduct" style="flex:1;min-width:130px">
           <option value="">Product: Auto (best fit)</option>
           ${d.products.filter((p) => p.name).map((p) => `<option value="${esc(p.name)}" ${d.xDefaultProduct === p.name ? "selected" : ""}>Product: ${esc(p.name)}</option>`).join("")}
         </select>` : ""}
       </div>
     </div>
+    </div>
+  </details>
+
+  <details class="fold">
+    <summary>X data features <span class="field-hint">optional · reach, search &amp; learning</span></summary>
+    <div class="list">
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">RapidAPI key <span class="dim" style="font-weight:400">— powers reach-aware recs, search &amp; voice-learning</span></div>
-      <input id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value="" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
+      <label class="field" for="twttrkey">RapidAPI key <span class="field-hint">— for reach, search &amp; voice learning</span></label>
+      <input class="control" id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value=""/>
       ${d.twttrKey ? `<div class="dim" style="font-size:10.5px;margin-top:4px;color:var(--green)">✓ Key stored. The field stays blank for safety — leave it blank to keep the saved key.</div>` : ""}
       <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (twitter241 on RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
       ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">This month: <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> / 10 GB · ${d.twttrMeter.requests.toLocaleString()} / 100k requests</div>` : ""}
+    </div>
     <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">Your X handle <span class="dim" style="font-weight:400">— powers reach-aware ranking &amp; voice-learning</span></div>
-      <div style="display:flex;gap:8px">
-        <input id="xmyhandle" placeholder="@yourhandle" value="${esc(d.xMyHandle)}" style="flex:1;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none"/>
-        <button class="btn" data-action="learn-voice" style="padding:7px 12px;white-space:nowrap">Learn my voice</button>
+      <label class="field" for="xmyhandle">Your X handle <span class="field-hint">— for reach ranking &amp; voice learning</span></label>
+      <div class="input-action">
+        <input class="control" id="xmyhandle" placeholder="@yourhandle" value="${esc(d.xMyHandle)}"/>
+        <button class="btn" data-action="learn-voice">Learn my voice</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">Reads your recent replies (needs the RapidAPI key above) and fills the voice box below. Also sizes the “in reach” tag on the dock.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:6px">Reads your recent replies (needs the RapidAPI key above) and fills the voice box in setup. Also sizes the “in reach” tag on the dock.</div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-        <span class="dim" style="font-size:11px;white-space:nowrap">X Premium tier</span>
-        <select id="xpremium" style="flex:1;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:7px 8px;font-family:inherit;font-size:12px;outline:none">
+        <label class="field-hint" for="xpremium" style="white-space:nowrap">X Premium tier</label>
+        <select class="control" id="xpremium" style="flex:1">
           <option value="" ${d.xPremium === "" ? "selected" : ""}>(not set)</option>
           <option value="free" ${d.xPremium === "free" ? "selected" : ""}>Free</option>
           <option value="premium" ${d.xPremium === "premium" ? "selected" : ""}>Premium</option>
@@ -545,13 +606,19 @@ function render(d: ViewData): string {
       </div>
       <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. External data shows tier is the largest reach covariate, so Goobi factors it into its coaching copy only.</div>
     </div>
-    <div class="li" style="display:block">
-      <div class="name" style="margin-bottom:6px">Your reply voice <span class="dim" style="font-weight:400">— tone or 2-3 example replies</span></div>
-      <textarea id="xvoice" rows="3" placeholder="Paste a few replies you're proud of, or describe your tone…" style="width:100%;box-sizing:border-box;background:var(--row);border:.5px solid var(--line-strong);border-radius:9px;color:var(--t1);padding:8px;font-family:inherit;font-size:12px;outline:none;resize:vertical">${esc(d.xVoice)}</textarea>
-      <button class="btn primary" data-action="save-x" style="margin-top:8px;padding:7px 12px">Save copilot settings</button>
     </div>
-  </div>
-  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, the text of timeline posts is sent to Claude to score &amp; draft. Draft-only — it never posts for you.</div></div>
+  </details>
+
+  <details class="fold"${d.safety.level !== "healthy" ? " open" : ""}>
+    <summary>Progress &amp; account safety <span class="field-hint">${d.replyStats.week} replies this week · ${esc(d.safety.label)}</span></summary>
+    <div class="list">${replyShowcaseHTML(d.replyStats)}${accountSafetyHTML(d.safety)}</div>
+  </details>
+
+  <details class="fold">
+    <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
+    <div class="list">${signalHealthHTML(d.signals)}</div>
+  </details>
+  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. Like + insert may fill X's reply box after your click, but Goobi never submits or posts for you.</div></div>
   </div>`;
 }
 
@@ -744,13 +811,34 @@ async function dispatch(el: HTMLElement) {
         if (!val) return;
         await chrome.storage.local.set({ [CONFIG.ANTHROPIC_KEY_KEY]: val });
         await refresh();
-        toast("Key saved — Smart now runs with no proxy.");
+        toast("Key saved — Smart now calls Anthropic directly.");
+        break;
+      }
+      case "save-x-key": {
+        const input = document.getElementById("xkeyinput") as HTMLInputElement | null;
+        const val = input?.value.trim();
+        if (!val) { toast("Paste your Anthropic key first."); return; }
+        const consent = document.getElementById("xdataconsent") as HTMLInputElement | null;
+        const alreadyConsented = (await chrome.storage.local.get(CONFIG.X_DATA_CONSENT_KEY))[CONFIG.X_DATA_CONSENT_KEY] === "v1";
+        if (!alreadyConsented && !consent?.checked) { toast("Review the X data disclosure and agree before connecting Claude."); return; }
+        await chrome.storage.local.set({ [CONFIG.ANTHROPIC_KEY_KEY]: val, [CONFIG.X_DATA_CONSENT_KEY]: "v1", [CONFIG.X_COPILOT_KEY]: true });
+        await refresh();
+        toast("Claude connected — set your focus, then reload X. Voice is optional.");
+        break;
+      }
+      case "accept-x-data": {
+        const consent = document.getElementById("xdataconsent") as HTMLInputElement | null;
+        if (!consent?.checked) { toast("Check the agreement box first."); return; }
+        await chrome.storage.local.set({ [CONFIG.X_DATA_CONSENT_KEY]: "v1", [CONFIG.X_COPILOT_KEY]: true });
+        await refresh();
+        toast("X data use accepted — reload X to start Goobi.");
         break;
       }
       case "clear-key": {
-        await chrome.storage.local.remove(CONFIG.ANTHROPIC_KEY_KEY);
+        await chrome.storage.local.remove([CONFIG.ANTHROPIC_KEY_KEY, CONFIG.SMART_ENABLED_KEY]);
+        await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: false });
         await refresh();
-        toast("Key removed.");
+        toast("Key removed — reload X to stop the copilot on open pages.");
         break;
       }
       case "open-url": {
@@ -773,7 +861,11 @@ async function dispatch(el: HTMLElement) {
         activeTab = el.dataset.tab === "x" ? "x" : "tabs";
         document.getElementById("view-tabs")?.toggleAttribute("hidden", activeTab !== "tabs");
         document.getElementById("view-x")?.toggleAttribute("hidden", activeTab !== "x");
-        document.querySelectorAll<HTMLElement>(".vtab").forEach((b) => b.classList.toggle("on", b.dataset.tab === activeTab));
+        document.querySelectorAll<HTMLElement>(".vtab").forEach((b) => {
+          const selected = b.dataset.tab === activeTab;
+          b.classList.toggle("on", selected);
+          b.setAttribute("aria-selected", String(selected));
+        });
         break;
       }
       case "open-playground": { playground = true; await refresh(); break; }
@@ -789,11 +881,12 @@ async function dispatch(el: HTMLElement) {
           const remaining = document.querySelectorAll("#pg-treats .pg-treat").length;
           const fed = pgTotal - remaining;
           const fill = document.getElementById("pg-fill"); if (fill) fill.style.width = `${pgTotal ? Math.round((fed / pgTotal) * 100) : 0}%`;
+          const meter = document.querySelector<HTMLElement>(".pg-meter"); if (meter) meter.setAttribute("aria-valuenow", String(fed));
           const cnt = document.getElementById("pg-count"); if (cnt) cnt.textContent = `${fed} / ${pgTotal}`;
           const msg = document.getElementById("pg-msg");
           if (msg) msg.textContent = remaining === 0 ? "Goobi's stuffed and happy ♥" : `nom! "${snip.length > 38 ? snip.slice(0, 38) + "…" : snip}"`;
         };
-        if (stage && typeof (el as HTMLElement).animate === "function") {
+        if (stage && typeof (el as HTMLElement).animate === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
           const sr = stage.getBoundingClientRect();
           const fly = document.createElement("div");
           fly.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0b07e,#c25e3f);box-shadow:0 1px 3px rgba(0,0,0,.35);z-index:9999;pointer-events:none`;
@@ -815,9 +908,22 @@ async function dispatch(el: HTMLElement) {
         const msg = document.getElementById("pg-msg"); if (msg) { const lines = ["hehe ♥", "boop!", "that tickles", "♥♥♥"]; msg.textContent = lines[Math.floor(Math.random() * lines.length)]; }
         break;
       }
+      case "soul-template": {
+        const ta = document.getElementById("xsoul") as HTMLTextAreaElement | null;
+        if (!ta) break;
+        if (ta.value.trim() && !window.confirm("Replace your current SOUL.md with the starter template?")) break;
+        ta.value = SOUL_TEMPLATE; ta.focus(); ta.scrollIntoView({ block: "center" });
+        break;
+      }
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
+        const soul = normalizeSoul((document.getElementById("xsoul") as HTMLTextAreaElement | null)?.value ?? "");
+        const dailyGoals = normalizeDailyGoals({
+          replies: (document.getElementById("xgoalreplies") as HTMLInputElement | null)?.value,
+          posts: (document.getElementById("xgoalposts") as HTMLInputElement | null)?.value,
+          dms: (document.getElementById("xgoaldms") as HTMLInputElement | null)?.value,
+        });
         const defAngle = (document.getElementById("xdefangle") as HTMLSelectElement | null)?.value ?? "";
         const defProduct = (document.getElementById("xdefproduct") as HTMLSelectElement | null)?.value ?? "";
         const typedKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
@@ -826,7 +932,7 @@ async function dispatch(el: HTMLElement) {
         const prev = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.TWTTR_KEY_KEY]);
         const prevHandle = ((prev[CONFIG.X_MY_HANDLE_KEY] as string) || "").toLowerCase();
         const storedKey = (prev[CONFIG.TWTTR_KEY_KEY] as string) || "";
-        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle, [CONFIG.X_PREMIUM_KEY]: premium };
+        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_SOUL_KEY]: soul, [CONFIG.X_DAILY_GOALS_KEY]: dailyGoals, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle, [CONFIG.X_PREMIUM_KEY]: premium };
         if (typedKey) set[CONFIG.TWTTR_KEY_KEY] = typedKey; // the key field isn't pre-filled, so only overwrite when a new one is typed
         if (!myHandle || myHandle.toLowerCase() !== prevHandle) set[CONFIG.X_MY_FOLLOWERS_KEY] = 0; // drop a stale follower base for a new/cleared handle
         await chrome.storage.local.set(set);
@@ -918,6 +1024,11 @@ async function onChange(e: Event) {
   if (!IS_EXT) return;
   const target = e.target as HTMLInputElement;
   if (target.id === "smart") {
+    if (target.checked && !(await chrome.storage.local.get(CONFIG.ANTHROPIC_KEY_KEY))[CONFIG.ANTHROPIC_KEY_KEY]) {
+      target.checked = false;
+      toast("Add your Anthropic key before turning on Smart mode.");
+      return;
+    }
     await chrome.storage.local.set({ [CONFIG.SMART_ENABLED_KEY]: target.checked });
     await refresh();
     toast(target.checked ? "Smart mode on — Claude will group & advise." : "Smart mode off — local only.");
@@ -925,8 +1036,20 @@ async function onChange(e: Event) {
     await chrome.storage.local.set({ [CONFIG.AUTO_DEDUPE_KEY]: target.checked });
     toast(target.checked ? "Auto-merge duplicates on." : "Auto-merge off.");
   } else if (target.id === "xon") {
+    if (target.checked) {
+      const gate = await chrome.storage.local.get([CONFIG.X_DATA_CONSENT_KEY, CONFIG.ANTHROPIC_KEY_KEY]);
+      if (gate[CONFIG.X_DATA_CONSENT_KEY] !== "v1") {
+        target.checked = false; toast("Review and accept the X data disclosure first."); return;
+      }
+      if (!gate[CONFIG.ANTHROPIC_KEY_KEY]) {
+        target.checked = false; toast("Add your Anthropic key before turning on the X copilot."); return;
+      }
+    }
     await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: target.checked });
     toast(target.checked ? "X copilot on — reload x.com to apply." : "X copilot off — reload x.com.");
+  } else if (target.id === "xinsert") {
+    await chrome.storage.local.set({ [CONFIG.X_REPLY_INSERT_KEY]: target.checked });
+    toast(target.checked ? "Like + insert is on." : "Like + insert is off — replies will use copy + open.");
   }
 }
 
@@ -954,5 +1077,16 @@ app.addEventListener("click", onClick);
 app.addEventListener("input", onInput);
 app.addEventListener("change", onChange);
 app.addEventListener("keydown", onKeydown);
+
+// The side panel can stay open while the x.com content script confirms a reply.
+// Re-read the shared ledger so totals, pace, and Goobi's state update immediately.
+if (IS_EXT) {
+  let replyRefreshTimer: number | undefined;
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[CONFIG.X_REPLY_LOG_KEY]) return;
+    if (replyRefreshTimer) clearTimeout(replyRefreshTimer);
+    replyRefreshTimer = window.setTimeout(() => { replyRefreshTimer = undefined; void refresh(); }, 60);
+  });
+}
 
 void refresh();
