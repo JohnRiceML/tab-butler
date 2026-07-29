@@ -2996,8 +2996,14 @@ function renderList(list: HTMLElement) {
       detail.append(why);
 
       const signals = document.createElement("div"); signals.className = "reply-signal-grid"; signals.title = "Decision signals, not predicted X probabilities.";
+      const signalWhy: Record<string, string> = {
+        Reach: "\u2726 Algo prior: fit \u00d7 freshness \u00d7 thread room \u00d7 audience size, over live public data. Directional, not a reach prediction.",
+        Relationship: "Your logged history with this account when it exists (\u2713 measured: replies, engage-backs, completed connections); otherwise a peer-tier prior (\u2726).",
+        Community: "\u2726 Algo prior: relevant-peer signals (niche/bio match, plausible reciprocity).",
+      };
       ([['Reach', rec.discovery, ACCENT], ['Relationship', rec.relationship, '#6fcf7f'], ['Community', rec.community, '#5dcaa5']] as Array<[string, number, string]>).forEach(([label, value, color]) => {
         const signal = document.createElement("div"); signal.className = "reply-signal";
+        signal.title = signalWhy[label] ?? "";
         const signalTop = document.createElement("div"); signalTop.className = "reply-signal-top"; const l = document.createElement("span"); l.textContent = label; const n = document.createElement("b"); n.textContent = String(Math.round(value * 100)); signalTop.append(l, n);
         const track = document.createElement("div"); track.className = "reply-signal-track"; const fill = document.createElement("span"); fill.className = "reply-signal-fill"; fill.style.width = `${Math.round(value * 100)}%`; fill.style.background = color; track.append(fill); signal.append(signalTop, track); signals.append(signal);
       });
@@ -5394,7 +5400,7 @@ function renderDock() {
       minsSinceLast: lastAt ? (Date.now() - lastAt) / 60000 : 9999, repLevel: stt.level,
     });
     const ds = dailyShape({ repliesToday: repliesToday(), postedToday: postedToday(), repLevel: stt.level });
-    const dsTitle = "The healthy shape of a growth day — replies earn reach, a spaced original converts the profile clicks into follows. The ranker decays back-to-back posts, so space them.";
+    const dsTitle = "The shape we coach for a growth day: replies to earn reach, plus a spaced original to convert profile clicks into follows. That chain is a prior, not proven — the measured loop is checking whether it works on YOUR account. Same-load posts may attenuate each other, so space originals.";
     const postsByDay: Record<string, number> = {};
     for (const [k, sn] of Object.entries(learn.snaps)) postsByDay[k] = sn.posts;
     const cells = activityCells(replyLog.daily, postsByDay, Date.now(), dayKey, 14);
@@ -5436,6 +5442,13 @@ function renderDock() {
     const meta = document.createElement("div"); meta.className = "mom-meta"; meta.append(lbl, bits, car); // label + facts sit BELOW the full-width bar
     sum.append(bar, meta);
     mom.append(sum);
+    // The epistemic key, always visible (the ✓/✦ convention was hover-only — the whole honesty
+    // thesis was invisible). One muted line, zero layout cost.
+    const legend = document.createElement("div");
+    legend.textContent = "✓ measured on your data · ✦ algo prior";
+    legend.title = "Every number and coach line carries one of these: ✓ = computed from your own logged replies/outcomes; ✦ = a directional prior from X's open-sourced ranking code (the live weights are private).";
+    Object.assign(legend.style, { font: "500 9.5px -apple-system, system-ui, sans-serif", color: "#a89a85", margin: "2px 2px 0", letterSpacing: ".02em" } as Partial<CSSStyleDeclaration>);
+    mom.append(legend);
 
     // Row 2 — the ONE coach line. Priority: safety (ease-off callout / caution cue) → daily shape
     // (the actionable next move) → the algo/measured callout. Never empty; a bare affirmation only

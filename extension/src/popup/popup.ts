@@ -467,7 +467,7 @@ function render(d: ViewData): string {
   const setupReady = d.hasKey && d.xConsent && !!d.xNiche.trim();
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Find the right words on X.</div></div></div>
+    <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Replies scored against X's real ranking code — never posted for you.</div></div></div>
     <span class="pill"><span class="dot" style="background:${d.xEnabled && setupReady ? "var(--green)" : "var(--t3)"}"></span>${!d.xEnabled ? "X copilot off" : setupReady ? "Ready for X" : "Finish setup"}</span>
   </header>
 
@@ -513,7 +513,8 @@ function render(d: ViewData): string {
   <div class="sec"><h2>X reply copilot</h2><label class="switch" title="${d.xConsent ? "Turn the X copilot on or off" : "Review and accept the data disclosure first"}"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""} ${d.xConsent ? "" : "disabled"}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="setup">
     <div class="setup-title">${setupReady ? "You're ready to find a good conversation" : "Set up your reply copilot"}</div>
-    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
+    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself. Scoring is grounded in X's open-sourced ranking code (not 2023 folklore), and Goobi never cheers you past a safe pace." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
+    ${setupReady ? `<ul class="dim" style="font-size:10.5px;margin:6px 0 2px;padding-left:16px;line-height:1.5"><li>Scored against X's open-sourced ranking code — not recycled 2023 weight tables.</li><li>Measures whether its advice worked on YOUR account: ✓ measured vs ✦ prior, always labeled.</li><li>Drafts in your voice; you always review and post. Never auto-posts.</li></ul>` : ""}
     ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. Activity, drafts, DM notes, goals, SOUL.md, and growth history stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
     ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Anthropic key stored</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Anthropic API key</label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Save key</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
     <div class="setup-steps">
@@ -604,7 +605,7 @@ function render(d: ViewData): string {
           <option value="premium+" ${d.xPremium === "premium+" ? "selected" : ""}>Premium+</option>
         </select>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. External data shows tier is the largest reach covariate, so Goobi factors it into its coaching copy only.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. Widely reported to correlate with reach (NOT confirmed in X's open-sourced code), so Goobi treats it as coaching context only.</div>
     </div>
     </div>
   </details>
@@ -614,6 +615,7 @@ function render(d: ViewData): string {
     <div class="list">${replyShowcaseHTML(d.replyStats)}${accountSafetyHTML(d.safety)}</div>
   </details>
 
+  <div class="dim" style="font-size:10.5px;margin:6px 2px 2px">Honesty gate: every learning panel stays silent below its minimum sample size — Goobi shows nothing rather than guessing.</div>
   <details class="fold">
     <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
     <div class="list">${signalHealthHTML(d.signals)}</div>

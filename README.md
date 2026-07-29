@@ -3,6 +3,15 @@
 A draft-only **X/Twitter reply copilot** with a cute pixel pet — plus the
 local-first **tab manager** it grew out of. Made smart by Claude (BYO key).
 
+**What makes it different:** scoring and coaching are grounded in **X's
+open-sourced ranking code** (checked claim-by-claim against
+[xai-org/x-algorithm](https://github.com/xai-org/x-algorithm) — see
+`docs/INTEL.md`, not recycled 2023 weight tables), and a daily measure-back
+loop records how **your** replies actually performed, labeling everything
+`✓ measured on your data` vs `✦ algo prior`. Where it has no evidence, it
+says nothing — every learning panel stays silent below its minimum sample
+size rather than guessing.
+
 - **Finds posts worth replying to** — scores your timeline with Claude, marks the
   good ones in-feed with an explainable growth lane, and ranks them in an always-on dock.
 - **Brings warm comments to the top** — a first-class Comments queue prioritizes
