@@ -99,7 +99,34 @@ export interface GrowthExperiment {
   updatedAt: number;
   outcome?: GrowthEvaluation;
 }
-export interface GrowthStore { version: 1; ownerHandle: string; days: Record<string, GrowthDay>; experiments: GrowthExperiment[]; }
+export type ProfileChangeVariable = "bio" | "pin" | "banner" | "name";
+export interface ProfileChangeExperiment {
+  id: string;
+  /** The ONE thing the user declared they changed. Single-subject design: one variable per read. */
+  variable: ProfileChangeVariable;
+  /** User-declared moment of the change — the boundary between the before and after windows. */
+  changedAt: number;
+  status: "active" | "completed" | "invalidated";
+  /** Why the read was voided (the user changed more than one thing mid-window). */
+  invalidatedNote?: string;
+  updatedAt: number;
+  /** Frozen at settle time so the record survives the 90-day day-row pruning. */
+  outcome?: ProfileChangeRead;
+}
+export interface ProfileChangeRead {
+  /** collecting = window still filling · read = honest before/after · unreadable = data Goobi never observed cannot be reconstructed · invalidated = confounded by a second change. */
+  state: "collecting" | "read" | "unreadable" | "invalidated";
+  headline: string;
+  /** Each line is a ✓ measured before→after pair from the user's own logged data. Empty unless state is "read". */
+  lines: string[];
+  /** Method honesty: correlation-not-causation, the missing profile-visit metric, overlapping tests. */
+  caveats: string[];
+  before: GrowthWindow;
+  after: GrowthWindow;
+  /** Whole days elapsed since the change, capped at the window length. */
+  elapsedDays: number;
+}
+export interface GrowthStore { version: 1; ownerHandle: string; days: Record<string, GrowthDay>; experiments: GrowthExperiment[]; profileChanges?: ProfileChangeExperiment[]; }
 export interface TaggedGrowthAction { at: number; experimentId?: string; strategyId?: GrowthStrategyId; kind: "post" | "reply"; confirmed?: boolean; }
 
 const norm = (s: string): string => (s || "").trim().replace(/^@+/, "").toLowerCase();
@@ -108,7 +135,7 @@ const maxMetric = (a: number | undefined, b: number | undefined): number | undef
   if (!finite(a) && !finite(b)) return undefined;
   return Math.max(finite(a) ? a : 0, finite(b) ? b : 0);
 };
-const clone = (s: GrowthStore): GrowthStore => ({ version: 1, ownerHandle: s.ownerHandle, days: Object.fromEntries(Object.entries(s.days).map(([k, d]) => [k, { ...d, posts: { ...d.posts } }])), experiments: s.experiments.map((e) => ({ ...e, outcome: e.outcome ? { ...e.outcome, reasons: [...e.outcome.reasons], current: { ...e.outcome.current }, baseline: { ...e.outcome.baseline } } : undefined })) });
+const clone = (s: GrowthStore): GrowthStore => ({ version: 1, ownerHandle: s.ownerHandle, days: Object.fromEntries(Object.entries(s.days).map(([k, d]) => [k, { ...d, posts: { ...d.posts } }])), experiments: s.experiments.map((e) => ({ ...e, outcome: e.outcome ? { ...e.outcome, reasons: [...e.outcome.reasons], current: { ...e.outcome.current }, baseline: { ...e.outcome.baseline } } : undefined })), profileChanges: s.profileChanges?.map((p) => ({ ...p, outcome: p.outcome ? { ...p.outcome, lines: [...p.outcome.lines], caveats: [...p.outcome.caveats], before: { ...p.outcome.before }, after: { ...p.outcome.after } } : undefined })) });
 
 export function growthStrategy(id: GrowthStrategyId): GrowthStrategy { return GROWTH_STRATEGIES.find((s) => s.id === id) ?? GROWTH_STRATEGIES[0]; }
 export function freshGrowthStore(ownerHandle: string): GrowthStore { return { version: 1, ownerHandle: norm(ownerHandle), days: {}, experiments: [] }; }
@@ -152,11 +179,19 @@ export function mergeGrowthStores(a: GrowthStore | undefined, b: GrowthStore | u
       if (i < 0) out.experiments.push({ ...exp });
       else if (exp.updatedAt >= out.experiments[i].updatedAt) out.experiments[i] = { ...exp };
     }
+    for (const pc of Array.isArray(src.profileChanges) ? src.profileChanges : []) {
+      if (!pc?.id || !finite(pc.changedAt) || !finite(pc.updatedAt)) continue;
+      const list = out.profileChanges ?? (out.profileChanges = []);
+      const i = list.findIndex((e) => e.id === pc.id);
+      if (i < 0) list.push({ ...pc });
+      else if (pc.updatedAt >= list[i].updatedAt) list[i] = { ...pc };
+    }
   }
   const cut = now - GROWTH_KEEP_DAYS * DAY_MS;
   for (const key of Object.keys(out.days)) if (out.days[key].at < cut) delete out.days[key];
   out.experiments.sort((x, y) => y.startedAt - x.startedAt);
   out.experiments = out.experiments.slice(0, 12);
+  if (out.profileChanges) { out.profileChanges.sort((x, y) => y.changedAt - x.changedAt); out.profileChanges = out.profileChanges.slice(0, PROFILE_CHANGES_MAX); }
   return out;
 }
 
@@ -319,4 +354,112 @@ export function recommendedGrowthStrategy(store: GrowthStore, profileNeedsProof 
   const last = store.experiments.find((e) => e.status === "completed");
   if (last?.outcome) return growthStrategy(last.outcome.nextStrategyId);
   return growthStrategy(profileNeedsProof ? "proof" : "operator");
+}
+
+/* ---------- Profile-change experiments: a METHOD, never a number ----------
+ * There is no honest external benchmark for bio→follow conversion (the circulating figures are
+ * fabricated vendor copy), so the only defensible source is this account's own logged data:
+ * single-subject, one declared variable, 14 days before vs 14 days after. Profile visits are NOT
+ * exposed to the extension, so no conversion rate is ever computed — follower co-movement is the
+ * honest stand-in, and every read says so. Below the observation gate the read stays silent. */
+
+export const PROFILE_CHANGE_WINDOW_DAYS = 14;
+/** Follower-observed days required on EACH side before the read speaks. */
+export const PROFILE_CHANGE_MIN_OBSERVED_DAYS = 10;
+const PROFILE_CHANGES_MAX = 8;
+
+export const PROFILE_CHANGE_VARIABLES: { id: ProfileChangeVariable; label: string }[] = [
+  { id: "bio", label: "Bio" },
+  { id: "pin", label: "Pinned post" },
+  { id: "banner", label: "Banner" },
+  { id: "name", label: "Display name" },
+];
+export function profileChangeLabel(variable: ProfileChangeVariable): string {
+  return PROFILE_CHANGE_VARIABLES.find((v) => v.id === variable)?.label ?? variable;
+}
+
+export function activeProfileChange(store: GrowthStore): ProfileChangeExperiment | undefined {
+  return (store.profileChanges ?? []).find((p) => p.status === "active");
+}
+
+/** Log the ONE profile variable the user changed. Refuses a second change while a read is
+ *  running — that confounds the running window; the caller offers invalidation instead. */
+export function declareProfileChange(store: GrowthStore, variable: ProfileChangeVariable, changedAt: number, now: number): { store: GrowthStore; experiment?: ProfileChangeExperiment; error?: string; conflictId?: string } {
+  if (!finite(changedAt) || changedAt > now) return { store, error: "The change date can't be in the future." };
+  if (changedAt < now - GROWTH_KEEP_DAYS * DAY_MS) return { store, error: `Goobi only keeps ${GROWTH_KEEP_DAYS} days of history — log a change from inside that window.` };
+  const running = activeProfileChange(store);
+  if (running) return { store, error: "A profile read is already running. A second change makes both unreadable — invalidate the running one first.", conflictId: running.id };
+  const out = clone(store);
+  const experiment: ProfileChangeExperiment = { id: `pc.${now.toString(36)}.${variable}`, variable, changedAt, status: "active", updatedAt: now };
+  out.profileChanges = [experiment, ...(out.profileChanges ?? [])].slice(0, PROFILE_CHANGES_MAX);
+  return { store: out, experiment };
+}
+
+/** The user changed MORE than one thing — the single-variable design is void, and saying so is
+ *  the honest outcome. The record is kept (not deleted) so history shows why there is no read. */
+export function invalidateProfileChange(store: GrowthStore, id: string, note: string, now: number): GrowthStore {
+  const out = clone(store);
+  const pc = out.profileChanges?.find((p) => p.id === id);
+  if (!pc || pc.status === "invalidated") return store;
+  pc.status = "invalidated"; pc.invalidatedNote = note; pc.outcome = undefined; pc.updatedAt = now;
+  return out;
+}
+
+const rate1 = (n: number): string => n.toFixed(1);
+const beforeAfter = (label: string, b: number, a: number, n: string): string => `${label}: ${rate1(b)} before → ${rate1(a)} after (✓ measured, ${n})`;
+
+/** The honest before/after read. Pure recompute from the store — no cached verdicts — so a later
+ *  follower-history import upgrades a thin read automatically. Never emits a target, a benchmark,
+ *  or the word "proof": one uncontrolled variable is correlation, and the copy says so. */
+export function readProfileChange(store: GrowthStore, experiment: ProfileChangeExperiment, now: number): ProfileChangeRead {
+  const windowMs = PROFILE_CHANGE_WINDOW_DAYS * DAY_MS;
+  const before = summarizeGrowthWindow(store, experiment.changedAt - windowMs, experiment.changedAt - 1);
+  const after = summarizeGrowthWindow(store, experiment.changedAt, experiment.changedAt + windowMs);
+  const elapsedDays = Math.max(0, Math.min(PROFILE_CHANGE_WINDOW_DAYS, Math.floor((now - experiment.changedAt) / DAY_MS)));
+  const label = profileChangeLabel(experiment.variable).toLowerCase();
+  const base = { before, after, elapsedDays };
+  if (experiment.status === "invalidated") {
+    return { ...base, state: "invalidated", headline: "Read voided — more than one variable changed", lines: [], caveats: [experiment.invalidatedNote || "A second change landed inside the window, so no before/after can be attributed to either one. Log the next change on its own."] };
+  }
+  if (before.observedDays < PROFILE_CHANGE_MIN_OBSERVED_DAYS) {
+    return { ...base, state: "unreadable", headline: `Baseline too thin — ${before.observedDays} of ${PROFILE_CHANGE_WINDOW_DAYS} pre-change days observed (needs ≥${PROFILE_CHANGE_MIN_OBSERVED_DAYS})`, lines: [], caveats: ["Goobi can't reconstruct days it didn't observe. Opening the dock on x.com imports any follower history already logged; otherwise, keep it open daily and log the NEXT change instead."] };
+  }
+  const windowOver = now >= experiment.changedAt + windowMs;
+  if (!windowOver || after.observedDays < PROFILE_CHANGE_MIN_OBSERVED_DAYS) {
+    if (windowOver) {
+      return { ...base, state: "unreadable", headline: `After-window too thin — ${after.observedDays} of ${PROFILE_CHANGE_WINDOW_DAYS} post-change days observed (needs ≥${PROFILE_CHANGE_MIN_OBSERVED_DAYS})`, lines: [], caveats: ["The window ended before enough days were observed. No read is better than a guessed one — log the next change and keep Goobi open daily."] };
+    }
+    return { ...base, state: "collecting", headline: `Still collecting — day ${Math.min(PROFILE_CHANGE_WINDOW_DAYS, elapsedDays + 1)} of ${PROFILE_CHANGE_WINDOW_DAYS} · ${after.observedDays} post-change day${after.observedDays === 1 ? "" : "s"} observed (needs ≥${PROFILE_CHANGE_MIN_OBSERVED_DAYS})`, lines: [], caveats: ["No numbers until the window fills — a partial read would just be a guess with digits."] };
+  }
+  const lines: string[] = [];
+  if (before.followerPerDay != null && after.followerPerDay != null) {
+    lines.push(beforeAfter("followers/day", before.followerPerDay, after.followerPerDay, `n=${before.observedDays}d / ${after.observedDays}d observed`));
+  }
+  if (before.measuredPosts >= 2 && after.measuredPosts >= 2 && before.viewsPerPost != null && after.viewsPerPost != null) {
+    lines.push(beforeAfter("views/post", before.viewsPerPost, after.viewsPerPost, `n=${before.measuredPosts} / ${after.measuredPosts} posts`));
+  }
+  if (before.posts >= 2 && after.posts >= 2 && before.engagementPerPost != null && after.engagementPerPost != null) {
+    lines.push(beforeAfter("eng/post", before.engagementPerPost, after.engagementPerPost, `n=${before.posts} / ${after.posts} posts`));
+  }
+  const caveats = [
+    `One uncontrolled variable (the ${label}) — correlation, not causation. Ambient timeline shifts land in this read too.`,
+    "Profile visits aren't exposed to the extension, so there is no conversion rate here — follower co-movement is the honest stand-in.",
+  ];
+  const overlappingBet = store.experiments.find((e) => e.startedAt <= experiment.changedAt + windowMs && (e.endedAt ?? e.endsAt) >= experiment.changedAt - windowMs);
+  if (overlappingBet) caveats.push(`A content-strategy test (${growthStrategy(overlappingBet.strategyId).label}) overlapped this window — another moving part in the same read.`);
+  return { ...base, state: "read", headline: lines[0] ? `Read after the ${label} change — ${lines[0].split(" (")[0]}` : `Window complete, but no comparable metric settled on both sides`, lines, caveats };
+}
+
+/** Freeze finished windows so the record outlives the 90-day day-row pruning. Collecting stays
+ *  active; a thin window completes as "unreadable" — an honest terminal state, not a guess. */
+export function settleProfileChanges(store: GrowthStore, now: number): { store: GrowthStore; settled: number } {
+  const out = clone(store); let settled = 0;
+  for (const pc of out.profileChanges ?? []) {
+    if (pc.status !== "active" || now < pc.changedAt + PROFILE_CHANGE_WINDOW_DAYS * DAY_MS) continue;
+    const read = readProfileChange(out, pc, now);
+    if (read.state === "collecting") continue; // never freezes: windowOver forces read or unreadable
+    pc.status = "completed"; pc.outcome = read; pc.updatedAt = now;
+    settled++;
+  }
+  return settled ? { store: out, settled } : { store, settled: 0 };
 }

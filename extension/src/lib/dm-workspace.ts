@@ -59,7 +59,12 @@ function cleanTouch(t: DmTouch): DmTouch | undefined {
   return { ...t, text: t.redactedAt ? undefined : clip(t.text, 2_000) };
 }
 
-function mergeReasons(a: DmReason[], b: DmReason[]): DmReason[] { return [...new Map([...a, ...b].map((x) => [x.id, x])).values()].slice(-12); }
+const byReasonTime = (a: DmReason, b: DmReason): number => a.capturedAt - b.capturedAt || a.id.localeCompare(b.id);
+const byContextTime = (a: DmContextItem, b: DmContextItem): number => a.capturedAt - b.capturedAt || a.id.localeCompare(b.id);
+const byTouchTime = (a: DmTouch, b: DmTouch): number => a.at - b.at || a.id.localeCompare(b.id);
+function mergeReasons(a: DmReason[], b: DmReason[]): DmReason[] {
+  return [...new Map([...a, ...b].map((x) => [x.id, x])).values()].sort(byReasonTime).slice(-12);
+}
 function mergeContexts(a: DmContextItem[], b: DmContextItem[]): DmContextItem[] {
   const by = new Map<string, DmContextItem>();
   for (const item of [...a, ...b]) {
@@ -68,7 +73,7 @@ function mergeContexts(a: DmContextItem[], b: DmContextItem[]): DmContextItem[] 
     else if (prev.removedAt || item.removedAt) by.set(item.id, (item.removedAt ?? 0) >= (prev.removedAt ?? 0) ? item : prev);
     else by.set(item.id, item.capturedAt >= prev.capturedAt ? item : prev);
   }
-  return [...by.values()].slice(-DM_CONTEXT_CAP);
+  return [...by.values()].sort(byContextTime).slice(-DM_CONTEXT_CAP);
 }
 function mergeTouches(a: DmTouch[], b: DmTouch[]): DmTouch[] {
   const by = new Map<string, DmTouch>();
@@ -80,7 +85,7 @@ function mergeTouches(a: DmTouch[], b: DmTouch[]): DmTouch[] {
       by.set(item.id, { ...winner, text: undefined });
     } else by.set(item.id, item.at >= prev.at ? item : prev);
   }
-  return [...by.values()].slice(-DM_TOUCH_CAP);
+  return [...by.values()].sort(byTouchTime).slice(-DM_TOUCH_CAP);
 }
 
 export function pruneDmStore(store: DmStore | undefined, ownerHandle?: string, now = Date.now()): DmStore {
@@ -91,11 +96,11 @@ export function pruneDmStore(store: DmStore | undefined, ownerHandle?: string, n
     const handle = canonicalDmHandle(raw?.handle);
     if (!raw?.id || !handle || seen.has(handle) || !Number.isFinite(raw.createdAt) || raw.createdAt > now + 60_000) return [];
     seen.add(handle);
-    const reasons = (raw.reasons ?? []).map(cleanReason).filter((x): x is DmReason => !!x).slice(-12);
-    const context = (raw.context ?? []).map(cleanContext).filter((x): x is DmContextItem => !!x).sort((a, b) => a.capturedAt - b.capturedAt).slice(-DM_CONTEXT_CAP);
-    const touches = (raw.touches ?? []).map(cleanTouch).filter((x): x is DmTouch => !!x).sort((a, b) => a.at - b.at).slice(-DM_TOUCH_CAP);
+    const reasons = (raw.reasons ?? []).map(cleanReason).filter((x): x is DmReason => !!x).sort(byReasonTime).slice(-12);
+    const context = (raw.context ?? []).map(cleanContext).filter((x): x is DmContextItem => !!x).sort(byContextTime).slice(-DM_CONTEXT_CAP);
+    const touches = (raw.touches ?? []).map(cleanTouch).filter((x): x is DmTouch => !!x).sort(byTouchTime).slice(-DM_TOUCH_CAP);
     return [{ ...raw, ownerHandle: owner, handle, bioSnapshot: clip(raw.bioSnapshot, 500), goal: clip(raw.goal, 500), draft: clip(raw.draft, 2_000), reasons, context, touches }];
-  }).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, DM_STORE_CAP);
+  }).sort((a, b) => b.updatedAt - a.updatedAt || a.handle.localeCompare(b.handle) || a.id.localeCompare(b.id)).slice(0, DM_STORE_CAP);
   return { version: 1, ownerHandle: owner, candidates };
 }
 

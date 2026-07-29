@@ -75,5 +75,62 @@ ok(m.mergeGrowthStores(a, b, "other", NOW).ownerHandle === "other" && Object.key
 ok(m.recommendedGrowthStrategy(m.freshGrowthStore("me"), true).id === "proof", "profile proof gap makes proof-led authority the cold-start test");
 ok(m.GROWTH_STRATEGIES.length === 5 && new Set(m.GROWTH_STRATEGIES.map((s) => s.id)).size === 5, "strategy catalog is small and distinct");
 
+/* ---------- profile-change experiments: a METHOD, never a number ---------- */
+const CH = NOW - 14 * DAY; // the declared change moment: 14 observed days before, 15 after
+let pstore = m.freshGrowthStore("me");
+for (let i = 28; i >= 0; i--) {
+  const at = NOW - i * DAY, afterChange = at >= CH;
+  pstore = m.captureGrowthSnapshot(pstore, "me", at, day(at), afterChange ? 114 + 2 * (14 - i) : 100 + (28 - i), [{ id: `pcp${i}`, day: day(at), postedAt: at, views: afterChange ? 300 : 150, likes: afterChange ? 9 : 4, reposts: 1, replies: 1 }]);
+}
+ok(m.declareProfileChange(pstore, "bio", NOW + DAY, NOW).error, "a future change date is refused");
+const d1 = m.declareProfileChange(pstore, "bio", CH, NOW - 13 * DAY);
+ok(!d1.error && d1.experiment?.variable === "bio", "declares the one changed variable");
+const d2 = m.declareProfileChange(d1.store, "banner", NOW - 10 * DAY, NOW - 10 * DAY);
+ok(!!d2.error && d2.conflictId === d1.experiment.id, "a second change during a running read is refused and names the conflict");
+
+const pcRead = m.readProfileChange(d1.store, d1.experiment, NOW);
+ok(pcRead.state === "read", "a fully observed window produces a read");
+ok(pcRead.lines[0] === "followers/day: 1.0 before → 2.0 after (✓ measured, n=14d / 15d observed)", "the follower read is a labeled before→after pair");
+ok(pcRead.lines.length === 3 && pcRead.lines[1].startsWith("views/post: 150.0 before → 300.0 after") && pcRead.lines[2].startsWith("eng/post: 6.0 before → 11.0 after"), "post outcomes ride along only when measured on both sides");
+const pcText = [pcRead.headline, ...pcRead.lines, ...pcRead.caveats].join(" ");
+ok(pcText.includes("correlation, not causation"), "the read names its single-subject design limit");
+ok(!pcText.includes("%") && !/\bproof\b|\bproves\b/i.test(pcText), "no percentage targets and no proof claims anywhere in the read");
+ok(pcRead.caveats.some((c) => c.includes("Profile visits")), "the missing profile-visit metric is declared, never proxied");
+
+const early = m.readProfileChange(d1.store, d1.experiment, CH + 3 * DAY);
+ok(early.state === "collecting" && early.lines.length === 0, "a young window shows no numbers");
+ok(early.headline.includes("day 4 of 14"), "collecting names how far the window has run");
+
+let thinBase = m.freshGrowthStore("me");
+for (let i = 18; i >= 0; i--) { const at = NOW - i * DAY; thinBase = m.captureGrowthSnapshot(thinBase, "me", at, day(at), 100 + i, []); }
+const thinDecl = m.declareProfileChange(thinBase, "pin", CH, NOW - 13 * DAY);
+const thinRead = m.readProfileChange(thinDecl.store, thinDecl.experiment, NOW);
+ok(thinRead.state === "unreadable" && thinRead.lines.length === 0, "a thin baseline never yields numbers");
+ok(thinRead.headline.includes("4 of 14"), "the thin baseline says exactly how much was observed");
+
+let thinAfter = m.freshGrowthStore("me");
+for (let i = 28; i >= 12; i--) { const at = NOW - i * DAY; thinAfter = m.captureGrowthSnapshot(thinAfter, "me", at, day(at), 100, []); }
+const taDecl = m.declareProfileChange(thinAfter, "banner", CH, NOW - 13 * DAY);
+ok(m.readProfileChange(taDecl.store, taDecl.experiment, NOW).state === "unreadable", "a thin after-window ends honest, not guessed");
+ok(m.readProfileChange(taDecl.store, taDecl.experiment, CH + 5 * DAY).state === "collecting", "the same window merely collects while it can still fill");
+
+const voided = m.invalidateProfileChange(d1.store, d1.experiment.id, "changed bio AND banner", NOW - 5 * DAY);
+const vRead = m.readProfileChange(voided, voided.profileChanges.find((p) => p.id === d1.experiment.id), NOW);
+ok(vRead.state === "invalidated" && vRead.lines.length === 0, "multi-change voids the read instead of pretending");
+ok(!m.activeProfileChange(voided), "a voided read frees the single-experiment slot");
+ok(!m.declareProfileChange(voided, "banner", NOW - 2 * DAY, NOW).error, "the next single change can be logged after voiding");
+
+const settledPc = m.settleProfileChanges(d1.store, NOW + DAY);
+ok(settledPc.settled === 1 && settledPc.store.profileChanges[0].status === "completed" && settledPc.store.profileChanges[0].outcome?.state === "read", "finished windows freeze their outcome");
+ok(m.settleProfileChanges(d1.store, CH + 5 * DAY).settled === 0, "running windows never settle early");
+
+const pcMergedNew = m.invalidateProfileChange(d1.store, d1.experiment.id, "note", NOW + 2);
+const pcMerged = m.mergeGrowthStores(d1.store, pcMergedNew, "me", NOW + 3);
+ok(pcMerged.profileChanges.length === 1 && pcMerged.profileChanges[0].status === "invalidated", "cross-tab merge keeps the newest profile-change record");
+ok((m.mergeGrowthStores(d1.store, pcMergedNew, "other", NOW).profileChanges ?? []).length === 0, "account switch never leaks profile-change history");
+
+const withBet = m.startGrowthExperiment(d1.store, "proof", CH + DAY).store;
+ok(m.readProfileChange(withBet, d1.experiment, NOW).caveats.some((c) => c.includes("content-strategy test")), "an overlapping strategy bet is named as another moving part");
+
 console.log(fail === 0 ? `\n✓ growth loop: ${pass} assertions passed` : `\n✗ growth loop: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

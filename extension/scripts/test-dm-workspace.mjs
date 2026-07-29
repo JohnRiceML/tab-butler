@@ -65,6 +65,11 @@ const merged = m.mergeDmStores(s, other, "owner", NOW + 10 * DAY);
 ok(merged.candidates.some((x) => x.handle === "sam") && merged.candidates.some((x) => x.handle === "lee"), "cross-tab merge unions distinct candidates");
 const staleSam = m.updateDmCandidate(m.freshDmStore("owner"), "sam", { stage: "closed" }, NOW - DAY);
 ok(m.mergeDmStores(merged, staleSam, "owner", NOW + 10 * DAY).candidates.find((x) => x.handle === "sam").stage === "active", "stale tab cannot replace a newer conversation");
+const reordered = { ...merged, candidates: [...merged.candidates].reverse() };
+const canonicalForward = m.mergeDmStores(merged, reordered, "owner", NOW + 10 * DAY);
+const canonicalReverse = m.mergeDmStores(reordered, merged, "owner", NOW + 10 * DAY);
+ok(JSON.stringify(canonicalForward) === JSON.stringify(canonicalReverse), "cross-tab merge canonicalizes equal-timestamp candidate order instead of triggering repair write loops");
+ok(JSON.stringify(m.mergeDmStores(canonicalForward, canonicalReverse, "owner", NOW + 10 * DAY)) === JSON.stringify(canonicalForward), "a converged DM store remains byte-stable on the next merge");
 
 const removed = m.removeDmCandidate(merged, "lee", NOW + 11 * DAY);
 const mergedAfterRemove = m.mergeDmStores(merged, removed, "owner", NOW + 12 * DAY);

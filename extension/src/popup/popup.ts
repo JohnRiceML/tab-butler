@@ -7,6 +7,7 @@ import { mountGoobi, type GoobiHandle } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import { DEFAULT_DAILY_GOALS, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
 import { normalizeSoul, SOUL_TEMPLATE } from "../lib/soul";
+import { activeProfileChange, declareProfileChange, invalidateProfileChange, mergeGrowthStores, PROFILE_CHANGE_MIN_OBSERVED_DAYS, PROFILE_CHANGE_VARIABLES, PROFILE_CHANGE_WINDOW_DAYS, profileChangeLabel, readProfileChange, settleProfileChanges, summarizeGrowthWindow, type GrowthStore, type ProfileChangeVariable } from "../lib/growth-loop";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -133,6 +134,8 @@ interface ViewData {
   safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
   todaySent: string[]; // snippets of today's sent replies — the playground treats
   signals: { measureDay: string; settled: number; fitN: number; backs: number; inboundN: number; inboundAgeD: number | null; ownAgeH: number | null; profileAgeD: number | null; reachN: number; heavyN: number } | null;
+  growthOwner: string; // normalized handle whose growth store the popup reads ("" = not configured)
+  growthStore: GrowthStore | null; // dock-collected follower/post history; null = never collected
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -181,6 +184,8 @@ const MOCK: ViewData = {
   xPremium: "",
   twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
   signals: null,
+  growthOwner: "",
+  growthStore: null,
   replyStats: { today: 7, week: 35, total: 142, days: [
     { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
     { label: "We", count: 8, today: false }, { label: "Th", count: 4, today: false },
@@ -246,6 +251,20 @@ async function getData(): Promise<ViewData> {
     try { twttrMeter = await send<{ requests: number; bytes: number }>({ type: "GET_TWTTR_METER" }); } catch { twttrMeter = null; }
   }
 
+  // Profile-change experiment: read the dock-collected growth store for the configured handle.
+  // Settling here freezes any window that finished while only the popup was opened.
+  const growthOwner = ((store[CONFIG.X_MY_HANDLE_KEY] as string) || "").trim().replace(/^@+/, "").toLowerCase();
+  let growthStore: GrowthStore | null = null;
+  if (growthOwner) {
+    const gkey = `${CONFIG.X_GROWTH_LOOP_KEY}:${growthOwner}`;
+    const raw = (await chrome.storage.local.get(gkey))[gkey] as GrowthStore | undefined;
+    if (raw?.version === 1) {
+      const settled = settleProfileChanges(raw, now);
+      growthStore = settled.store;
+      if (settled.settled) await chrome.storage.local.set({ [gkey]: mergeGrowthStores(raw, settled.store, growthOwner, now) });
+    }
+  }
+
   return {
     smart: Boolean(store[CONFIG.SMART_ENABLED_KEY]),
     pressure,
@@ -272,6 +291,8 @@ async function getData(): Promise<ViewData> {
     replyStats,
     safety,
     todaySent,
+    growthOwner,
+    growthStore,
     signals: (() => {
       // Signal health: the honest gates make panels legitimately QUIET — this makes the silence
       // inspectable (how much data each learner has, how fresh each harvest is) so "quiet" and
@@ -346,6 +367,55 @@ function signalHealthHTML(g: ViewData["signals"]): string {
     ${row("Coverage caches", `${g.reachN} authors · ${g.heavyN} heavy hitters`, "")}
     <div class="dim" style="font-size:10px;margin-top:5px">Every learner stays silent below its min-N gate rather than guessing — these numbers are the distance to each gate.</div>
   </div>`;
+}
+
+/** Profile-change experiment — a METHOD, never a number. Single-subject: the user declares the
+ *  ONE variable they changed (bio / pin / banner / name); Goobi compares the 14 days before and
+ *  after from its own dock-collected snapshots. No external benchmark exists for bio→follow (the
+ *  circulating figures aren't backed by real experiments), so the account's own labeled data is
+ *  the only honest source — below the observation gate the panel says "collecting", never guesses. */
+function profileExperimentHTML(d: ViewData): string {
+  const DAY = 86_400_000, now = Date.now();
+  const method = `<div class="dim" style="font-size:10.5px;line-height:1.45;margin-bottom:8px">Change ONE thing, log it, and Goobi compares followers/day across the ${PROFILE_CHANGE_WINDOW_DAYS} days before and after — from its own logged data, labeled ✓ measured. One uncontrolled variable: the result is a read, not causation, and there is no “good” target number to hit.</div>`;
+  const shell = (inner: string) => `<div class="li" style="display:block"><div class="name" style="margin-bottom:4px">Profile-change experiment</div>${method}${inner}</div>`;
+  if (!d.growthOwner) return shell(`<div class="dim" style="font-size:11px">Set your X handle (in “X data features”) so Goobi knows which account's growth history to read.</div>`);
+  const store = d.growthStore;
+  if (!store) return shell(`<div class="dim" style="font-size:11px">No growth history for @${esc(d.growthOwner)} yet — open Goobi's dock on x.com so daily follower snapshots start logging. The baseline builds from there.</div>`);
+  const active = activeProfileChange(store);
+  let body: string;
+  if (active) {
+    const read = readProfileChange(store, active, now);
+    const when = new Date(active.changedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const lines = read.lines.map((l) => `<div style="font-size:11.5px;color:var(--t1);margin-top:4px">${esc(l)}</div>`).join("");
+    const caveats = read.caveats.map((c) => `<div class="dim" style="font-size:10.5px;margin-top:4px">${esc(c)}</div>`).join("");
+    body = `<div style="border:.5px solid var(--line-strong);border-radius:10px;padding:9px 10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><span style="font-size:12px;font-weight:500;color:var(--t1)">${esc(profileChangeLabel(active.variable))} · changed ${esc(when)}</span><span class="dim" style="font-size:10.5px">${esc(read.state)}</span></div>
+      <div style="font-size:11.5px;color:var(--t1);margin-top:5px">${esc(read.headline)}</div>
+      ${lines}${caveats}
+      <button class="act danger" data-action="gx-invalidate" data-id="${esc(active.id)}" style="margin-top:7px;padding-left:0">I changed something else too — void this read</button>
+    </div>`;
+  } else {
+    const baseline = summarizeGrowthWindow(store, now - PROFILE_CHANGE_WINDOW_DAYS * DAY, now - 1);
+    const enough = baseline.observedDays >= PROFILE_CHANGE_MIN_OBSERVED_DAYS;
+    const today = dayKeyOf(now);
+    body = `<div style="border:.5px solid var(--line-strong);border-radius:10px;padding:9px 10px;margin-bottom:8px">
+      <div class="dim" style="font-size:10.5px">Baseline on hand: <b style="color:var(--t1)">${baseline.observedDays} of ${PROFILE_CHANGE_WINDOW_DAYS}</b> days observed ✓ measured (a clean read needs ≥${PROFILE_CHANGE_MIN_OBSERVED_DAYS} on each side)${enough ? "" : " — keep the dock open daily before changing anything, or the read will say exactly that"}.</div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <label class="sr-only" for="gxvar">Variable changed</label>
+        <select class="control" id="gxvar" style="flex:1;min-width:118px">${PROFILE_CHANGE_VARIABLES.map((v) => `<option value="${v.id}">${esc(v.label)}</option>`).join("")}</select>
+        <label class="sr-only" for="gxdate">Date of the change</label>
+        <input class="control" id="gxdate" type="date" value="${today}" max="${today}" style="flex:1;min-width:118px"/>
+        <button class="btn" data-action="gx-declare">Log the change</button>
+      </div>
+    </div>`;
+  }
+  const history = (store.profileChanges ?? []).filter((p) => p.status !== "active").slice(0, 2);
+  const hist = history.map((p) => {
+    const read = p.outcome ?? readProfileChange(store, p, now);
+    const when = new Date(p.changedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return `<div class="dim" style="font-size:10.5px;margin-top:4px" title="${esc([...read.lines, ...read.caveats].join(" · "))}">${esc(profileChangeLabel(p.variable))} · ${esc(when)} — ${esc(read.state === "read" ? read.lines[0] ?? read.headline : read.headline)}</div>`;
+  }).join("");
+  return shell(body + hist);
 }
 
 function accountSafetyHTML(s: ViewData["safety"]): string {
@@ -615,6 +685,11 @@ function render(d: ViewData): string {
     <div class="list">${replyShowcaseHTML(d.replyStats)}${accountSafetyHTML(d.safety)}</div>
   </details>
 
+  <details class="fold">
+    <summary>Profile experiment <span class="field-hint">one change · ${PROFILE_CHANGE_WINDOW_DAYS} days before vs after</span></summary>
+    <div class="list">${profileExperimentHTML(d)}</div>
+  </details>
+
   <div class="dim" style="font-size:10.5px;margin:6px 2px 2px">Honesty gate: every learning panel stays silent below its minimum sample size — Goobi shows nothing rather than guessing.</div>
   <details class="fold">
     <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
@@ -732,6 +807,18 @@ async function doRecall(query: string) {
       ? `<div class="empty">Add your Anthropic key in Settings to search archive &amp; history.</div>`
       : `<div class="empty">Search failed — try again.</div>`;
   }
+}
+
+/** Load the configured handle's growth store for a profile-change write. Null when no handle is
+ *  set or the dock has never collected — both cases the panel already explains. */
+async function loadGrowthStore(): Promise<{ key: string; owner: string; store: GrowthStore } | null> {
+  const raw = await chrome.storage.local.get(CONFIG.X_MY_HANDLE_KEY);
+  const owner = ((raw[CONFIG.X_MY_HANDLE_KEY] as string) || "").trim().replace(/^@+/, "").toLowerCase();
+  if (!owner) return null;
+  const key = `${CONFIG.X_GROWTH_LOOP_KEY}:${owner}`;
+  const store = (await chrome.storage.local.get(key))[key] as GrowthStore | undefined;
+  if (!store || store.version !== 1) return null;
+  return { key, owner, store };
 }
 
 /** Best-effort: resolve the user's own follower count and store it, so the
@@ -997,6 +1084,33 @@ async function dispatch(el: HTMLElement) {
         el.closest(".prodrow")?.remove();
         await saveProducts(); // persist immediately so it can't reappear on reopen
         toast("Product removed.");
+        break;
+      }
+      case "gx-declare": {
+        const variable = ((document.getElementById("gxvar") as HTMLSelectElement | null)?.value ?? "bio") as ProfileChangeVariable;
+        const dateStr = (document.getElementById("gxdate") as HTMLInputElement | null)?.value ?? "";
+        const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+        if (!parts) { toast("Pick the date you made the change."); break; }
+        const changedAt = new Date(+parts[1], +parts[2] - 1, +parts[3], 12).getTime(); // local noon dodges timezone edges
+        const g = await loadGrowthStore();
+        if (!g) { toast("No growth history yet — set your handle and open Goobi's dock on x.com first, so there is data to compare."); break; }
+        const res = declareProfileChange(g.store, variable, changedAt, Date.now());
+        if (res.error) { toast(res.error); break; }
+        await chrome.storage.local.set({ [g.key]: mergeGrowthStores(g.store, res.store, g.owner, Date.now()) });
+        await refresh();
+        toast(`Logged the ${profileChangeLabel(variable).toLowerCase()} change — collecting the ${PROFILE_CHANGE_WINDOW_DAYS}-day after-window. Change nothing else on the profile meanwhile.`);
+        break;
+      }
+      case "gx-invalidate": {
+        const pcId = el.dataset.id; // string experiment id — not the numeric `id` above
+        if (!pcId) break;
+        if (!window.confirm("Void this read? Use this when more than one thing changed — neither change can be attributed, and Goobi records that honestly instead of guessing.")) break;
+        const g = await loadGrowthStore();
+        if (!g) break;
+        const updated = invalidateProfileChange(g.store, pcId, "More than one thing changed inside the window, so no before/after can be attributed to the declared variable.", Date.now());
+        await chrome.storage.local.set({ [g.key]: mergeGrowthStores(g.store, updated, g.owner, Date.now()) });
+        await refresh();
+        toast("Read voided — one variable at a time next run.");
         break;
       }
     }

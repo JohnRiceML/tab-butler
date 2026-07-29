@@ -8,6 +8,12 @@ export const CONFIG = {
   /** chrome.alarms minimum is 0.5 min; we scan every few minutes. */
   SCAN_PERIOD_MIN: 5,
 
+  /** Draft-and-remind: the badge-refresh alarm for due post-idea reminders. Badge-only
+   *  surface — no chrome.notifications (a NEW permission would force every user through
+   *  remove+re-add), no auto-open, no auto-post. */
+  IDEA_REMIND_ALARM: "goobi-idea-remind",
+  IDEA_REMIND_PERIOD_MIN: 1,
+
   // storage.local keys
   SMART_ENABLED_KEY: "smartEnabled", // privacy opt-in — Claude calls are gated on this
   ARCHIVE_KEY: "archive", // ArchivedTab[]

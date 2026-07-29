@@ -12,6 +12,8 @@ loop records how **your** replies actually performed, labeling everything
 says nothing — every learning panel stays silent below its minimum sample
 size rather than guessing.
 
+A public, standalone version of that algorithm read — how X's For You ranking works as of the May 2026 open-source release, with per-claim provenance — lives at [docs/public/how-x-ranks-2026.md](docs/public/how-x-ranks-2026.md).
+
 - **Finds posts worth replying to** — scores your timeline with Claude, marks the
   good ones in-feed with an explainable growth lane, and ranks them in an always-on dock.
 - **Brings warm comments to the top** — a first-class Comments queue prioritizes

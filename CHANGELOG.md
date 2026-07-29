@@ -4,6 +4,44 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Draft-and-remind scheduling for post ideas (never auto-post):** working drafts in the
+  Ideas dock can now carry a "⏰ Remind me" time — pick one of up to three suggested slots
+  (a new pure `lib/schedule.ts`, unit-tested) or a custom time. Suggestions respect the
+  ~3h `POST_SPACING_MINS` prior from `momentum.ts` against both your last own original and
+  every other scheduled draft, and the day-part picks are labeled ✦ priors (common posting
+  windows — not a measured "best time", no fabricated benchmarks). Scheduled drafts show a
+  chip (due/overdue states escalate), a due reminder highlights the card and toasts once
+  (with `postSpacingNudge`'s soft spacing note when your last original is recent — never a
+  block), and a `chrome.alarms`-driven service-worker check mirrors the due count on the
+  toolbar badge (badge-only: no `chrome.notifications`, no new permissions). Persisted on
+  the existing `X_IDEAS_KEY` records with cross-tab `storage.onChanged` sync; opening the
+  composer, marking Posted, or Clear serves the reminder. Shipping remains the user's
+  click through the existing Open-in-X path — nothing opens or posts on its own.
+
+- **Profile-change experiment — a method, never a number:** the Growth store now records
+  single-subject profile experiments: declare the ONE thing you changed (bio, pinned post,
+  banner, or display name) and the date, and Goobi compares followers/day (plus views/post and
+  eng/post when both sides have ≥2 measured posts) across the 14 days before vs after, from its
+  own logged snapshots. Every read is labeled ✓ measured with per-side observed-day counts and
+  carries the caveats in the copy: one uncontrolled variable is correlation, not causation;
+  profile visits aren't exposed to the extension so no conversion rate is ever computed (external
+  "benchmark" figures aren't backed by real experiments — the account's own data is the only
+  honest source); an overlapping content-strategy test is named as another moving part. Below 10
+  observed days on either side the panel says it's collecting or that the window is unreadable —
+  never a guessed number — and declaring a second change mid-window is refused, with a one-click
+  path to log the running read as invalidated instead. Pure logic + settle/merge live in
+  `growth-loop.ts` (22 new assertions in `test-growth-loop.mjs`); the declare/read UI is a new
+  "Profile experiment" fold in the popup's X tab. No new permissions, nothing auto-posts.
+
+- **Public algorithm explainer:** added `docs/public/how-x-ranks-2026.md` — a standalone,
+  publishable version of INTEL.md's verified picture (Thunder/Phoenix retrieval, the 22-term
+  multi-action scorer with the verbatim diversity formula, negative signals, the follower-gated
+  reply pipeline with its holistic 0-3 grade, the VMRanker caveat, and the myth-busts), keeping
+  every per-claim provenance tag while excluding Goobi's encoding map, tuning constants, eval
+  results, and watch checklist. `docs/public/README.md` states the folder contract: nothing is
+  auto-published; posting a file anywhere is a deliberate owner action. Root README links the
+  explainer.
+
 - **Dev hot-reload loop:** `npm run dev` watches `src/`, rebuilds on save, and bumps a
   `dist/dev-reload.json` beacon; the service worker (only when that beacon exists) polls it,
   reloads the extension on a bump, and refreshes open X tabs on the way back up — removing both

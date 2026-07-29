@@ -8,6 +8,7 @@ import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDe
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { reconcileIdeaPublications, type IdeaPublication } from "../lib/idea-outcomes";
+import { nextShipSlots, reminderState, formatSlot, reminderToastLine } from "../lib/schedule";
 import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, type TargetStore } from "../lib/targets";
 import { rankThreads, TEND_WINDOW_MS, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
@@ -182,12 +183,14 @@ function send<T>(msg: unknown): Promise<T | undefined> {
 let invalidated = false;
 let bodyObs: MutationObserver | null = null;
 let urlPoll: ReturnType<typeof setInterval> | undefined;
+let remindPoll: ReturnType<typeof setInterval> | undefined; // draft-and-remind due-watcher (30s, no network)
 function contextOK(): boolean { try { return !!chrome.runtime?.id; } catch { return false; } }
 function teardown(): void {
   if (invalidated) return;
   invalidated = true;
   try { bodyObs?.disconnect(); } catch { /* ignore */ }
   if (urlPoll) clearInterval(urlPoll);
+  if (remindPoll) clearInterval(remindPoll);
   if (flushTimer) clearTimeout(flushTimer);
   try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
   try { stopIdeasGoobi(); } catch { /* ignore */ }
@@ -2006,6 +2009,12 @@ const DOCK_CSS = `
 .idea.dimmed { opacity:.5; pointer-events:none; }
 .idea-pip { flex:0 0 4px; align-self:stretch; background:rgba(214,154,92,.18); }
 .idea.kept { border-color:rgba(214,154,92,.42); }
+.idea.remind-due { border-color:rgba(232,154,60,.5); box-shadow:0 0 0 1px rgba(232,154,60,.22); }
+.idea-remind-chip { color:var(--g-warning); font-weight:700; }
+.idea-remind-chip.overdue { color:var(--g-danger); }
+.idea-remind { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:2px; }
+.idea-remind-note { flex-basis:100%; font-size:10px; color:#8c7d68; line-height:1.4; }
+.idea-remind-dt { background:#221c15; border:1px solid rgba(214,154,92,.25); color:#cbb89c; border-radius:8px; font:600 11px -apple-system,system-ui,sans-serif; padding:4px 6px; color-scheme:dark; }
 .idea-main { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:7px; padding:13px 8px 13px 13px; }
 .idea-hook { font:600 13px -apple-system,system-ui,sans-serif; color:#f3ead9; line-height:1.45; white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .idea.open .idea-hook { display:none; }
@@ -2598,6 +2607,8 @@ interface IdeaRecord {
   grade?: IdeaGrade;                               // the quality tier + call-out surfaced on the row
   virality?: number;                               // legacy: old persisted records render via a fallback
   src?: IdeaSource; pinned?: boolean; status: "working" | "posted";
+  remindAt?: number;   // draft-and-remind: when the user asked to be nudged to ship this
+  remindedAt?: number; // when the one-shot due toast fired (the chip + badge stay until acted on)
   createdAt: number; lastEditedAt: number; postedAt?: number;
   growthExperimentId?: string; growthStrategyId?: GrowthStrategyId; // stamped when shipped/matched
   publication?: IdeaPublication; // exact, unique RapidAPI match to the real post + latest measured outcome
@@ -2608,6 +2619,7 @@ let ideasInsightsOpen = false;             // the Post-ideas header's insight ro
 const expandedSources = new Set<string>(); // idea ids whose source-post proof is expanded
 const ideaBusy = new Set<string>();        // ids currently being rewritten (per-idea steer)
 const ideaUndo = new Map<string, string>(); // id → prior text, for one-level undo after a steer
+const remindPickerOpen = new Set<string>(); // idea ids with the remind-me slot picker open (session)
 let shippedOpen = false;                   // the collapsed "Shipped" section
 let ideaSeq = 0;
 let ideasLoading = false;
@@ -4024,6 +4036,7 @@ function deleteIdea(rec: IdeaRecord): void {
 function markPosted(rec: IdeaRecord, posted: boolean): void {
   rec.status = posted ? "posted" : "working";
   rec.postedAt = posted ? Date.now() : undefined;
+  if (posted) clearReminderFields(rec); // a shipped draft's reminder is served (chip + badge clear)
   if (!posted) { rec.publication = undefined; rec.growthExperimentId = undefined; rec.growthStrategyId = undefined; }
   else tagIdeaGrowth(rec, rec.postedAt);
   if (posted) reconcileIdeasWithOwnPosts();
@@ -4045,6 +4058,47 @@ function workingIdeas(): IdeaRecord[] {
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || tierRank(a) - tierRank(b) || b.createdAt - a.createdAt || (b.sortScore ?? 0) - (a.sortScore ?? 0));
 }
 function postedIdeas(): IdeaRecord[] { return ideaQueue.filter((i) => i.status === "posted").sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0)); }
+
+/* ---------- draft-and-remind: schedule a nudge to ship a draft (never a post) ----------
+ * The pure math lives in lib/schedule.ts. Here: set/clear on the record (persisted via the
+ * existing X_IDEAS_KEY), a 30s due-watcher that toasts ONCE per schedule and highlights the
+ * card, and the picker UI. The service worker mirrors the due count on the toolbar badge.
+ * Clicking through uses the EXISTING ship path (Open in X ↗) — user-clicked only. */
+
+/** Minutes since the user's last own original (same read the momentum strip uses). */
+function minsSinceLastOwnPost(): number | undefined {
+  const lastPost = ideaQueue.reduce((mx, i) => (i.postedAt && i.postedAt > mx ? i.postedAt : mx), 0);
+  return lastPost ? (Date.now() - lastPost) / 60000 : undefined;
+}
+
+function setReminder(rec: IdeaRecord, at: number): void {
+  rec.remindAt = at; rec.remindedAt = undefined; rec.lastEditedAt = Date.now();
+  remindPickerOpen.delete(rec.id);
+  persistIdeas(); renderDock();
+  toast(`⏰ Reminder set for ${formatSlot(at, Date.now())}. Goobi will highlight the draft and badge the toolbar — posting stays your click.`);
+}
+
+/** The reminder has served its purpose (shipped / opened / cleared) — stop chipping + badging. */
+function clearReminderFields(rec: IdeaRecord): boolean {
+  if (rec.remindAt == null && rec.remindedAt == null) return false;
+  rec.remindAt = undefined; rec.remindedAt = undefined;
+  return true;
+}
+
+/** Fire due reminders: the card highlight is ambient (render), the toast fires ONCE per
+ *  schedule (remindedAt gates it, persisted so another tab won't re-toast). Draft-only:
+ *  nothing opens and nothing posts — the user clicks through from the Ideas tab. */
+function checkDueReminders(): void {
+  if (invalidated) return;
+  const now = Date.now();
+  let fired = false;
+  for (const rec of ideaQueue) {
+    if (rec.status !== "working" || rec.remindAt == null || rec.remindAt > now || rec.remindedAt != null) continue;
+    rec.remindedAt = now; fired = true;
+    toast(reminderToastLine(rec.text, minsSinceLastOwnPost())); // soft spacing note when relevant
+  }
+  if (fired) { persistIdeas(); if (!dockInputFocused()) renderDock(); }
+}
 
 /** Rewrite ONE idea per a steer, in place — a single scoped Claude call, with one-level undo. */
 async function rewriteIdea(rec: IdeaRecord, steer: string): Promise<void> {
@@ -4071,6 +4125,60 @@ function steerRow(rec: IdeaRecord): HTMLElement {
   return wrap;
 }
 
+/** yyyy-MM-ddTHH:mm in LOCAL time, for the datetime-local custom picker. */
+function dtLocalValue(ts: number): string {
+  const d = new Date(ts); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Draft-and-remind row: pick a suggested spaced slot (✦ = prior, not a measured best
+ *  time) or a custom time. A reminder only highlights + badges — it never posts,
+ *  never auto-opens anything. */
+function remindRow(rec: IdeaRecord): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "idea-remind";
+  const rs = reminderState(rec, Date.now());
+  if (!remindPickerOpen.has(rec.id)) {
+    if (rs === "none") {
+      const b = document.createElement("button"); b.className = "idea-pin"; b.textContent = "⏰ Remind me";
+      b.title = "Schedule a nudge to ship this draft. Goobi highlights it in the dock and badges the toolbar — it never auto-posts.";
+      b.onclick = () => { remindPickerOpen.add(rec.id); renderDock(); };
+      wrap.append(b);
+    } else {
+      const lbl = document.createElement("span"); lbl.className = "idea-remind-chip" + (rs === "overdue" ? " overdue" : "");
+      lbl.textContent = rs === "scheduled" ? `⏰ Reminder ${formatSlot(rec.remindAt!, Date.now())}` : rs === "due" ? "⏰ Reminder due now" : `⏰ Reminder overdue (${formatSlot(rec.remindAt!, Date.now())})`;
+      const change = document.createElement("button"); change.className = "idea-pin"; change.textContent = "Change";
+      change.onclick = () => { remindPickerOpen.add(rec.id); renderDock(); };
+      const clr = document.createElement("button"); clr.className = "idea-pin"; clr.textContent = "Clear";
+      clr.title = "Drop the reminder — the draft itself stays put.";
+      clr.onclick = () => { if (clearReminderFields(rec)) { rec.lastEditedAt = Date.now(); persistIdeas(); renderDock(); } };
+      wrap.append(lbl, change, clr);
+    }
+    return wrap;
+  }
+  // Picker open: suggested slots (spacing-aware, all priors) + a custom time.
+  const slots = nextShipSlots({ now: Date.now(), minsSinceLastOwnPost: minsSinceLastOwnPost(), queue: ideaQueue, excludeId: rec.id });
+  for (const s of slots) {
+    const b = document.createElement("button"); b.className = "idea-chip"; b.textContent = `✦ ${s.label}`; b.title = s.note;
+    b.onclick = () => setReminder(rec, s.at);
+    wrap.append(b);
+  }
+  const dt = document.createElement("input"); dt.className = "idea-remind-dt"; dt.type = "datetime-local";
+  dt.min = dtLocalValue(Date.now()); dt.setAttribute("aria-label", "Custom reminder time");
+  const set = document.createElement("button"); set.className = "idea-chip"; set.textContent = "Set";
+  set.onclick = () => {
+    const at = dt.value ? new Date(dt.value).getTime() : NaN;
+    if (!Number.isFinite(at) || at <= Date.now()) { toast("Pick a future time for the reminder."); return; }
+    setReminder(rec, at);
+  };
+  const cancel = document.createElement("button"); cancel.className = "idea-pin"; cancel.textContent = "Cancel";
+  cancel.onclick = () => { remindPickerOpen.delete(rec.id); renderDock(); };
+  wrap.append(dt, set, cancel);
+  const note = document.createElement("div"); note.className = "idea-remind-note";
+  note.textContent = "✦ = a prior (common posting windows + ~3h spacing between originals), not a measured best time. The reminder highlights this draft and badges the toolbar — posting stays your click.";
+  wrap.append(note);
+  return wrap;
+}
+
 /** Source proof shown inside the card's single "Why this suggestion" disclosure. */
 function sourceBlock(idea: IdeaRecord): HTMLElement {
   const wrap = document.createElement("div");
@@ -4094,6 +4202,7 @@ function sourceBlock(idea: IdeaRecord): HTMLElement {
  * posting, so the draft stays working until the user explicitly marks it Posted. */
 function openInComposer(idea: IdeaRecord, _shipped: boolean): void {
   window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(idea.text)}`, "_blank", "noopener");
+  if (clearReminderFields(idea)) { idea.lastEditedAt = Date.now(); persistIdeas(); renderDock(); } // clicking through serves the reminder
 }
 const firstLine = (s: string): string => s.split("\n").map((l) => l.trim()).find(Boolean) || s;
 
@@ -4118,11 +4227,13 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   const shipped = !!opts?.shipped;
   const open = expandedIdeas.has(idea.id);
   const vv = ideaBandView(idea);
+  const rs = shipped ? "none" : reminderState(idea, Date.now()); // draft-and-remind chip/highlight state
   const c = document.createElement("div"); c.className = "idea";
   if (open) c.classList.add("open");
   if (idea.pinned && !shipped) c.classList.add("kept");
   if (shipped) c.classList.add("shipped");
   if (ideaBusy.has(idea.id)) c.classList.add("busy");
+  if (rs === "due" || rs === "overdue") c.classList.add("remind-due"); // due reminder → the card glows amber
   // Click the collapsed row (or the hook when open) to toggle — single-open.
   const toggle = () => { const was = expandedIdeas.has(idea.id); expandedIdeas.clear(); if (!was) expandedIdeas.add(idea.id); renderDock(); };
   c.onclick = toggle;
@@ -4149,6 +4260,13 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   } else {
     meta.textContent = idea.origin === "seed" ? "Your draft · built from your rough idea" : idea.src ? `Suggested from a pattern working in your niche` : "Niche suggestion · ready for your edit";
   }
+  if (rs !== "none") { // the reminder chip rides the meta line (due/overdue escalate the color)
+    const chip = document.createElement("b"); chip.className = "idea-remind-chip" + (rs === "overdue" ? " overdue" : "");
+    chip.textContent = rs === "scheduled" ? `⏰ ${formatSlot(idea.remindAt!, Date.now())}` : rs === "due" ? "⏰ due now" : `⏰ overdue (${formatSlot(idea.remindAt!, Date.now())})`;
+    chip.title = "Your ship reminder for this draft. Goobi highlights it and counts it on the toolbar badge — opening the composer is always your click.";
+    if (meta.firstChild) meta.insertBefore(document.createTextNode(" · "), meta.firstChild);
+    meta.insertBefore(chip, meta.firstChild);
+  }
   main.append(meta); c.append(main);
 
   // One clear collapsed action: edit. Publishing stays inside the editor.
@@ -4169,7 +4287,7 @@ function ideaCard(idea: IdeaRecord, opts?: { shipped?: boolean }): HTMLElement {
   body.append(draftLabel, ta);
   if (open) requestAnimationFrame(autosize); // size to content once it's visible
   if (idea.grade?.callout) { const qn = document.createElement("div"); qn.className = "idea-quality"; qn.textContent = idea.grade.tier === "strong" ? `Strong: ${idea.grade.callout}` : idea.grade.callout; body.append(qn); }
-  if (!shipped) body.append(steerRow(idea)); // quick-shape (working drafts only)
+  if (!shipped) { body.append(steerRow(idea)); body.append(remindRow(idea)); } // quick-shape + remind-me (working drafts only)
   if (shipped && idea.publication) {
     const outcome = document.createElement("div"); outcome.className = "idea-outcome";
     const link = document.createElement("a"); link.href = `https://x.com/i/status/${idea.publication.postId}`; link.target = "_blank"; link.rel = "noopener"; link.textContent = "✓ Exact post matched on X ↗";
@@ -4259,9 +4377,13 @@ function persistDms(snapshot: DmStore = dmStore): void {
   if (!owner) return;
   dmPersistChain = dmPersistChain.then(async () => {
     const stored = await getLocal(dmStorageKey(owner)) as DmStore | undefined;
-    const merged = mergeDmStores(stored, snapshot, owner, Date.now());
+    const now = Date.now();
+    const normalizedStored = pruneDmStore(stored, owner, now);
+    const merged = mergeDmStores(normalizedStored, snapshot, owner, now);
     if (invalidated || !contextOK()) return;
-    try { await chrome.storage.local.set({ [dmStorageKey(owner)]: merged }); } catch { return; }
+    if (JSON.stringify(merged) !== JSON.stringify(normalizedStored)) {
+      try { await chrome.storage.local.set({ [dmStorageKey(owner)]: merged }); } catch { return; }
+    }
     if (dmStore.ownerHandle === owner) dmStore = mergeDmStores(dmStore, merged, owner, Date.now());
   }).catch(() => { /* best-effort local CRM persistence */ });
 }
@@ -5755,6 +5877,16 @@ async function boot() {
       void ensureTargetOwner(); void ensureDmOwner(); void ensureGrowthOwner().then(() => renderDock());
     }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; foldRelationshipMemory(); renderDock(); } } // synced from another tab's daily scan
+    if (changes[CONFIG.X_IDEAS_KEY]) {
+      // Another tab wrote the drafts queue (set/cleared a reminder, toasted a due one, shipped).
+      // Adopt only when this tab isn't mid-edit (a rebuild would eat the caret) and skip our own
+      // echo (same serialized value). remindedAt syncing here is what prevents double toasts.
+      const nv = changes[CONFIG.X_IDEAS_KEY].newValue;
+      if (Array.isArray(nv) && !dockInputFocused() && JSON.stringify(nv) !== JSON.stringify(ideaQueue)) {
+        ideaQueue = (nv as IdeaRecord[]).filter((r) => r && r.id && typeof r.text === "string");
+        renderDock();
+      }
+    }
     if (changes[CONFIG.X_REPLY_LOG_KEY]) {
       // Another tab wrote the reply ledger. MERGE (union), never adopt — a stale tab's blob must not
       // reset the rolling-hour count the ease-off safety guard reads, or defeat the daily tally.
@@ -5808,6 +5940,9 @@ async function boot() {
     requestScan();
     renderDock();
   }, 700);
+
+  checkDueReminders(); // anything already due on load toasts once now (the SW badge is separate)
+  remindPoll = setInterval(checkDueReminders, 30_000);
 
   scan();
 }

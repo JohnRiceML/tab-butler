@@ -6,6 +6,7 @@ import { governedFetch, readMeter } from "../lib/twttr-governor";
 import { buildDraftContext } from "../lib/draft-context";
 import { allowedTwttrPath } from "../lib/twttr-policy";
 import { normalizeDailyGoals } from "../lib/daily-goals";
+import { dueReminderCount } from "../lib/schedule";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -73,9 +74,32 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(CONFIG.SCAN_ALARM, {
     periodInMinutes: CONFIG.SCAN_PERIOD_MIN,
   });
+  chrome.alarms.create(CONFIG.IDEA_REMIND_ALARM, {
+    periodInMinutes: CONFIG.IDEA_REMIND_PERIOD_MIN,
+  });
   void seedFromLocalFile(); // fresh install (or reload): restore any empty settings from the local seed
 });
 chrome.runtime.onStartup.addListener(() => void seedFromLocalFile());
+
+/* ---------- post-idea reminders: the toolbar badge ----------
+ * Count the drafts whose remind-me time has arrived and mirror the number on the
+ * chrome.action badge. Badge-only by design: NO chrome.notifications (a new permission
+ * = forced remove+re-add for every user), no tab opening, no composer — the in-dock
+ * highlight + this count are the entire surface, and every next step is a user click.
+ * Persistence is the existing X_IDEAS_KEY records; the alarm just re-reads them. */
+async function refreshIdeaReminderBadge(): Promise<void> {
+  try {
+    const store = await chrome.storage.local.get(CONFIG.X_IDEAS_KEY);
+    const n = dueReminderCount(store[CONFIG.X_IDEAS_KEY], Date.now());
+    await chrome.action.setBadgeText({ text: n ? String(n) : "" });
+    if (n) await chrome.action.setBadgeBackgroundColor({ color: "#e89a3c" }); // the warning amber the dock uses
+  } catch { /* badge is best-effort — never let it break the worker */ }
+}
+void refreshIdeaReminderBadge(); // every SW wake re-syncs the badge (covers missed alarms)
+chrome.storage.onChanged.addListener((changes, area) => {
+  // Set/clear/ship in any tab updates the badge immediately — no waiting on the alarm.
+  if (area === "local" && changes[CONFIG.X_IDEAS_KEY]) void refreshIdeaReminderBadge();
+});
 
 /* ---------- dev hot-reload (unpacked watch-mode builds ONLY) ----------
  * `npm run dev` (build.mjs --watch) writes dist/dev-reload.json with a fresh id on every
@@ -131,6 +155,7 @@ chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() 
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === CONFIG.SCAN_ALARM) void runIdleArchive();
+  if (alarm.name === CONFIG.IDEA_REMIND_ALARM) void refreshIdeaReminderBadge();
 });
 
 /**
