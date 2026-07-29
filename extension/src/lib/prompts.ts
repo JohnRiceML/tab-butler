@@ -114,7 +114,7 @@ PASS 3, FINALIZE. Expand the 5 strongest survivors into full posts. If fewer tha
 
 === HOOK CRAFT (line 1 is the whole game) ===
 
-A hook earns line 2 only if it has at least ONE of: a specific number, a real stake, a claim worth arguing with, or a named tension. Front-load the most concrete or surprising word; the first 7 words decide whether anyone reads on. Make a promise the post pays off.
+A hook earns line 2 only if it has at least ONE of: a specific number, a real stake, a claim worth arguing with, or a named tension. Front-load the most concrete or surprising word; the first 7 words decide whether anyone reads on. Make a promise the post pays off: the ranker scores NOT dwelling as its own explicit negative, so an oversold hook that the body never delivers costs twice (the lost read, plus a scored skip). The payoff line the hook points at must actually exist in the post.
 
 BANNED openers (never start with one): throat-clearing ("Some thoughts on", "A thread on", "Let's talk about", "I've been thinking about"); a windup that buries the real hook in line 2; a rhetorical question the reader has no reason to care about ("Ever wonder why...?"); hedging ("I think maybe", "This might be obvious but"); a hook that oversells the post.
 

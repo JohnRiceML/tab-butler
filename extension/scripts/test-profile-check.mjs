@@ -111,5 +111,26 @@ ok(m.analyzeBio("shipped 3 apps").hasProof && m.analyzeBio("$5k ARR").hasProof, 
   ok(!f.some((x) => /proof|banner|display name/i.test(x.text)), "v2 fields unset → silence (never nag on data we didn't harvest)");
 }
 
+// follow PROMISE — a follow subscribes to future content; the bio should say what's coming
+{
+  ok(m.analyzeBio("Documenting the road from $0 to $50k MRR").hasPromise === true, "analyzeBio: 'documenting' reads as a promise");
+  ok(m.analyzeBio("Weekly teardowns of AI SaaS products").hasPromise === true, "analyzeBio: 'weekly' reads as a promise");
+  ok(m.analyzeBio("Sharing what actually grows AI SaaS").hasPromise === true, "analyzeBio: 'sharing what' reads as a promise");
+  ok(m.analyzeBio("CEO at BigCo. Opinions my own.").hasPromise === false, "analyzeBio: static credentials bio has no promise");
+  // proof present but no promise → the promise nudge fires
+  const f1 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: true, bioHasPromise: false }, stats);
+  ok(f1.some((x) => x.level === "act" && /promise what a follower GETS/i.test(x.text)), "proof ok but no promise → promise nudge fires");
+  ok(!f1.some((x) => /covers what you do/.test(x.text)), "…and the ✓ line does not also fire");
+  // proof missing wins priority — promise nudge stays quiet (one message at a time)
+  const f2 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasProof: false, bioHasPromise: false }, stats);
+  ok(f2.some((x) => /no concrete proof/.test(x.text)) && !f2.some((x) => /promise what a follower/i.test(x.text)), "missing proof outranks the promise nudge");
+  // full formula incl. promise → the ✓ fires, no nags
+  const f3 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: true, bioHasPromise: true }, stats);
+  ok(f3.some((x) => /covers what you do/.test(x.text)) && !f3.some((x) => /promise what a follower/i.test(x.text)), "role+audience+proof+promise → ✓, no promise nag");
+  // promise unset (old harvest) → silence on promise, ✓ still reachable (backward compatible)
+  const f4 = m.profileCheck({ at: 1, pinnedId: "a", bioLen: 60, bioHasRole: true, bioHasAudience: true, bioHasProof: true }, stats);
+  ok(!f4.some((x) => /promise what a follower/i.test(x.text)) && f4.some((x) => /covers what you do/.test(x.text)), "bioHasPromise unset → no promise nag, ✓ unchanged");
+}
+
 console.log(fail === 0 ? `\n✓ profile-check: ${pass} assertions passed` : `\n✗ profile-check: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

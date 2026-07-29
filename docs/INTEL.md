@@ -46,27 +46,62 @@ context," not to each other, making scores "consistent and cacheable" **[confirm
 "game-the-feed-by-what-else-is-showing" reasoning.
 
 **One multi-action scoring head; weights undisclosed.**
-A single weighted score combines per-action predictions: P(favorite), P(reply), P(repost),
-P(quote), P(click), P(profile_click), P(video_view), P(photo_expand), P(share), P(dwell),
-P(follow_author), P(not_interested), P(block_author), P(mute_author), P(report)
-**[confirmed: repo README]**; `phoenix/README.md` states "Action types: 19," so a few heads exist
-beyond the named 15 **[confirmed: repo README]**. The combining **weights are not published**
+`home-mixer/scorers/ranking_scorer.rs` (direct read, 2026-07-29) combines **22 predicted-action
+terms** into one weighted sum: favorite, reply, retweet, quote, click, profile_click, photo_expand,
+vqv (qualified video view), share, **share_via_dm**, **share_via_copy_link**, dwell, quoted_click,
+quoted_vqv, follow_author, cont_dwell_time, cont_click_dwell_time, plus the negative heads
+not_interested, block_author, mute_author, report, **not_dwelled**
+**[confirmed: ranking_scorer.rs]**. (`phoenix/README.md` says "Action types: 19" — the scorer's 22
+terms include derived dwell/quoted variants, so the counts differ without contradiction
+**[confirmed: repo README]**.) Notable: **sharing is not one event** — a DM share, a copied link,
+and a repost each get their own head; and **not_dwelled is an explicit negative**, so a hook that
+isn't paid off costs twice (lost dwell + a scored skip). The combining **weights are not published**
 **[confirmed: absent from tree]**. The "Retweets×20 / Replies×13.5 / Profile-clicks×12…" tables
 circulating are **[unverified writeup claim]** — recycled 2023 folklore, not in this code. Do not
 encode those numbers.
 
+**The score pipeline, verbatim.**
+`ranking_scorer.rs` computes: weighted sum → `offset_score()` → `normalize_score()` → author-
+diversity multiplier → out-of-network factor (`after_diversity * effective_oon`)
+**[confirmed: ranking_scorer.rs]**. The diversity multiplier is literally
+`(1.0 - floor) * decay_factor.powf(position) + floor` — each additional same-author candidate in
+one feed response decays toward a private floor **[confirmed: ranking_scorer.rs]**; the decay rate,
+floor, and OON factor values are private **[confirmed: absent from tree]**.
+
+**VMRanker: an optional private re-ranker can REPLACE the visible score.**
+`home-mixer/scorers/vm_ranker.rs` (direct read, 2026-07-29) defines a value-model reranker that
+sets `candidate.score = scored.score` from an external ranking service; it receives the Phoenix
+action predictions, the current score, `in_network`, `author_followers_count`, is_reply/is_retweet
+flags, and viewer context — but the value model itself is **external/private**
+**[confirmed: vm_ranker.rs]**. Strategic implication: optimizing the visible weighted equation may
+still miss a private production objective, so the only durable alignment is making the *viewer*
+better off — which is what Goobi encodes anyway.
+
+**Myth-busts (confirmed absent, 2026-07-29 direct read).**
+No **bookmark** head exists anywhere in `ranking_scorer.rs` — do not optimize for a rumored
+bookmark multiplier **[confirmed: absent from ranking_scorer.rs]**. No **external-link penalty**
+term exists in the scorer — link costs are *structural* (a leaving viewer produces no further
+native actions; bare links give Phoenix little to embed; repeated URLs can trip spam policy), not a
+scored penalty **[confirmed: absent from ranking_scorer.rs]**. And no **velocity gate / graduation
+ladder** ("N likes in M minutes unlocks the next tier") exists in the pipeline — candidates are
+re-assembled and re-scored per viewer request; early engagement helps only by improving the
+evidence available while a post is fresh **[confirmed: structural, repo tree]**.
+
 **Negative signals push content down.**
 "Negative actions (block, mute, report) have negative weights, pushing down content the user would
-likely dislike" **[confirmed: repo README]**. The forward-looking claim that *not-interested also
-suppresses similar future recommendations* is **[unverified writeup claim]** — plausible, not in
-the README; encode as a tip, not a mechanism.
+likely dislike" **[confirmed: repo README]** — and the scorer's own field list adds
+`not_interested` and `not_dwelled` as scored heads **[confirmed: ranking_scorer.rs]**. The
+forward-looking claim that *not-interested also suppresses similar future recommendations* is
+**[unverified writeup claim]** — plausible, not in the README; encode as a tip, not a mechanism.
 
 **Author-diversity attenuation + seen/served filtering.**
-An "Author Diversity Scorer" attenuates "repeated author scores for diversity," and the pipeline
+An "Author Diversity Scorer" attenuates "repeated author scores for diversity" — formula now read
+verbatim, see "The score pipeline" above **[confirmed: ranking_scorer.rs]** — and the pipeline
 runs `DropDuplicatesFilter`, `PreviouslySeenPostsFilter`, `PreviouslyServedPostsFilter`, and an
 `impression_bloom_filter_query_hydrator.rs` **[confirmed: repo README + tree]**. The practitioner
-advice to *space your originals hours apart* is **[partial]** — the attenuation described operates
-**within a single feed response**, so the pacing implication is inference, not a repo statement.
+advice to *space your originals hours apart* is **[partial]** — the attenuation
+operates **within a single feed response**, so the pacing implication is inference, not a repo
+statement.
 
 **Topic consistency spans retrieval AND ranking.**
 Grox does post-category classification, `followed_grok_topics` feeds retrieval, and interest
@@ -176,8 +211,13 @@ Goobi currently has no encoding for).
   `docs/flows/` mechanism notes in the same commit.
 
 *Established 2026-07-05, from the algo-leverage mission (see CHANGELOG). Verified-picture section +
-provenance discipline added 2026-07-29 against the May 15, 2026 tree read. **As of 2026-07-29:**
-the architecture (Grok-transformer ranking, Thunder/Phoenix, 19-action scorer, negative weights,
-author diversity, Grox spam/policy, native ads) is confirmed in code; still-withheld = the numeric
-`params` weights, `grox/prompts` templates, and the redacted config constants. Premium-as-reach is
-NOT in the open code (widely-reported only). Last repo read: May 15, 2026 state.*
+provenance discipline added 2026-07-29 against the May 15, 2026 tree read. Same day, a second
+direct read of `ranking_scorer.rs` + `vm_ranker.rs` added: the verbatim score pipeline + diversity
+formula, the full 22-term head list (share_via_dm / share_via_copy_link / not_dwelled et al.), the
+VMRanker private-reranker caveat, and the bookmark / link-penalty / velocity-gate myth-busts.
+**As of 2026-07-29:** the architecture (Grok-transformer ranking, Thunder/Phoenix, the multi-action
+scorer, negative weights, author diversity, Grox spam/policy, native ads, VMRanker hook) is
+confirmed in code; still-withheld = the numeric `params` weights, the diversity decay/floor + OON
+factor values, `grox/prompts` templates, the redacted config constants, and the VMRanker value
+model itself. Premium-as-reach is NOT in the open code (widely-reported only). Last repo read:
+May 15, 2026 state.*

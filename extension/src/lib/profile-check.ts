@@ -23,6 +23,7 @@ export interface ProfileState {
   bioHasRole?: boolean;      // bio names what you do (founder/building/writes/…)
   bioHasAudience?: boolean;  // bio names who it's for (for founders / helps devs / …)
   bioHasProof?: boolean;     // bio carries a concrete number/metric (followers, $, shipped, →)
+  bioHasPromise?: boolean;   // bio promises repeatable future content (documenting / weekly / sharing how…)
   nameDescriptive?: boolean; // display name carries a descriptor, not just the @handle
   hasBanner?: boolean;       // a profile banner image is set
   at: number;
@@ -32,12 +33,16 @@ export interface ProfileFinding { level: "act" | "good"; text: string; why: stri
 /** Presence heuristics for the bio "what you do / who it's for / proof" formula. Pure so it's
  *  unit-tested; x-copilot runs it on the harvested bio text and stores ONLY the booleans (the text
  *  stays on the page). Deliberately generous — a false "has proof" is safer than nagging a good bio. */
-export function analyzeBio(text: string): { hasRole: boolean; hasAudience: boolean; hasProof: boolean } {
+export function analyzeBio(text: string): { hasRole: boolean; hasAudience: boolean; hasProof: boolean; hasPromise: boolean } {
   const t = (text || "").toLowerCase();
   const hasRole = /\b(found(?:er|ing)|co-?founder|ceo|cto|building|builder|build|maker|indie|creator|writer|writes|engineer|developer|dev|designer|coach|consultant|investor|advisor|host|author|making|teaching|i (?:help|build|write|teach|ship|make))\b/.test(t);
   const hasAudience = /\bfor [a-z]+|help(?:ing)? [a-z]+|teach(?:ing)? [a-z]+|\b(founders|developers|devs|makers|creators|marketers|designers|startups|teams|writers|coaches|engineers|solopreneurs)\b/.test(t);
   const hasProof = /\d/.test(t) || /[$€£%]|→|\b(mrr|arr|users?|customers?|subscribers?|followers?|shipped|launched|raised|acquired|exits?|bootstrapp?ed)\b/.test(t);
-  return { hasRole, hasAudience, hasProof };
+  // A follow is a subscription to FUTURE content — a repeatable promise ("documenting the road to
+  // $50k MRR", "weekly teardowns") tells the visitor what they're subscribing to. follow_author is
+  // a first-class scored action in the 2026 ranker, so this is a conversion lever, not vanity.
+  const hasPromise = /\b(every (?:week|day|month)|weekly|daily|document(?:ing)?|building in public|shar(?:e|es|ing) (?:what|how|the|my)|i (?:share|post|write|document|break ?down)|breaking down|break(?:down)?s of|lessons? (?:from|learned)|follow (?:for|along)|post(?:s|ing)? about|writ(?:e|es|ing) about|journey (?:to|from)|behind the scenes)\b/.test(t);
+  return { hasRole, hasAudience, hasProof, hasPromise };
 }
 
 const fmt = (n: number): string => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K` : `${(n / 1_000_000).toFixed(1)}M`);
@@ -97,9 +102,12 @@ function finishBio(state: ProfileState, findings: ProfileFinding[]): ProfileFind
       findings.push({ level: "act", text: `Your bio is ${state.bioLen} characters — likely too thin to convert a curious stranger.`, why: "Harvested from your own profile page. One concrete line about who you help / what you build beats a fragment." });
       return findings;
     }
-    // healthy length — scan the what/who/PROOF formula (proof is the highest-leverage missing piece)
+    // healthy length — scan the what/who/PROOF formula (proof is the highest-leverage missing
+    // piece), then the follow PROMISE (a follow subscribes to future content — say what's coming)
     if (state.bioHasProof === false) {
       findings.push({ level: "act", text: "Your bio has no concrete proof — a number (followers, $, shipped X) is what tips a skeptical visitor into a follow.", why: "A quick scan of your bio, not a judgment. profile_click → follow is a first-class ranked action; proof is what converts the click." });
+    } else if (state.bioHasPromise === false) {
+      findings.push({ level: "act", text: "Your bio doesn't promise what a follower GETS — add the repeatable thing you share (\"documenting the road to $50k MRR\", \"weekly product teardowns\").", why: "A quick scan of your bio. A follow is a subscription to your future posts; follow-author is a scored action, and the visitor decides on what you PROMISE, not just what you've done." });
     } else if (state.bioHasRole && state.bioHasAudience && state.bioHasProof) {
       findings.push({ level: "good", text: "Bio covers what you do, who it's for, and proof ✓", why: "A quick scan of your bio for the standard convert-a-stranger formula." });
     }

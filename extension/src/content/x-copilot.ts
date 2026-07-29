@@ -411,7 +411,7 @@ function harvestOwnProfile(): void {
   // Banner: X links a set banner to /header_photo and serves it from /profile_banners/; an unset
   // banner is a plain colored div with neither. (A rare miss → a mild, low-harm nag.)
   const hasBanner = !!document.querySelector('a[href$="/header_photo"]') || !!document.querySelector('img[src*="profile_banners"]');
-  const extras = { bioLen: bioText.length, bioHasRole: ba?.hasRole, bioHasAudience: ba?.hasAudience, bioHasProof: ba?.hasProof, nameDescriptive, hasBanner };
+  const extras = { bioLen: bioText.length, bioHasRole: ba?.hasRole, bioHasAudience: ba?.hasAudience, bioHasProof: ba?.hasProof, bioHasPromise: ba?.hasPromise, nameDescriptive, hasBanner };
 
   const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]');
   if (articles.length < 3) {
