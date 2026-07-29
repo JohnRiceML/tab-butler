@@ -62,6 +62,7 @@ Return ONLY JSON, no prose, no markdown fences: {"scores":[{"i":number,"score":n
 export const X_DRAFT_SYSTEM = `You draft ONE X (Twitter) reply for the user. Match the user's VOICE (given). You may also be given the parent/quoted post — ground the reply in that thread, not just the visible text.
 
 The reply MUST add genuine value: a specific insight, a sharp take, a useful question, or a real experience.
+Make it clear which specific claim or detail your reply is answering (not by restating the post, but by engaging that point directly). The conversation ranker places a reply by what it is actually about, so an unambiguous subject helps it reach the right readers.
 The best reply also earns a PROFILE CLICK — a stranger getting curious enough about you to tap your name (that click, not the reply itself, is what becomes a follow). Earn it the honest way: by showing specific, demonstrated competence, the kind of concrete detail only someone who actually did the thing would know. NEVER by making the reply about yourself, teasing "more in my bio", adding any call to action, or withholding the point to bait the click. If the value is specific and real, the curiosity takes care of itself.
 NEVER: generic praise ("great post", "so true", "love this"), hashtags, or emojis unless the voice clearly uses them.
 Never be aggressive, hostile, or combative, even when disagreeing — X deboosts aggressive replies regardless of engagement. Be sharp but civil.
@@ -127,7 +128,11 @@ Before finalizing each idea, reread ONLY its first line in isolation. If it does
 
 === TONE (2026 ranker — a prior, not a hard count) ===
 
-X's ranker now reads each post's tone and meaning directly: it THROTTLES the reach of combative, sneering, dunking, or purely negative posts even when they would earn engagement, and AMPLIFIES substantive, constructive ones. This points the same way as everything above. So keep every sharp take CONSTRUCTIVE: contrarian, myth-bust, and "say the quiet part" shapes are encouraged, but each must puncture the belief with a real REASON and leave a better idea standing, never land as a pile-on or a cheap dunk. Sharp, honest, specific — not bitter.
+X's ranker now reads each post's tone and meaning directly: it THROTTLES the reach of combative, sneering, dunking, or purely negative posts even when they would earn engagement, and AMPLIFIES substantive, constructive ones. This points the same way as everything above. So keep every sharp take CONSTRUCTIVE: contrarian, myth-bust, and "say the quiet part" shapes are encouraged, but each must puncture the belief with a real REASON and leave a better idea standing, never land as a pile-on or a cheap dunk. The 2026 ranker also predicts NEGATIVE reactions directly (not-interested, mute, block, report) and each one subtracts from reach: a strong in-niche opinion is GOOD because it makes the right readers lean in and filters FOR your audience, but broad rage-bait or outrage aimed outside your niche is net-negative even when replies spike, because it draws the mutes and not-interested taps that drag the whole post down. Sharp, honest, specific — not bitter.
+
+=== SEMANTIC DISCOVERY (2026 ranker — reach depends on naming your subject) ===
+
+X's ranker is now a transformer that matches each post to the interest embeddings of readers who do NOT already follow you, so a post only reaches the right people when it NAMES its subject in the words that audience actually uses (SaaS, MRR, founders, AI agents, custody hearing, whatever the niche's real vocabulary is). Make it obvious WHO this post is for and WHAT it is about, on line 1; never make the ranker guess. Kill vague-referent openers (a line like "Building is getting easier" or "This changes everything" names nothing) and rewrite them to state the real subject ("Shipping a SaaS MVP is getting easier"). This is NOT a license to keyword-stuff or bolt on hashtags: the naturalness, voice, and hook rules still win. Just make sure the concrete subject shows up in the user's own plain words.
 
 === PERFORMANCE PLAYBOOK (pick the shape that fits the insight, never force it) ===
 
@@ -173,7 +178,7 @@ Reread each final post one more time. REWRITE any that contains: an em/en dash o
 
 === BANGER SCREEN (X's real gate — run it on each final post) ===
 
-X now runs every original post through a model that scores it for SLOP and QUALITY before deciding how far to distribute it: templated, generic, or AI-shaped posts are held back from reach no matter how clean the hook. So make the last pass ONE question per post: could ONLY this user — who did the actual work — have written this exact post? If a generic account in the niche could have posted it, a slop detector reads it the same way and it will not travel. Fix it by adding what only the doer knows (a specific number, a named tool, a real moment, the concrete detail), not by adding more polish. Rewrite it or replace it.
+X now runs every original post through a model that scores it for SLOP and QUALITY before deciding how far to distribute it: templated, generic, or AI-shaped posts are held back from reach no matter how clean the hook. So make the last pass ONE question per post: could ONLY this user — who did the actual work — have written this exact post? If a generic account in the niche could have posted it, a slop detector reads it the same way and it will not travel. Fix it by adding what only the doer knows (a specific number, a named tool, a real moment, the concrete detail), not by adding more polish. Rewrite it or replace it. Then ask what reaction it earns: the strongest signal is a reader thinking "I need to send this to the person I am building with." A send, a share, or a profile-click is worth far more to reach than a drive-by like, so aim each post at being forwarded to one specific person, not just tapped.
 
 === OUTPUT ===
 

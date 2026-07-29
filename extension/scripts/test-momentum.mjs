@@ -50,7 +50,7 @@ ok(computeMomentum({ ...idle, repliesToday: 2, replyStreak: 1, minsSinceLast: 5 
 ok(computeMomentum({ repliesToday: 5, postedToday: 1, replyStreak: 2, minsSinceLast: 40, repLevel: "healthy" }).state === "cooling", "had momentum but idle -> cooling");
 
 // ---- daily-shape coach: the BALANCE of the day, safety-deferent ----
-const { dailyShape } = mod;
+const { dailyShape, postSpacingNudge, POST_SPACING_MINS } = mod;
 ok(dailyShape({ repliesToday: 8, postedToday: 2, repLevel: "easeoff" }) === null, "ease-off -> daily coach stays silent (safety copy owns it)");
 ok(dailyShape({ repliesToday: 0, postedToday: 0, repLevel: "healthy" }).kind === "warmup", "quiet day -> warm-up nudge");
 {
@@ -64,7 +64,9 @@ ok(dailyShape({ repliesToday: 0, postedToday: 0, repLevel: "healthy" }).kind ===
 ok(dailyShape({ repliesToday: 12, postedToday: 1, repLevel: "healthy" }).text.includes("Balanced day"), "replies + a post -> balanced-day affirmation");
 {
   const s = dailyShape({ repliesToday: 5, postedToday: 4, repLevel: "healthy" });
-  ok(s.kind === "spacing" && /space them/i.test(s.text), "4 posts -> spacing nudge (author-diversity decay)");
+  ok(s.kind === "spacing" && /space originals ~3h apart/i.test(s.text), "4 posts -> spacing nudge names the ~3h gap (author-diversity attenuation)");
+  ok(/replies between originals are fine/i.test(s.text), "spacing nudge notes replies between originals don't compete the same way");
+  ok(/consistency beats volume/i.test(s.text), "spacing nudge carries the high-frequency reach tradeoff (correlational)");
 }
 // safety-deference: at caution it NEVER pushes more replies — only redirects to a post
 ok(dailyShape({ repliesToday: 3, postedToday: 1, repLevel: "caution" }) === null, "caution + mid-warmup -> silence, never 'do more replies'");
@@ -73,6 +75,20 @@ ok(dailyShape({ repliesToday: 3, postedToday: 1, repLevel: "caution" }) === null
   ok(s && /switch to an original/i.test(s.text) && !/bigger threads/i.test(s.text), "caution + many replies -> redirect to a post, not more replies");
 }
 ok(dailyShape({ repliesToday: 4, postedToday: 0, repLevel: "healthy" }) === null, "mid-warmup with nothing distinctive -> silence (meter cue covers it)");
+
+// ---- post-spacing nudge: soft, never a block, reads only own-post recency ----
+ok(POST_SPACING_MINS === 180, "spacing threshold is ~3h");
+ok(postSpacingNudge(undefined) === null, "no known last-post time -> no nudge");
+ok(postSpacingNudge(-5) === null, "nonsense negative recency -> no nudge");
+ok(postSpacingNudge(200) === null, "posted 3h+ ago -> clear to post, no nudge");
+ok(postSpacingNudge(POST_SPACING_MINS) === null, "exactly at the ~3h line -> clear");
+{
+  const n = postSpacingNudge(30);
+  ok(n && n.soft === true, "recent original -> soft nudge (never a block)");
+  ok(n.minsToGo === 150, "minsToGo counts down to the ~3h line");
+  ok(/replies in between are fine/i.test(n.text), "nudge reassures that replies between originals don't compete");
+  ok(/compete for one feed slot/i.test(n.text), "nudge names the author-diversity attenuation mechanism");
+}
 
 console.log(fail === 0 ? `\n✓ momentum: ${pass} assertions passed` : `\n✗ momentum: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -33,6 +33,9 @@ ok(/BLUNTNESS RULE/.test(P), "post-ideas keeps the bluntness voice rule (eval-me
 ok(/KILL IF MOLD/.test(P) && /negation-reframe/.test(P), "post-ideas keeps the mold-ban (audit-measured: the 'X isn't Y it's Z' reframe drove ~7/20 slop)");
 ok(/KILL IF IT LIFTS THE BEST LINE/.test(P), "post-ideas keeps the best-line anti-lift (audit: the 2 most quotable posts were source costume-lifts)");
 ok(/NO QUOTE-WRAPPING/.test(P), "post-ideas bans emphasis quote-wrapping");
+ok(/SEMANTIC DISCOVERY/.test(P) && /never make the ranker guess/.test(P), "post-ideas encodes the 2026 semantic-discovery rule (name the subject in the audience's real words so the interest-embedding ranker can place it; no keyword-stuffing)");
+ok(/not-interested/.test(P) && /net-negative/.test(P), "post-ideas tone gate accounts for predicted negative signals (not-interested/mute/block/report subtract; strong in-niche opinion GOOD, out-of-niche ragebait net-negative)");
+ok(/send this to/.test(P), "post-ideas banger screen aims each post at a send/share/profile-click (the highest-value reaction beats a drive-by like)");
 // second-pass prompts (measured: swap-fails 60%→40%, antiGeneric +0.67)
 ok(/SWAP TEST/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /"grades"/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /tier/.test(m.POST_IDEAS_JUDGE_SYSTEM) && /callout/.test(m.POST_IDEAS_JUDGE_SYSTEM), "post-ideas JUDGE returns a per-idea grade (tier + call-out) — drives the second pass AND the UI call-out");
 ok(/only THIS user could write/.test(m.POST_IDEAS_REGEN_SYSTEM) && /DIFFERENT point than the sources/.test(m.POST_IDEAS_REGEN_SYSTEM), "post-ideas REGEN rewrites flagged ideas into user-specific posts");
@@ -43,6 +46,7 @@ ok(/em dash or en dash/.test(D), "reply draft keeps the no-dash rule");
 ok(/generic praise/.test(D), "reply draft keeps the no-empty-praise rule");
 ok(/deboosts aggressive replies/.test(D), "reply draft keeps the civility / anti-aggression tone rule");
 ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the funnel step that makes follows)");
+ok(/conversation ranker/.test(D), "reply draft names the specific claim it engages so the 2026 conversation-ranker can place it (kept to one sentence — drafter is at measured ceiling, and this is scoped to semantic placement, NOT the reverted value-paragraph push)");
 ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the value paragraph's 'engage the specific claim' push was REVERTED — measured −0.2 voiceMatch for no grade/value gain, drafter was already at ceiling)");
 
 // ---- X_SCORE_SYSTEM: observed relationship context ----

@@ -75,9 +75,10 @@ export function computeMomentum(input: MomentumInput): Momentum {
 /* ---------- daily-shape coach: the BALANCE of the day, not the volume ----------------------------
  * The momentum meter scores today's effort and saturates. This is the complementary read: are you
  * hitting the healthy SHAPE of a growth day — replies (which earn reach) balanced with an original
- * or two (which convert the profile clicks into follows), the posts SPACED (the ranker's author-
- * diversity decay suppresses back-to-back posts from one author in a single feed load). The reply
- * band is the practitioner consensus for a growth-mode day; posting is 1-3, spaced.
+ * or two (which convert the profile clicks into follows), the posts SPACED ~3h apart (the ranker
+ * attenuates repeat appearances of one author in a single feed load, so back-to-back originals
+ * compete; replies between them don't compete the same way). The reply band is the practitioner
+ * consensus for a growth-mode day; posting is 1-3, spaced.
  *
  * SAFETY-DEFERENT by construction: at ease-off it says nothing (the safety copy owns the message),
  * and at caution it NEVER nudges more replies — only "switch to a post". It can't push unsafe volume. */
@@ -88,7 +89,7 @@ export interface DailyShape { text: string; kind: "warmup" | "balance" | "spacin
 export function dailyShape(input: { repliesToday: number; postedToday: number; repLevel: RepLevel }): DailyShape | null {
   const { repliesToday, postedToday, repLevel } = input;
   if (repLevel === "easeoff") return null; // safety copy owns the message — never cheer over it
-  if (postedToday > DAILY_POST_BAND.hi) return { kind: "spacing", text: `${postedToday} posts today — space them a few hours apart. The ranker decays back-to-back posts from one author in a single feed load.` };
+  if (postedToday > DAILY_POST_BAND.hi) return { kind: "spacing", text: `${postedToday} posts today — space originals ~3h apart. The ranker attenuates repeat appearances of one author in a single feed load, so back-to-back originals compete; per-post reach also tends to slip at high frequency, so consistency beats volume. Replies between originals are fine and don't compete the same way.` };
   if (repLevel === "caution") {
     // near the line — the only safe redirect is AWAY from more replies, toward a post
     return repliesToday >= DAILY_REPLY_BAND.lo && postedToday === 0
@@ -101,4 +102,27 @@ export function dailyShape(input: { repliesToday: number; postedToday: number; r
   if (postedToday >= DAILY_POST_BAND.lo && repliesToday < DAILY_REPLY_BAND.lo) return { kind: "balance", text: `Posted today ✓ — now spend time in bigger threads (${repliesToday}/${DAILY_REPLY_BAND.lo}+ replies). That's where new people meet you.` };
   if (repliesToday >= DAILY_REPLY_BAND.lo && postedToday >= DAILY_POST_BAND.lo) return { kind: "balance", text: "Balanced day — replies plus an original, spaced. This is the shape that compounds." };
   return null; // mid-warm-up with nothing distinctive to add — the meter's own cue covers it
+}
+
+/* ---------- post-spacing nudge: soft, NEVER a block -----------------------------------------------
+ * The feed attenuates repeated appearances of ONE author within a single response, so two ORIGINALS
+ * shipped close together compete for the same slot instead of each getting a clean shot. Replies
+ * between originals don't compete the same way (they aren't your own-author originals stacking in the
+ * feed), so this reads only the time since your last OWN post. It is a nudge, not a gate: Goobi never
+ * blocks a post — if the user wants to ship now, they ship now. Pure (unit-tested in test-momentum). */
+export const POST_SPACING_MINS = 180; // ~3h between originals — under this they self-cannibalize
+
+export interface PostSpacingNudge { soft: true; minsToGo: number; text: string }
+export function postSpacingNudge(minsSinceLastOwnPost: number | undefined): PostSpacingNudge | null {
+  if (!Number.isFinite(minsSinceLastOwnPost) || (minsSinceLastOwnPost as number) < 0) return null;
+  const since = Math.round(minsSinceLastOwnPost as number);
+  if (since >= POST_SPACING_MINS) return null; // spaced enough — clear to post, no nudge
+  const minsToGo = POST_SPACING_MINS - since;
+  const ago = since < 60 ? `${since} min` : `${Math.round(since / 60)}h`;
+  const waitH = Math.max(1, Math.round(minsToGo / 60));
+  return {
+    soft: true, // never a block — posting now is still allowed
+    minsToGo,
+    text: `You posted an original ${ago} ago — two close together compete for one feed slot (the ranker attenuates repeat same-author appearances in a single load). Give it ~${waitH}h more if you can; replies in between are fine and don't compete the same way.`,
+  };
 }
