@@ -4,6 +4,20 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Measured-outcomes dashboard in the popup — the learning loop, made visible:** a new
+  "Measured outcomes" fold surfaces the per-angle win-rates, per-account top/bottom reads
+  (measured ✓ vs invest-only ✦, with confidence and settled-outcome counts), the post-age
+  timing buckets, and the continuous fit↔outcome correlation check ("your reply-fit scores
+  predicted outcomes: ρ=… over N settled replies") — all numbers the loop already computed
+  in `lib/learn-stats.ts` but never showed. A new pure `lib/outcome-dashboard.ts`
+  (unit-tested, `scripts/test-outcome-dashboard.mjs`) shapes the display model and inherits
+  every existing min-N gate (`GLOBAL_THIN`/`N_MIN_OUT`/`FIT_CORR_MIN_N` imported, never
+  re-derived): every row carries its n, sub-gate rows don't render, and the "still learning"
+  state names exactly what's missing (via `replyVerificationSummary`) instead of guessing.
+  Whether the measured tilt is actually reordering ranking is stated either way, and the
+  footer stays honest: correlation, not causation — measured on your own replies. Popup-only;
+  no new permissions, nothing auto-posts.
+
 - **Draft-and-remind scheduling for post ideas (never auto-post):** working drafts in the
   Ideas dock can now carry a "⏰ Remind me" time — pick one of up to three suggested slots
   (a new pure `lib/schedule.ts`, unit-tested) or a custom time. Suggestions respect the

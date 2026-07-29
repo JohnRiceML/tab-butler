@@ -8,6 +8,8 @@ import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import { DEFAULT_DAILY_GOALS, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
 import { normalizeSoul, SOUL_TEMPLATE } from "../lib/soul";
 import { activeProfileChange, declareProfileChange, invalidateProfileChange, mergeGrowthStores, PROFILE_CHANGE_MIN_OBSERVED_DAYS, PROFILE_CHANGE_VARIABLES, PROFILE_CHANGE_WINDOW_DAYS, profileChangeLabel, readProfileChange, settleProfileChanges, summarizeGrowthWindow, type GrowthStore, type ProfileChangeVariable } from "../lib/growth-loop";
+import { buildOutcomeDashboard, type OutcomeDashboardVM } from "../lib/outcome-dashboard";
+import { LEARN_MULT_MAX, N_MIN_OUT, type LearnReply } from "../lib/learn-stats";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -136,6 +138,7 @@ interface ViewData {
   signals: { measureDay: string; settled: number; fitN: number; backs: number; inboundN: number; inboundAgeD: number | null; ownAgeH: number | null; profileAgeD: number | null; reachN: number; heavyN: number } | null;
   growthOwner: string; // normalized handle whose growth store the popup reads ("" = not configured)
   growthStore: GrowthStore | null; // dock-collected follower/post history; null = never collected
+  outcomes: OutcomeDashboardVM; // measured-outcomes dashboard (pure shaping of the reply log)
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -186,6 +189,7 @@ const MOCK: ViewData = {
   signals: null,
   growthOwner: "",
   growthStore: null,
+  outcomes: buildOutcomeDashboard([], Date.now()),
   replyStats: { today: 7, week: 35, total: 142, days: [
     { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
     { label: "We", count: 8, today: false }, { label: "Th", count: 4, today: false },
@@ -293,6 +297,9 @@ async function getData(): Promise<ViewData> {
     todaySent,
     growthOwner,
     growthStore,
+    // Stored sent-records are full SentRecords; the narrow inline type above only names the
+    // fields THIS file touches directly — the dashboard lib reads the rest structurally.
+    outcomes: buildOutcomeDashboard((log?.sent ?? []) as LearnReply[], now),
     signals: (() => {
       // Signal health: the honest gates make panels legitimately QUIET — this makes the silence
       // inspectable (how much data each learner has, how fresh each harvest is) so "quiet" and
@@ -416,6 +423,60 @@ function profileExperimentHTML(d: ViewData): string {
     return `<div class="dim" style="font-size:10.5px;margin-top:4px" title="${esc([...read.lines, ...read.caveats].join(" · "))}">${esc(profileChangeLabel(p.variable))} · ${esc(when)} — ${esc(read.state === "read" ? read.lines[0] ?? read.headline : read.headline)}</div>`;
   }).join("");
   return shell(body + hist);
+}
+
+/** "Measured outcomes" — the per-angle / per-account / timing reads the learning loop already
+ *  computes, made visible. Rendering only: every number and every gate comes from
+ *  outcome-dashboard.ts (which inherits learn-stats' min-N constants). Labeling contract:
+ *  ✓ = measured from this account's own logged replies; ✦ = effort-only (where you invest),
+ *  never a payoff claim. Below a gate a row doesn't render — the "still learning" state
+ *  names exactly what's missing instead of guessing. */
+function measuredOutcomesHTML(vm: ViewData["outcomes"]): string {
+  const angleLabel = (id: string) => REPLY_ANGLES.find((a) => a.id === id)?.label ?? id;
+  const signed = (p: number) => `${p >= 0 ? "+" : ""}${p}%`;
+  const row = (left: string, right: string, title = "") =>
+    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:2px 0"${title ? ` title="${esc(title)}"` : ""}><span class="dim">${left}</span><span style="color:var(--t1);text-align:right">${right}</span></div>`;
+  const head = (t: string) => `<div style="font-size:10px;color:var(--t3);margin:8px 0 2px;text-transform:uppercase;letter-spacing:.05em">${t}</div>`;
+  const missingRows = vm.missing.map((s) => `<div class="dim" style="font-size:10.5px;padding:2px 0">· ${esc(s)}</div>`).join("");
+  const verLine = `<div class="dim" style="font-size:10.5px;margin-top:5px">${vm.verification.confirmed} of ${vm.verification.attempted} logged replies confirmed on X${vm.verification.pending ? ` · ${vm.verification.pending} pending match` : ""}.</div>`;
+  const shell = (inner: string) => `<div class="li" style="display:block">
+    <div class="name" style="margin-bottom:4px">Measured outcomes <span class="dim" style="font-weight:400">— what your own results say</span></div>${inner}
+    <div class="dim" style="font-size:10px;margin-top:6px">Correlation, not causation — measured on your own replies.</div>
+  </div>`;
+  if (vm.state === "learning") {
+    return shell(`<div style="font-size:11.5px;color:var(--t1)">Still learning — nothing measured to show yet. What's missing:</div>${missingRows}${verLine}`);
+  }
+  const parts: string[] = [];
+  // Fit check first — it says whether the scoring these reads rest on is real for THIS account.
+  const fit = vm.fit;
+  if (fit.kind === "measured") {
+    parts.push(head("Fit check"));
+    parts.push(`<div style="font-size:11px;color:var(--t1)">Your reply-fit scores ${fit.rho >= 0.2 ? "predicted" : "did not reliably predict"} outcomes: ρ=${fit.rho.toFixed(2)} over ${fit.n} settled replies ✓</div>`);
+    parts.push(`<div class="dim" style="font-size:10px;margin-top:2px">${fit.tilting ? `Measured account results now gently tilt opportunity ranking (clamped ±${Math.round((LEARN_MULT_MAX - 1) * 100)}%).` : "Ranking stays untouched — the tilt only turns on when fit provably predicts outcomes."}</div>`);
+  }
+  if (vm.angles.length) {
+    parts.push(head("By angle"));
+    for (const a of vm.angles) parts.push(row(`${esc(angleLabel(a.angle))}${a.best ? " ★" : ""}`, `${signed(a.relPct)} vs your mean · n=${a.n} ✓`, a.best ? "Clearly above your average, post-shrinkage — the measured-best angle" : "Reach-normalized engagement vs your own measured mean"));
+  }
+  if (vm.accountsTop.length) {
+    parts.push(head("By account"));
+    const acctRow = (a: (typeof vm.accountsTop)[number], prefix = "") => a.tier === "measured" && a.relPct != null
+      ? row(`${prefix}@${esc(a.handle)}`, `${signed(a.relPct)} vs your mean · ${a.nOut} outcomes ✓`, `confidence ${a.confidence}/3 · ${a.backs} engaged you back · ${a.n} replies logged`)
+      : row(`${prefix}@${esc(a.handle)}`, `where you invest · ${a.n} replies ✦`, `Effort only — no measured payoff claim until ${a.nOut}/${N_MIN_OUT} settled outcomes exist. Confidence ${a.confidence}/3.`);
+    for (const a of vm.accountsTop) parts.push(acctRow(a));
+    if (vm.accountBottom) parts.push(acctRow(vm.accountBottom, "lowest: "));
+  }
+  if (vm.timing.length) {
+    parts.push(head("By post age at reply time"));
+    for (const t of vm.timing) parts.push(row(esc(t.label), `${t.relPct != null ? `${signed(t.relPct)} · ` : ""}n=${t.n} ✓`));
+    if (vm.ageGradient) parts.push(`<div class="dim" style="font-size:10px;margin-top:2px">Fresh (&lt;15m) earned ${vm.ageGradient.ratio.toFixed(1)}× stale (&gt;1h) — n=${vm.ageGradient.freshN} vs ${vm.ageGradient.staleN} ✓</div>`);
+  }
+  if (vm.missing.length) {
+    parts.push(head("Still locked"));
+    parts.push(missingRows);
+  }
+  parts.push(verLine);
+  return shell(parts.join(""));
 }
 
 function accountSafetyHTML(s: ViewData["safety"]): string {
@@ -688,6 +749,11 @@ function render(d: ViewData): string {
   <details class="fold">
     <summary>Profile experiment <span class="field-hint">one change · ${PROFILE_CHANGE_WINDOW_DAYS} days before vs after</span></summary>
     <div class="list">${profileExperimentHTML(d)}</div>
+  </details>
+
+  <details class="fold">
+    <summary>Measured outcomes <span class="field-hint">${d.outcomes.state !== "ready" ? "still learning · min-N gated" : d.outcomes.settled > 0 ? `angles · accounts · timing, from ${d.outcomes.settled} measured ${d.outcomes.settled === 1 ? "reply" : "replies"}` : "replies mapped · measured outcomes pending"}</span></summary>
+    <div class="list">${measuredOutcomesHTML(d.outcomes)}</div>
   </details>
 
   <div class="dim" style="font-size:10.5px;margin:6px 2px 2px">Honesty gate: every learning panel stays silent below its minimum sample size — Goobi shows nothing rather than guessing.</div>
