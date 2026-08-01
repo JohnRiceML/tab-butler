@@ -3,11 +3,11 @@
  * to borrow their audience. No chrome/DOM; unit-tested (scripts/test-targets.mjs). x-copilot
  * owns the persistence, the (budgeted) fetches, and the dock surface.
  *
- * Research-grounded: the win is from REACHABLE accounts (~2-25× your size, size-scaled ceiling via
- * bandHiFor, not untouchable megas) replied to EARLY (first ~15-30 min earns the most visibility) with a reply that adds
- * real value. TWO SEPARATE failure modes, don't conflate them: (1) the membership gate excludes megas
- * because of VISIBILITY DILUTION — under a mega-thread your reply is 1-of-thousands no matter how
- * early you are, so the borrowed audience per reply collapses; this is a function of the target's
+ * Product policy: prefer REACHABLE accounts (~2-25× your size, size-scaled ceiling via
+ * bandHiFor, not untouchable megas), recent posts, and a reply that adds real value. These numeric
+ * bands/windows are Goobi heuristics, not published X thresholds. TWO SEPARATE failure modes, don't
+ * conflate them: (1) the membership gate excludes megas because of likely visibility dilution — in
+ * a dense mega-thread your reply competes with many others; this is a function of the target's
  * SIZE + reply pile-up, not of your reply. (2) The empty-praise guard handles the other risk — a
  * spammy/low-value reply that readers mute/block/report (≈ -74 in the 2023 open-source ranker, a
  * directional prior; the live 2026 Grok ranker is undisclosed). That penalty is a function of YOUR
@@ -17,12 +17,10 @@
  */
 
 export const TARGET_CAP = 20;                  // research's "10-20 home accounts"
-export const TARGET_BAND = { lo: 2, hi: 25 };  // followers/myFollowers — the research reach sweet-spot (5-25×); 2× is the floor, 25× the "heavy hitter, still reachable if you're early" ceiling
-// The band's LOWER bound is now code-justified, not just a heuristic: X's TaskReplyRankingFilter
-// (grox/tasks/task_filters.py) only LLM-grades replies whose ancestor author exceeds a follower
-// threshold — below it the reply is dropped `low_blast_radius` (never graded, ~no OON placement).
-// The threshold NUMBER is runtime-injected (private), and it keys on the TARGET's follower count,
-// not yours. Aiming at bigger-than-you accounts is literally aiming at the surface X grades.
+export const TARGET_BAND = { lo: 2, hi: 25 };  // followers/myFollowers — tunable Goobi opportunity band, not X platform math
+// X's open code contains a target-follower gate for one reply-grading task, but its threshold is
+// private and the gate does not prove general out-of-network distribution. Therefore neither the
+// 2× floor nor the 25× ceiling is derived from X; both are inspectable product priors.
 export const MEGA_CAP = 500_000;               // an absolute "this is a mega-account, your reply is 1-of-thousands no matter how early" cut — binds for big users whose 25× would still be huge
 
 export interface Target { handle: string; followers?: number; addedAt: number; source: "auto" | "manual"; lastPolledAt?: number; lastFreshPostId?: string; }
@@ -38,7 +36,8 @@ export function bandHiFor(myFollowers: number): number {
   return TARGET_BAND.hi;               // 25× — established accounts can reach the top of the sweet-spot
 }
 /** HARD membership gate: an untouchable mega-account (or one we can't classify) doesn't belong on
- *  the list at all — separate from ranking. Run at add time AND re-checked on refresh. */
+ *  the list at all — separate from ranking. Run at add time and whenever a newer follower
+ *  snapshot is available; the per-handle post poll does not itself refresh the profile. */
 export function excludeFromTargets(followers: number | undefined, myFollowers: number): boolean {
   if (!myFollowers || !followers) return true; // can't classify → don't add
   const ratio = followers / myFollowers;
@@ -81,19 +80,18 @@ export function freshnessLabel(postedAt: number | undefined, now: number): { liv
   return { live: false, text: h < 24 ? `${h}h old` : `${Math.round(h / 24)}d old` };
 }
 
-// "Jump on it EARLY": only the first handful of replies under a post get meaningful visibility
-// (research prior: roughly the first 5-10; later ones collapse under "Show more replies"). The
-// fetched target post already carries its reply count, so this competition read is FREE and
-// MEASURED — no extra API call. Thresholds are conservative priors, not live platform math.
-export const EARLY_MAX_REPLIES = 5;    // ≤5 replies and still live → you'd be near the top
-export const CROWDED_MIN_REPLIES = 30; // ≥30 → you'd be buried regardless of freshness
+// Reply count is a measured competition proxy. It does not reveal the user's actual conversation
+// ranking position, which also depends on private/personalized context. Thresholds are conservative
+// Goobi priors, not live platform math.
+export const EARLY_MAX_REPLIES = 5;    // ≤5 replies and still live → relatively open thread
+export const CROWDED_MIN_REPLIES = 30; // ≥30 → meaningfully more reply competition
 /** The pile-up read for a fetched target post. Unknown count → null (say nothing, honest-mirror).
  *  "crowded" applies at any age; "early" only while the post is still in the live window. */
 export function earlyLabel(replies: number | undefined, postedAt: number | undefined, now: number): { level: "early" | "crowded"; text: string } | null {
   if (replies == null) return null;
-  if (replies >= CROWDED_MIN_REPLIES) return { level: "crowded", text: `${replies} replies already — you'd be buried. Quote it with your own take instead (a quote-post is your authored candidate in your followers' feeds, not reply #${replies + 1}), or wait for their next post` };
+  if (replies >= CROWDED_MIN_REPLIES) return { level: "crowded", text: `${replies} replies already — this thread is crowded. Add something unusually specific, quote it with your own take, or wait for their next post` };
   if (freshnessLabel(postedAt, now)?.live === true && replies <= EARLY_MAX_REPLIES) {
-    return { level: "early", text: `only ${replies} ${replies === 1 ? "reply" : "replies"} so far — you'd be near the top` };
+    return { level: "early", text: `only ${replies} ${replies === 1 ? "reply" : "replies"} observed so far — the thread is still relatively open` };
   }
   return null;
 }

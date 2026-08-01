@@ -1,5 +1,7 @@
 /** Shapes shared with the proxy. Keep in sync with proxy/src/lib/schemas.ts. */
 
+import type { ReplyHandoff } from "./reply-handoff";
+
 export interface TabInput {
   id: number;
   title: string;
@@ -57,7 +59,11 @@ export type Message =
   | { type: "UNDO_LAST" }
   | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
   | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string }[] }
-  | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string; steer?: string; reason?: string; category?: string; authorLine?: string; threadLine?: string }
+  | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string; steer?: string; reason?: string; category?: string; anchor?: string; replyBrief?: string; authorLine?: string; threadLine?: string; opportunityLine?: string }
+  | { type: "OPEN_REPLY_HANDOFF"; handoff: ReplyHandoff }
+  | { type: "CLAIM_REPLY_HANDOFF"; postId: string }
+  | { type: "REPLY_HANDOFF_RESULT"; handoff: ReplyHandoff; status: "ok" | "no-composer" | "occupied" | "blocked" }
+  | { type: "REPLY_HANDOFF_STATUS"; token: string; status: "ok" | "no-composer" | "occupied" | "blocked" }
   | { type: "DRAFT_DM"; handle: string; intent: string; phase: "first" | "follow_up" | "reply"; goal?: string; recipient?: { name?: string; bio?: string; followers?: number }; product?: { name: string; url?: string; blurb?: string }; reasons?: { label: string; detail?: string; source?: string }[]; context?: { kind: string; text?: string; url?: string }[]; priorMessages?: { direction: string; phase: string; text?: string; at?: number }[] }
   | { type: "GET_FAVICONS"; hosts: string[] }
   | { type: "TWTTR_GET"; path: string; query?: Record<string, string>; intent?: boolean }

@@ -113,7 +113,23 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 /* ---------- X reply copilot (BYO-key) ---------- */
 
 export interface XPost { i: number; author: string; text: string; meta?: string; }
-export interface XScore { i: number; score: number; reason: string; category?: string; products?: string[]; }
+export type XReplyMove = "add_detail" | "counterpoint" | "concrete_example" | "narrow_question" | "substantive_support";
+export type XReplyRisk = "none" | "generic" | "promotional" | "context_mismatch" | "hostile";
+const X_REPLY_MOVES = new Set<XReplyMove>(["add_detail", "counterpoint", "concrete_example", "narrow_question", "substantive_support"]);
+const X_REPLY_RISKS = new Set<XReplyRisk>(["none", "generic", "promotional", "context_mismatch", "hostile"]);
+const validReplyMove = (value: unknown): XReplyMove | undefined => typeof value === "string" && X_REPLY_MOVES.has(value as XReplyMove) ? value as XReplyMove : undefined;
+const validReplyRisk = (value: unknown): XReplyRisk | undefined => typeof value === "string" && X_REPLY_RISKS.has(value as XReplyRisk) ? value as XReplyRisk : undefined;
+export interface XScore {
+  i: number;
+  score: number;
+  reason: string;
+  category?: string;
+  products?: string[];
+  anchor?: string;
+  replyMove?: XReplyMove;
+  replyBrief?: string;
+  risk?: XReplyRisk;
+}
 
 /** Score posts for reply-worthiness given the user's niche. Cheap (Haiku).
  *  When products are supplied, the scorer also tags each PROMOTE post with the
@@ -125,18 +141,22 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
   const prods = products.length
     ? `\n\nThe user's products (for a post you categorize "promote", set "products" to the 0-based indices of the product(s) that genuinely fit, most relevant first, up to 2; omit if none clearly fits):\n${products.map((p, i) => `${i}. ${p.name}${p.blurb ? ` — ${p.blurb}` : ""}`).join("\n")}`
     : "";
-  const raw = await callDirect<{ scores: { i: number; score: number; reason: string; category?: string; products?: number[] }[] }>(
+  const raw = await callDirect<{ scores: { i: number; score: number; reason: string; category?: string; products?: number[]; anchor?: string; replyMove?: XReplyMove; replyBrief?: string; risk?: XReplyRisk }[] }>(
     key,
     "claude-haiku-4-5",
     X_SCORE_SYSTEM,
     `User niche / what's worth replying to:\n${niche || "(not set — only flag posts clearly answerable with specific expertise; be extra strict)"}\n\nPosts:\n${list}${prods}`,
-    1024,
+    1536,
   );
   // Resolve product indices to NAMES here (against the list we sent), so the
   // content script maps by identity — robust to the user reordering/editing
   // products between scoring and rendering.
   return (raw.scores || []).map((s) => ({
     i: s.i, score: s.score, reason: s.reason, category: s.category,
+    anchor: typeof s.anchor === "string" ? s.anchor.trim().slice(0, 120) : undefined,
+    replyMove: validReplyMove(s.replyMove),
+    replyBrief: typeof s.replyBrief === "string" ? s.replyBrief.trim().slice(0, 180) : undefined,
+    risk: validReplyRisk(s.risk),
     products: Array.isArray(s.products)
       ? s.products.map((idx) => products[idx]?.name).filter((n): n is string => !!n).slice(0, 2)
       : undefined,

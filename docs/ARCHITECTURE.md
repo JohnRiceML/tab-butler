@@ -44,9 +44,12 @@ window). Reach comes from best-effort, budgeted **Twttr** (`twitter241` on Rapid
 `/user` lookups for follower/following/bio.
 
 Drafting calls Claude (**Sonnet**) with the user's saved *voice* and user-authored
-*SOUL.md*, the post, an optional angle/product, and a free-text *steer*. The result
-is copied to the clipboard and the exact post opens in a new tab. The user pastes,
-reviews, and posts it manually. A successful Like + insert records an unconfirmed attempt immediately; copy/open fallback records only after explicit confirmation.
+*SOUL.md*, the post, an optional angle/product, and a free-text *steer*. The default
+manual path first locates the exact article already rendered in the current tab, activates
+its Reply control in place, and verifies the draft in X's composer. Only an off-page result
+uses the five-minute one-shot handoff to open or focus its exact X status tab. The user
+reviews, edits, and posts it manually, then explicitly confirms it in Goobi. A legacy on-page
+Like + insert helper remains opt-in; Fresh reach never uses it.
 The reply log drives today's count, the rate/reputation guards, the "✓ commented"
 badge, and the playground treats.
 

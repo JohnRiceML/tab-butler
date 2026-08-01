@@ -120,11 +120,10 @@ Three code-facts that were priors last week:
 1. *Reply-grading is follower-GATED on the TARGET.* `grox/tasks/task_filters.py`
 `TaskReplyRankingFilter` only grades replies where an ancestor author exceeds
 `FOLLOWER_COUNT_THRESHOLD_FOR_REPLY_RANKING`; below it the reply is dropped with reason
-`low_blast_radius` — never graded, ~no OON placement **[confirmed: repo tree]**. The threshold
-NUMBER is runtime-injected (private). The gate keys on the *target's* size, not yours — your own
-follower count neither caps OON retrieval nor gates reply-grading. This upgrades the `TARGET_BAND`
-lower bound from heuristic to code-justified: replying under bigger-than-you accounts is literally
-aiming at the surface X grades.
+`low_blast_radius` and skips that grading task **[confirmed: repo tree]**. The threshold NUMBER is
+runtime-injected (private). The gate keys on the *target's* size, not yours. The code proves which
+replies enter this grader path; it does **not** by itself prove general OON eligibility or justify
+Goobi's 2× lower bound. `TARGET_BAND` remains an explicit, tunable product heuristic.
 2. *The grade is ONE holistic 0-3, not a rubric of sub-scores.* `grox/classifiers/content/
 reply_ranking.py` calls a VLM (primary `VLM_MINI_CRITICAL`, fallback `VLM_PRIMARY_CRITICAL`,
 temperature ≈ 1e-6 — deterministic) whose output schema is `ReplyScoreResult { score, reason }`

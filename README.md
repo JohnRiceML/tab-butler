@@ -20,7 +20,18 @@ A public, standalone version of that algorithm read — how X's For You ranking 
   recent people who replied to or mentioned you, with reply-history matching and
   a manual done control. Cold Target discovery stays available one level down.
 - **Drafts in *your* voice** — one click; steer it ("punchier, ask a question") and
-  regenerate. By default your click likes the selected post and fills X's reply box for review; a setting switches back to copy + open. Goobi never submits the reply.
+  regenerate. By default Goobi uses the visible post's Reply control in place and
+  verifies the draft in X's composer; only off-page results need their exact status
+  page opened. Goobi never submits the reply.
+- **Builds a Fresh Reach account radar** — every hunt rotates through focused and broad X-data
+  searches, remembers promising accounts for 30 days, and scans a diverse bounded slice
+  of practical and massive accounts for new originals. Massive accounts can enter the
+  radar, but their posts still need an unusually open thread and a specific contribution.
+  A second quality gate requires an exact detail and useful contribution; live cards
+  show the observed age/replies/audience evidence and cool when it expires. The strongest
+  live candidate is pinned as **Best observed reach opening now**, using content fit × live
+  opportunity with only a bounded measured-momentum lift—not simply the biggest account.
+  Premium is conversation context, never a promised For You or impressions boost.
 - **Keeps today's work visible** — a top-level scorecard tracks verified replies,
   posts, and unique people you marked as DM'd against your own conservative goals.
 - **Writes from your `SOUL.md`** — a local, user-owned creative brief supplies beliefs,
@@ -32,7 +43,8 @@ A public, standalone version of that algorithm read — how X's For You ranking 
   profile/post/reply strategy, compares it with the prior window, and tells you when
   to double down, tighten the execution, or try a new reason to follow.
 - **Keeps your account safer** — volume / repeat-author / duplicate guards plus
-  a visible, user-clicked Like + insert setting. It never auto-submits.
+  a manual X-composer default. The legacy Like + insert helper is opt-in and never
+  applies to Fresh reach. It never auto-submits.
 - **Goobi, the pet** — a pixel blob that mirrors your real activity (hunting,
   thinking, sleeping) and a playground where you feed him the replies you sent.
 - **Tab manager (the origin)** — auto-groups tabs by domain, safely archives idle

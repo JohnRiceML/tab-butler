@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile, nicheQuery, nicheTopics, nicheSearchQuery } = mod;
+const { parseUser, parseTimelineTweets, pickDiscoveryTweets, pickVoiceSamples, pickOwnPosts, pickOwnPostsWithStats, buildVoiceProfile, nicheQuery, nicheTopics, nicheSearchQuery, nicheExplorationQueries, freshReachExplorationQueries } = mod;
 
 let pass = 0,
   fail = 0;
@@ -312,6 +312,12 @@ ok(nicheSearchQuery("AI builders, indie SaaS founders", "lang:en -giveaway") ===
 ok(nicheSearchQuery("AI builders", "lang:en") === "AI builders lang:en", "single topic -> bare + operators");
 ok(nicheSearchQuery("aa, bb, cc, dd, ee, ff").split(" OR ").length === 4, "caps at 4 topics so the OR doesn't explode");
 ok(nicheSearchQuery("") === "", "empty niche -> empty query");
+eq(nicheExplorationQueries("AI builders, indie SaaS founders; intent"), ["((AI builders) OR (indie SaaS founders))", "AI builders", "indie SaaS founders", "AI", "builders", "indie", "SaaS", "founders"], "Fresh Reach rotates broad and narrower operator-free account-discovery queries");
+ok(new Set(nicheExplorationQueries("AI AI builders")).size === nicheExplorationQueries("AI AI builders").length, "exploration rotations are deduplicated");
+const freshRotations = freshReachExplorationQueries("indie SaaS founders");
+ok(freshRotations[0] === "indie SaaS founders" && freshRotations[1] === "technology", "Fresh Reach starts focused, then deliberately explores beyond the niche bubble");
+ok(freshRotations.includes("sports") && freshRotations.includes("entertainment"), "Fresh Reach can discover massive general-interest accounts outside the niche");
+ok(new Set(freshRotations).size === freshRotations.length && freshRotations.every((q) => !q.includes("filter:")), "broad Fresh Reach rotations are deterministic, deduplicated, and operator-free");
 
 /* ---- robustness ---- */
 eq(parseTimelineTweets(null), [], "null -> []");

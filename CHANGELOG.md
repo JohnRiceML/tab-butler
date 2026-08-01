@@ -4,6 +4,50 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Review & reply now uses the visible post in place instead of a generic Web Intent:**
+  when the exact article is already rendered, Goobi stays in the current tab, clicks
+  that post's Reply/comment-bubble control, and verifies the draft text in X's composer.
+  Only an off-page opportunity uses the validated five-minute one-shot handoff to open
+  or focus its exact status URL. X's newer
+  accessible `Reply` markup is supported alongside the older `data-testid` hook.
+  Occupied composers are never overwritten, clipboard remains the fallback, the source
+  confirmation card receives success/failure state, and nothing submits or counts until
+  the user explicitly marks the reply posted. The pure URL/TTL/matching contract lives in
+  `lib/reply-handoff.ts` with a dedicated regression suite.
+
+- **Fresh reach hunt — timely, reachable conversations without the algorithm-hack fiction:**
+  Replies now exposes **⚡ Fresh reach**, a persistent larger-account radar. Every click
+  runs one rotating operator-free Top discovery query—interleaving niche terms with broad
+  general-interest domains—alongside niche Latest, merges newly
+  observed authors into a 30-day/200-account niche-stamped radar, then directly checks at most five ranked accounts
+  for their newest original posts. Per-handle searches are concurrency-bounded, share the
+  12-minute provider cache and Target data, and rotate toward due accounts. Scan lanes reserve
+  coverage for explicit targets, previously productive accounts, currently active authors,
+  and one massive account when available. Successful checks and strong content openings are
+  persisted, so accounts that repeatedly produce worthwhile posts earn future scan priority.
+  The post gate keeps only known-age originals ≤2h from accounts at least 2× the user's size, with fewer than
+  30 replies and at most one result per author. Pure `lib/fresh-reach.ts` account/post
+  policies make the sourcing and opportunity ordering inspectable/tested; freshness and
+  thread room dominate, repeat authors are damped, and massive audience gaps receive a penalty
+  instead of an exclusion or automatic reward. Premium is deliberately not a score
+  input. The scorer now has to identify an exact post anchor, a useful reply move and brief,
+  and no generic/promotional/context risk at a stricter content-fit gate before a large-account
+  result can enter the queue. Hunt receipts report newly captured/radar/massive account counts,
+  timing/room matches, strong openings, and budget limits. The Find-people view exposes the
+  saved radar and its scan/strong-opening history, with one-click **Scan + expand**. Cards revalidate the live window,
+  visibly cool when age or competition crosses the boundary, show their observed evidence,
+  and carry that discovery snapshot into confirmed reply records for later outcome analysis.
+  Fresh results now share one final opening index—content fit × live timing/thread-room/
+  audience opportunity, with measured momentum capped at a 12% lift. The top live result is
+  pinned as **Best observed reach opening now** with its age, reply count, audience multiple,
+  and content fit. The Reach sort uses this index rather than blindly sorting by follower count.
+  Cards explain X's documented verified-reply
+  effect as a slight conversation-ranking preference, never an impressions guarantee.
+  Fresh-reach drafts get explicit surrounding-reader/value guidance, target-account drafts
+  now reuse the scorer/context/logging pipeline, and all cold discoveries use the exact-post
+  manual reply handoff. The legacy Like + insert DOM helper is now default-off and cannot
+  run for Fresh reach. Nothing auto-submits or counts until the user confirms the reply.
+
 - **Measured-outcomes dashboard in the popup — the learning loop, made visible:** a new
   "Measured outcomes" fold surfaces the per-angle win-rates, per-account top/bottom reads
   (measured ✓ vs invest-only ✦, with confidence and settled-outcome counts), the post-age

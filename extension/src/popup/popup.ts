@@ -181,7 +181,7 @@ const MOCK: ViewData = {
   products: [],
   xDefaultAngle: "",
   xDefaultProduct: "",
-  xInsertEnabled: true,
+  xInsertEnabled: false,
   twttrKey: "",
   xMyHandle: "",
   xPremium: "",
@@ -287,7 +287,7 @@ async function getData(): Promise<ViewData> {
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
-    xInsertEnabled: store[CONFIG.X_REPLY_INSERT_KEY] !== false,
+    xInsertEnabled: store[CONFIG.X_REPLY_INSERT_KEY] === true,
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
     xPremium: (store[CONFIG.X_PREMIUM_KEY] as string) || "",
@@ -508,7 +508,7 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
     ${row("⏱️", c, "Reply pace", `${s.repliesThisHour} in the last hour · Goobi pauses at ${REPLY_HARD_PER_HOUR}/hr; X publishes no guaranteed safe rate`, bar)}
     ${row("👥", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
     ${row("✅", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
-    ${row("🖐️", "#c68a4e", "You stay in control", "Like + insert fills the selected reply box after your click; copy + open is optional. Goobi never auto-submits.")}
+    ${row("🖐️", "#c68a4e", "You stay in control", "Goobi opens X's official reply composer for review and never auto-submits. Legacy Like + insert is optional and never used for Fresh reach.")}
   </div>`;
 }
 
@@ -686,7 +686,7 @@ function render(d: ViewData): string {
   <details class="fold">
     <summary>Optional personalization <span class="field-hint">products &amp; draft defaults</span></summary>
     <div class="list">
-    <div class="li"><div class="grow"><div class="name">Like + insert reply</div><div class="sub">On your click, like the selected post and fill X's reply box. You still review and submit it.</div></div>
+    <div class="li"><div class="grow"><div class="name">Legacy Like + insert</div><div class="sub">Optional DOM assistance for on-page posts. Default is X's official reply composer, where you review and post manually. Fresh-reach finds always use the manual composer.</div></div>
       <label class="switch"><input type="checkbox" id="xinsert" aria-label="Like the post and insert the reply into X" ${d.xInsertEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
     <div class="li" style="display:block">
       <div class="field">Your products <span class="field-hint">— name, link &amp; a one-liner each</span></div>
@@ -736,7 +736,7 @@ function render(d: ViewData): string {
           <option value="premium+" ${d.xPremium === "premium+" ? "selected" : ""}>Premium+</option>
         </select>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. Widely reported to correlate with reach (NOT confirmed in X's open-sourced code), so Goobi treats it as coaching context only.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:4px">An honest context flag — never changes any score. X documents only a slight verified-reply preference in conversation ranking and says the tier levels are still being tested. It is not an impressions guarantee.</div>
     </div>
     </div>
   </details>
@@ -761,7 +761,7 @@ function render(d: ViewData): string {
     <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
     <div class="list">${signalHealthHTML(d.signals)}</div>
   </details>
-  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. Like + insert may fill X's reply box after your click, but Goobi never submits or posts for you.</div></div>
+  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. The default reply action opens X's official composer for your review; Goobi never submits or posts for you.</div></div>
   </div>`;
 }
 
@@ -1231,7 +1231,7 @@ async function onChange(e: Event) {
     toast(target.checked ? "X copilot on — reload x.com to apply." : "X copilot off — reload x.com.");
   } else if (target.id === "xinsert") {
     await chrome.storage.local.set({ [CONFIG.X_REPLY_INSERT_KEY]: target.checked });
-    toast(target.checked ? "Like + insert is on." : "Like + insert is off — replies will use copy + open.");
+    toast(target.checked ? "Legacy Like + insert is on for on-page posts. Fresh-reach finds still use X's manual composer." : "Like + insert is off — replies open X's manual composer.");
   }
 }
 

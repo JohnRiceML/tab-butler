@@ -51,12 +51,15 @@ ok(/generic praise/.test(D), "reply draft keeps the no-empty-praise rule");
 ok(/deboosts aggressive replies/.test(D), "reply draft keeps the civility / anti-aggression tone rule");
 ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the funnel step that makes follows)");
 ok(/conversation ranker/.test(D), "reply draft names the specific claim it engages so the 2026 conversation-ranker can place it (kept to one sentence — drafter is at measured ceiling, and this is scoped to semantic placement, NOT the reverted value-paragraph push)");
+ok(/surrounding READERS/.test(D) && /Premium or a blue check/.test(D) && /reach or impressions/.test(D), "high-reach drafts add self-contained reader value without exposing the growth tactic");
 ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the value paragraph's 'engage the specific claim' push was REVERTED — measured −0.2 voiceMatch for no grade/value gain, drafter was already at ceiling)");
 
 // ---- X_SCORE_SYSTEM: observed relationship context ----
 const XS = m.X_SCORE_SYSTEM;
 ok(/DIRECT COMMENT ON THE USER'S OWN POST/.test(XS) && /warm inbound conversation/.test(XS), "reply scorer treats comments on the user's post as first-class warm inbound context");
 ok(/obvious spam, abuse, generic link drops, or bot bait/.test(XS), "warm inbound scoring still rejects abusive and automated comments");
+ok(/"anchor"/.test(XS) && /"replyBrief"/.test(XS) && /"risk"/.test(XS), "reply scorer returns an exact anchor, actionable brief, and explicit negative-reaction risk");
+ok(/Do NOT factor in author popularity, verification, recency, likes, or reply counts/.test(XS), "content-fit scoring stays separate from popularity, Premium, freshness, and competition");
 
 // ---- DM_DRAFT_SYSTEM: consent, specificity, and manual-send boundaries ----
 const DM = m.DM_DRAFT_SYSTEM;

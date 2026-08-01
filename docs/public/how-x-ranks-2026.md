@@ -137,10 +137,10 @@ Replies get their own treatment, and as of the May tree it is readable end-to-en
 1. **Reply grading is follower-gated on the *target*.** `grox/tasks/task_filters.py`
    (`TaskReplyRankingFilter`) only grades replies where an ancestor author exceeds
    `FOLLOWER_COUNT_THRESHOLD_FOR_REPLY_RANKING`; below it the reply is dropped with reason
-   `low_blast_radius` — never graded, and with essentially no out-of-network placement
-   **[confirmed: repo tree]**. The threshold *number* is runtime-injected and private. The gate
-   keys on the size of the account being replied to, not yours — your own follower count
-   neither caps out-of-network retrieval nor gates reply grading.
+   `low_blast_radius` and skips that grading task **[confirmed: repo tree]**. The threshold
+   *number* is runtime-injected and private. The gate keys on the size of the account being
+   replied to, not yours. This proves grader-path membership; it does not by itself prove a
+   reply's general out-of-network eligibility or placement.
 2. **The grade is one holistic 0-3, not a rubric of sub-scores.**
    `grox/classifiers/content/reply_ranking.py` calls a VLM (primary `VLM_MINI_CRITICAL`,
    fallback `VLM_PRIMARY_CRITICAL`, temperature ≈ 1e-6 — deterministic) whose output schema is
@@ -237,10 +237,10 @@ The honest version, staying inside what the code supports:
 - **Be explicit about your subject.** Topic signal is load-bearing on both the retrieval and
   ranking sides, and topic-ID matching is literally the gate into new-user feeds. (How sharply
   "vague loses" is inference, not code-fact.)
-- **Replies under bigger accounts are the graded surface.** X only LLM-grades replies in
-  threads whose target account clears a follower threshold; below it, replies are dropped from
-  grading as `low_blast_radius`. A genuinely good reply under a large account is aimed at the
-  one surface where X's own grader is paying attention.
+- **Some large-account reply threads enter a dedicated grader path.** X LLM-grades replies when
+  the target account clears a private follower threshold; below it, this task marks them
+  `low_blast_radius`. This is evidence for a quality-gated reply path, not proof that replying to
+  a large account guarantees out-of-network reach.
 - **Write one good reply, not a checklist.** The grade is a single holistic 0-3, deterministic,
   with a withheld rubric. Quality proxies help you draft; they are not the objective.
 - **Bait is scored against you.** Block, mute, report, not-interested, and not-dwelled are

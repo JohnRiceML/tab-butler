@@ -31,7 +31,8 @@ export const CONFIG = {
   X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
   X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
   X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
-  X_REPLY_INSERT_KEY: "xReplyInsertEnabled", // user-clicked like + one-shot composer fill (default on; false uses copy/open)
+  X_REPLY_INSERT_KEY: "xReplyInsertEnabled", // legacy user-clicked DOM fill (default OFF; true is an explicit user opt-in)
+  X_REPLY_HANDOFF_KEY: "xReplyHandoffV1", // short-lived, one-shot draft handoff to the exact X status tab
   TWTTR_KEY_KEY: "twttrKey", // BYO RapidAPI key for the Twttr X-data API (read-only enrichment)
   TWTTR_HOST: "twitter241.p.rapidapi.com", // fixed provider host — the parsers are written for this shape. Not a secret, not user-set.
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
@@ -47,7 +48,7 @@ export const CONFIG = {
   X_TARGETS_KEY: "xTargets", // "Target accounts" mode: large in-reach niche accounts to comment on early, device-local
   X_DM_WORKSPACE_KEY: "goobi_x_dm_workspace_v1", // prefix for per-account, device-local DM planning + user-marked conversation history
   X_AUTHOR_REACH_KEY: "xAuthorReach", // persisted author-reach cache (PUBLIC data: followers/following/bio per handle) — compounds target-selection coverage across sessions
-  X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted heavy-hitter engagement rates, stamped with the niche that produced them
+  X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted 30-day Fresh Reach account radar: niche-stamped reach, engagement, scan yield, and freshness-check history
   X_OPPORTUNITY_METRICS_KEY: "xOpportunityMetrics", // compact public-post metric snapshots — two observations power a short-lived momentum lift
   X_RELATIONSHIP_MEMORY_KEY: "xRelationshipMemory", // exact completed reply exchanges, account-scoped and text-free; powers the ongoing-connection context chip
   X_PROFILE_KEY: "xProfile", // own-profile harvest (pinned post id + bio length) — the profile coach's $0 input

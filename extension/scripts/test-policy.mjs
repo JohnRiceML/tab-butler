@@ -62,7 +62,7 @@ ok(monthKeyOf(Date.parse("2026-06-30T23:59:59Z")) !== monthKeyOf(Date.parse("202
 
 /* ---- persistence TTL authority (the caches prune on these; declared HERE, single source) ---- */
 ok(mod.AUTHOR_REACH_TTL_MS === TWTTR_CLASS.followers.ttl, "author-reach persistence reuses the followers-class TTL (no forked authority)");
-ok(mod.HEAVY_HITTER_TTL_MS === 7 * 24 * 3_600_000, "heavy-hitter engagement rates persist for a week (character drifts slowly)");
+ok(mod.HEAVY_HITTER_TTL_MS === 30 * 24 * 3_600_000, "Fresh Reach radar accounts persist for 30 days and can be refreshed by later hunts");
 
 console.log(fail === 0 ? `\n✓ twttr policy: ${pass} assertions passed` : `\n✗ twttr policy: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -341,3 +341,37 @@ export function nicheSearchQuery(niche: string, extra = ""): string {
     : `(${topics.map((t) => `(${t})`).join(" OR ")})`;
   return (extra ? `${core} ${extra}` : core).trim();
 }
+
+/**
+ * Operator-free Top-search rotations for Fresh Reach account exploration. The first query preserves
+ * the user's full topic expression; later rotations broaden one topic/keyword at a time so repeated
+ * explicit hunts can discover new authors instead of replaying one cached result forever. Content
+ * scoring remains the relevance gate, and the list is deterministic so callers can persist/rotate.
+ */
+export function nicheExplorationQueries(niche: string): string[] {
+  const base = nicheSearchQuery(niche);
+  const topics = nicheTopics(niche).slice(0, 4);
+  const words = topics.flatMap((topic) => topic.split(/\s+/))
+    .map((word) => word.replace(/[^a-z0-9_+#.-]/gi, "").trim())
+    .filter((word) => word.length >= 2);
+  return [...new Set([base, ...topics, ...words].filter(Boolean))].slice(0, 10);
+}
+
+/**
+ * Fresh Reach also needs discovery beyond the niche bubble: a large general-interest account may
+ * later publish a post where the user has a genuinely relevant contribution. Interleave focused
+ * rotations with broad, operator-free Top searches so repeated clicks expand both pools. These are
+ * discovery seeds—not trend claims or relevance evidence; the individual-post scorer remains the
+ * hard gate before anything reaches the reply queue.
+ */
+export function freshReachExplorationQueries(niche: string): string[] {
+  const focused = nicheExplorationQueries(niche);
+  const broad = ["technology", "business", "AI", "science", "creators", "design", "marketing", "startups", "culture", "sports", "entertainment"];
+  const interleaved: string[] = [];
+  const length = Math.max(focused.length, broad.length);
+  for (let i = 0; i < length; i++) {
+    if (focused[i]) interleaved.push(focused[i]);
+    if (broad[i]) interleaved.push(broad[i]);
+  }
+  return [...new Set(interleaved.filter(Boolean))].slice(0, 20);
+}

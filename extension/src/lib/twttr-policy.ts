@@ -47,7 +47,7 @@ export const TWTTR_BUDGET = {
  *  content script): author reach reuses the followers-class TTL; heavy-hitter engagement
  *  character drifts slowly, so a week. Entries past TTL are pruned on load/persist, never shown. */
 export const AUTHOR_REACH_TTL_MS = TWTTR_CLASS.followers.ttl; // 24h
-export const HEAVY_HITTER_TTL_MS = 7 * 24 * 3_600_000;
+export const HEAVY_HITTER_TTL_MS = 30 * 24 * 3_600_000; // persistent Fresh Reach radar; refreshed by discovery/checks and capped at 200
 
 /** The content script may request only endpoints whose response shape is fixture-tested in this
  * repository. This keeps a compromised page/content-script path from turning the fixed RapidAPI

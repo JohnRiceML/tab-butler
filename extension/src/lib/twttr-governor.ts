@@ -92,7 +92,7 @@ export async function governedFetch(host: string, key: string, path: string, que
   const tier = TWTTR_CLASS[cls].tier;
   const qs = query && Object.keys(query).length ? "?" + new URLSearchParams(query).toString() : "";
   const url = `https://${host}/${path.replace(/^\//, "")}${qs}`;
-  const ckey = `${cls}|${url}|${intent ? 1 : 0}`;
+  const ckey = `${cls}|${url}`;
 
   // Scope the persistent cache to the expensive/uncached classes. `user` is skipped: it's
   // cheap AND already cached cross-session by the content script's authorReach map, so
@@ -107,15 +107,20 @@ export async function governedFetch(host: string, key: string, path: string, que
     if (cacheFresh(hit, Date.now())) return { ok: true, data: hit!.data };
   }
 
+  // Apply each caller's policy BEFORE joining a URL-identical request. In conserve mode an ambient
+  // caller is still denied, while an explicit user request may proceed; once both are permitted the
+  // network response is identical and they safely share one flight regardless of intent.
+  const gateNow = Date.now();
+  const gateMeter = await loadMeter(gateNow);
+  const gateUsedFrac = Math.max(gateMeter.bytes / TWTTR_BUDGET.BYTES, gateMeter.requests / TWTTR_BUDGET.REQUESTS);
+  const gateMode = degradeMode(gateUsedFrac);
+  if (!canFetch(tier, gateMode, intent)) return { ok: false, status: 0, error: `budget-${gateMode}` };
+
   const existing = inflight.get(ckey);
-  if (existing) return existing; // coalesce a duplicate in-flight request
+  if (existing) return existing; // permitted duplicate callers coalesce by actual network URL
 
   const run = (async (): Promise<GovResult> => {
     const now = Date.now();
-    const meter = await loadMeter(now);
-    const usedFrac = Math.max(meter.bytes / TWTTR_BUDGET.BYTES, meter.requests / TWTTR_BUDGET.REQUESTS);
-    const mode = degradeMode(usedFrac);
-    if (!canFetch(tier, mode, intent)) return { ok: false, status: 0, error: `budget-${mode}` };
 
     await takeToken();
     try {
@@ -130,7 +135,7 @@ export async function governedFetch(host: string, key: string, path: string, que
       }
       try {
         const data = JSON.parse(text);
-        if (useCache) void writeCache(url, cls, data, bytes, now); // cache the success so a re-open / another tab reuses it within the class TTL
+        if (useCache) await writeCache(url, cls, data, bytes, now); // make the fresh response visible before another narrow caller can miss it
         return { ok: true, data };
       } catch { return { ok: false, status: res.status, error: "bad-json" }; }
     } catch (e) {

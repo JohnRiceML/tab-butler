@@ -1,6 +1,6 @@
 import { CONFIG } from "../lib/config";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
+import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, freshReachExplorationQueries, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
 import { profileCheck, analyzeBio, type ProfileState } from "../lib/profile-check";
@@ -9,7 +9,7 @@ import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence,
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { reconcileIdeaPublications, type IdeaPublication } from "../lib/idea-outcomes";
 import { nextShipSlots, reminderState, formatSlot, reminderToastLine } from "../lib/schedule";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, TARGET_POLL_TTL_MS, MEGA_CAP, type TargetStore } from "../lib/targets";
 import { rankThreads, TEND_WINDOW_MS, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
@@ -20,11 +20,13 @@ import { builderTier } from "../lib/community";
 import { freshOpportunityMetricStore, observeMany, momentumFor, applyMomentum, adjustedTargetTime, mergeOpportunityMetricStores, pruneStore as pruneOpportunityMetrics, type OpportunityMetricStore } from "../lib/opportunity-momentum";
 import { connectionEvidence, foldCompletedExchanges, freshRelationshipMemory, mergeRelationshipMemory, pruneRelationshipMemory, type RelationshipMemoryStore } from "../lib/relationship-memory";
 import { recommendReply, repeatAuthorWarning, replyFreshness, type ReplyRecommendation } from "../lib/reply-recommendation";
+import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_MAX_AGE_MS, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount } from "../lib/fresh-reach";
+import { handoffMatchesPath, isReplyBubblePath, statusIdFromPath, validReplyHandoff, type ReplyHandoff } from "../lib/reply-handoff";
 import { GROWTH_STRATEGIES, GROWTH_WINDOW_DAYS, activeGrowthExperiment, captureGrowthSnapshot, evaluateGrowthExperiment, finishGrowthExperiment, freshGrowthStore, growthStrategy, mergeGrowthStores, recommendedGrowthStrategy, seedFollowerSnapshot, settleGrowthExperiments, startGrowthExperiment, summarizeGrowthWindow, type GrowthExperiment, type GrowthStore, type GrowthStrategyId, type TaggedGrowthAction } from "../lib/growth-loop";
 import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDraftDm, canMarkDmSend, canMoveDmReady, dmPacingStatus, dueFollowUps, findDmDuplicate, followUpCount, freshDmStore, markDmReplied, markDmSent, mergeDmStores, pruneDmStore, rankDmSuggestions, redactDmTouch, removeDmCandidate, removeDmContext, sortDmCandidates, updateDmCandidate, type DmCandidate, type DmContextKind, type DmIntent, type DmPhase, type DmStore, type DmSuggestionInput } from "../lib/dm-workspace";
 import { candidateDmSignal, deriveDmMetrics, rankDmNextActions } from "../lib/dm-intelligence";
 import { DEFAULT_DAILY_GOALS, dailyGoalPercent, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
-import type { ProductItem } from "../lib/types";
+import type { Message, ProductItem } from "../lib/types";
 
 /**
  * Goobi — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
@@ -55,7 +57,7 @@ let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
-let xReplyInsertOn = true; // default on: a user click likes the post + fills X's composer; false uses copy/open
+let xReplyInsertOn = false; // default off: exact-post X handoff + manual review; true preserves an explicit legacy opt-in
 let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until the backtest proves the signal predicts; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
 let debugOn = false;      // dev-only: exposes window.__goobiExport() for backtesting. No product effect.
 
@@ -130,11 +132,29 @@ function productContext(product?: ProductItem): string | undefined {
   return legacyProduct.trim() || undefined;
 }
 
+type ReplyMove = "add_detail" | "counterpoint" | "concrete_example" | "narrow_question" | "substantive_support";
+type ReplyRisk = "none" | "generic" | "promotional" | "context_mismatch" | "hostile";
+interface ScoredPost { i: number; score: number; reason: string; category?: string; products?: string[]; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; }
+interface FreshReachEvidence {
+  runId: string; discoveredAt: number; observedAt: number; expiresAt: number;
+  repliesObserved: number; sizeMultiple: number;
+  accountSource: "tracked" | "heavy-hitter" | "latest";
+  accountPriority: number; observedOpportunity: number; contentFit: number;
+  openingScore?: number;
+}
+interface HeavyHitterEntry {
+  followers: number; engRate: number; n: number; at?: number;
+  discoveredAt?: number; lastSeenAt?: number; lastCheckedAt?: number;
+  checks?: number; strongOpenings?: number; latestPostId?: string;
+  source?: "top" | "latest";
+}
+interface HeavyHitterStore { niche?: string; entries?: Record<string, HeavyHitterEntry>; }
+
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; isReplyToOwnPost?: boolean }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; isReplyToOwnPost?: boolean }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search"; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search" | "fresh-reach"; freshReach?: FreshReachEvidence; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
 const opps = new Map<string, Opp>();
 let opportunityMetrics: OpportunityMetricStore = freshOpportunityMetricStore();
 function observeOpportunityTweets(posts: Array<{ id: string; postedAt?: number; likes?: number; replies?: number; reposts?: number; views?: number }>): void {
@@ -520,7 +540,7 @@ async function flush() {
   }));
   batch.forEach((b) => inFlight.add(b.id));
   refreshGoobi(); // Goobi concentrates while Claude analyzes the batch
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({
+  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({
     type: "SCORE_POSTS",
     posts,
   });
@@ -544,20 +564,20 @@ async function flush() {
       ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
       : undefined;
     const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category, products, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
+    seen.set(b.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
     if (commentedIds.has(b.id)) {
       // Already replied to it — never surface it in the dock; keep only the green "✓ Commented" badge.
       if (opps.delete(b.id)) changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
     } else if (s.score >= (b.isReplyToOwnPost ? 0.4 : THRESHOLD)) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
       const ex = opps.get(b.id);
       if (ex?.manual) {
         // You pinned this one with "+ Add" — keep it, just refresh its real score/tag.
-        ex.score = s.score; ex.reason = reason; ex.category = category;
+        ex.score = s.score; ex.reason = reason; ex.category = category; ex.anchor = s.anchor; ex.replyMove = s.replyMove; ex.replyBrief = s.replyBrief; ex.risk = s.risk;
         changed = true;
         if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(ex));
       } else {
@@ -608,22 +628,200 @@ function rescan() {
 /* ---------- niche discovery (Twttr search → scored opportunities) ---------- */
 
 let findingSpots = false;
+type FindSpotsMode = "niche" | "fresh-reach";
+const freshReachCheckedAt = new Map<string, number>();
+const freshReachFailedAt = new Map<string, number>();
+const FRESH_REACH_FAILURE_BACKOFF_MS = 10 * 60_000;
+interface FreshReachRunReceipt {
+  id: string; at: number; state: "searching" | "complete" | "failed";
+  accountsChecked: number; originals: number; eligible: number; added: number;
+  budgetLimited: boolean; bestOpening?: number; accountsDiscovered: number;
+  radarSize: number; massiveSaved: number; note?: string;
+}
+let lastFreshReachRun: FreshReachRunReceipt | undefined;
+const freshReachRunId = (): string => `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+let freshReachExploreIndex = 0;
+
+function isMassiveFreshAccount(followers?: number): boolean {
+  if (!followers || !myFollowers) return false;
+  return followers > MEGA_CAP || followers / myFollowers > bandHiFor(myFollowers);
+}
+
+function nextFreshReachExploreQuery(niche: string): string {
+  const choices = freshReachExplorationQueries(niche);
+  if (!choices.length) return nicheSearchQuery(niche);
+  const query = choices[freshReachExploreIndex % choices.length];
+  freshReachExploreIndex++;
+  return query;
+}
+
+function freshAccountSource(handle: string): FreshReachEvidence["accountSource"] {
+  const key = handle.replace(/^@+/, "").toLowerCase();
+  if (targetStore.targets.some((target) => target.handle.toLowerCase() === key)) return "tracked";
+  if (heavyHitters.has(key)) return "heavy-hitter";
+  return "latest";
+}
+
+/** Build a discovery-qualified account pool from the user's targets, persisted focused/broad Top
+ * searches, and authors active in this niche Latest result. General feed authors are absent. */
+function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount[] {
+  const now = Date.now();
+  const measuredAccounts = aggregateAccounts(replyLog.sent, now);
+  for (const [handle, heavy] of heavyHitters) {
+    if (!heavy.at || now - heavy.at >= HEAVY_HITTER_TTL_MS) heavyHitters.delete(handle);
+  }
+  const pool = new Map<string, FreshReachAccount>();
+  const merge = (account: FreshReachAccount): void => {
+    const handle = account.handle.replace(/^@+/, "").trim().toLowerCase();
+    if (!/^[a-z0-9_]{1,15}$/.test(handle) || (selfHandle && handle === selfHandle.toLowerCase())) return;
+    const previous = pool.get(handle);
+    pool.set(handle, {
+      handle,
+      followers: account.followers ?? previous?.followers,
+      engagementRate: account.engagementRate ?? previous?.engagementRate,
+      tracked: Boolean(account.tracked || previous?.tracked),
+      activeInLatest: Boolean(account.activeInLatest || previous?.activeInLatest),
+      lastReplyAt: Math.max(account.lastReplyAt ?? 0, previous?.lastReplyAt ?? 0) || undefined,
+      lastCheckedAt: Math.max(account.lastCheckedAt ?? 0, previous?.lastCheckedAt ?? 0) || undefined,
+      checks: Math.max(account.checks ?? 0, previous?.checks ?? 0) || undefined,
+      strongOpenings: Math.max(account.strongOpenings ?? 0, previous?.strongOpenings ?? 0) || undefined,
+      discoveredAt: account.discoveredAt && previous?.discoveredAt ? Math.min(account.discoveredAt, previous.discoveredAt) : (account.discoveredAt ?? previous?.discoveredAt),
+      measuredValue: account.measuredValue ?? previous?.measuredValue,
+    });
+  };
+  for (const target of targetStore.targets) merge({
+    handle: target.handle,
+    followers: target.followers,
+    tracked: true,
+    lastReplyAt: replyLog.authors[target.handle.toLowerCase()],
+    lastCheckedAt: Math.max(target.lastPolledAt ?? 0, freshReachCheckedAt.get(target.handle.toLowerCase()) ?? 0) || undefined,
+    measuredValue: learnedMultForHandle(target.handle, measuredAccounts),
+  });
+  for (const [handle, heavy] of heavyHitters) merge({
+    handle,
+    followers: heavy.followers,
+    engagementRate: heavy.engRate,
+    lastReplyAt: replyLog.authors[handle],
+    lastCheckedAt: Math.max(heavy.lastCheckedAt ?? 0, freshReachCheckedAt.get(handle) ?? 0) || undefined,
+    checks: heavy.checks,
+    strongOpenings: heavy.strongOpenings,
+    discoveredAt: heavy.discoveredAt,
+    measuredValue: learnedMultForHandle(handle, measuredAccounts),
+  });
+  for (const post of latest) merge({
+    handle: post.author,
+    followers: post.followers,
+    activeInLatest: true,
+    lastReplyAt: replyLog.authors[post.author.toLowerCase()],
+    lastCheckedAt: freshReachCheckedAt.get(post.author.toLowerCase()),
+    measuredValue: learnedMultForHandle(post.author, measuredAccounts),
+  });
+  return [...pool.values()].filter((account) => {
+    const failedAt = freshReachFailedAt.get(account.handle.toLowerCase());
+    return !failedAt || now - failedAt >= FRESH_REACH_FAILURE_BACKOFF_MS;
+  });
+}
+
+interface FreshReachAuthorHunt { posts: TwttrTweet[]; checked: number; budgetLimited: boolean; }
+
+/** Check a bounded account set directly. The provider does not honor a batched OR-from query, so
+ * this uses small per-handle searches with limited concurrency; the governor caches each query for
+ * 12 minutes and enforces the global monthly budget. Tracked-account results also refresh Targets. */
+async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]): Promise<FreshReachAuthorHunt> {
+  const posts: TwttrTweet[] = [];
+  let checked = 0, budgetLimited = false, targetsChanged = false;
+  for (let i = 0; i < accounts.length; i += 3) {
+    const batch = accounts.slice(i, i + 3);
+    const results = await Promise.all(batch.map(async (account) => {
+      const handle = account.handle.replace(/^@+/, "").trim().toLowerCase();
+      const tracked = targetStore.targets.find((target) => target.handle.toLowerCase() === handle);
+      const cached = tracked ? targetPosts.get(tracked.handle) : undefined;
+      if (cached?.id && tracked?.lastPolledAt && Date.now() - tracked.lastPolledAt < TARGET_POLL_TTL_MS) {
+        return { ok: true, handle, account, tracked, fromCache: true, tweets: [{
+          ...cached, followers: account.followers, isReply: false,
+        } satisfies TwttrTweet] };
+      }
+      const response = await send<{ ok?: boolean; data?: unknown; error?: string }>({
+        type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: true,
+      });
+      if (response?.error?.startsWith("budget-")) return { ok: false, handle, account, tracked, budget: true, tweets: [] as TwttrTweet[] };
+      if (!response?.ok) { freshReachFailedAt.set(handle, Date.now()); return { ok: false, handle, account, tracked, tweets: [] as TwttrTweet[] }; }
+      freshReachFailedAt.delete(handle);
+      const tweets = parseTimelineTweets(response.data)
+        .filter((post) => !post.isReply && post.text && post.author.toLowerCase() === handle)
+        .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))
+        .slice(0, 3)
+        .map((post) => ({ ...post, followers: post.followers ?? account.followers }));
+      return { ok: true, handle, account, tracked, tweets };
+    }));
+    for (const result of results) {
+      if (result.budget) budgetLimited = true;
+      if (!result.ok) continue;
+      checked++;
+      const checkedAt = Date.now();
+      freshReachCheckedAt.set(result.handle, checkedAt);
+      posts.push(...result.tweets);
+      const radar = heavyHitters.get(result.handle);
+      if (radar && !result.fromCache) {
+        radar.lastCheckedAt = checkedAt;
+        radar.checks = (radar.checks ?? 0) + 1;
+        radar.latestPostId = result.tweets[0]?.id ?? radar.latestPostId;
+        radar.at = checkedAt; // an explicit successful radar check keeps the saved account alive
+        schedulePersistReach();
+      }
+      if (result.tracked && !result.fromCache) {
+        const newest = result.tweets[0];
+        result.tracked.lastPolledAt = checkedAt;
+        if (newest?.id) result.tracked.lastFreshPostId = newest.id;
+        targetPosts.set(result.tracked.handle, newest ? {
+          id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author,
+          replies: newest.replies, likes: newest.likes, reposts: newest.reposts, views: newest.views,
+        } : { id: "", text: "", author: result.tracked.handle });
+        targetsChanged = true;
+      }
+    }
+  }
+  if (targetsChanged) persistTargets();
+  return { posts, checked, budgetLimited };
+}
 /** Search X (via the Twttr API) for fresh posts in the user's niche, score them
  *  with the same Claude scorer the feed uses, and drop the worthwhile ones into
  *  the dock. These are OFF the current page: Draft/Copy work, but inserting into
  *  a reply box needs the post opened (the panel/toast guide that). */
-async function findSpots() {
+async function findSpots(mode: FindSpotsMode = "niche") {
   if (findingSpots) return;
   if (!enabled) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
   const q = xNiche.trim();
   if (!q) { toast("Set your niche in the Goobi panel so it knows what to search for."); return; }
+  if (mode === "fresh-reach" && !myFollowers) {
+    toast("Set your X handle in the Goobi panel first so Fresh Reach can compare practical and massive account opportunities.");
+    return;
+  }
+  const runId = mode === "fresh-reach" ? freshReachRunId() : "";
+  if (mode === "fresh-reach") lastFreshReachRun = {
+    id: runId, at: Date.now(), state: "searching", accountsChecked: 0,
+    originals: 0, eligible: 0, added: 0, budgetLimited: false,
+    accountsDiscovered: 0, radarSize: heavyHitters.size,
+    massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshAccount(entry.followers)).length,
+  };
   findingSpots = true;
   renderDock();
-  toast("Searching X for fresh posts in your niche…");
+  toast(mode === "fresh-reach"
+    ? "Expanding the larger-account radar and scanning for just-posted, uncrowded conversations…"
+    : "Searching X for fresh posts in your niche…");
   try {
-    const search = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
-      type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "30", query: nicheSearchQuery(q) }, intent: true, // OR the topics so it matches ANY, not ALL keywords (intent clause dropped)
-    });
+    // Every explicit Fresh click expands the saved account radar with one rotating, operator-free
+    // Top query while Latest searches current posts. The governor/cache still bound network cost.
+    const radarBefore = heavyHitters.size;
+    const heavyRefresh = mode === "fresh-reach"
+      ? findHeavyHitters(true, nextFreshReachExploreQuery(q))
+      : Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
+    const [search, radarRefresh] = await Promise.all([
+      send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+        type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: mode === "fresh-reach" ? "50" : "30", query: nicheSearchQuery(q) }, intent: true, // OR the topics so it matches ANY, not ALL keywords (intent clause dropped)
+      }),
+      heavyRefresh,
+    ]);
     if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Goobi panel to find spots."); return; }
     if (search?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — Find spots is paused. It resets on the 1st."); return; }
     if (!search?.ok) {
@@ -633,18 +831,81 @@ async function findSpots() {
       return;
     }
     if (!selfHandle) selfHandle = getSelf();
-    const discovered = pickDiscoveryTweets(search.data, 18)
+    let originals = pickDiscoveryTweets(search.data, mode === "fresh-reach" ? 50 : 18)
       .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle);
-    if (!discovered.length) { toast("X returned no usable posts for this niche right now."); return; }
-    let refreshed = 0;
-    observeOpportunityTweets(discovered); // repeated searches become measured velocity; no extra API/Claude call
-    for (const t of discovered) {
-      const existing = opps.get(t.id);
-      if (existing) {
-        const nextMetrics = { postedAt: t.postedAt ?? existing.postedAt, likes: t.likes ?? existing.likes, replies: t.replies ?? existing.replies, reposts: t.reposts ?? existing.reposts, views: t.views ?? existing.views };
-        if (nextMetrics.postedAt !== existing.postedAt || nextMetrics.likes !== existing.likes || nextMetrics.replies !== existing.replies || nextMetrics.reposts !== existing.reposts || nextMetrics.views !== existing.views) refreshed++;
-        Object.assign(existing, nextMetrics);
+    let freshHunt: FreshReachAuthorHunt = { posts: [], checked: 0, budgetLimited: false };
+    const accountPriorityByHandle = new Map<string, number>();
+    if (mode === "fresh-reach") {
+      captureFreshRadarTweets(originals, "latest");
+      const pool = freshReachAccountPool(originals);
+      const rankedAccounts = pickFreshReachAccounts(pool, myFollowers, Date.now(), pool.length);
+      for (const candidate of rankedAccounts) accountPriorityByHandle.set(candidate.account.handle.toLowerCase(), candidate.priority);
+      // A broad Latest result that already gives us an eligible original is useful now. Do not pay
+      // for an author-specific duplicate check; spend the five slots on accounts Latest missed.
+      const covered = new Set(pickFreshReachCandidates(
+        originals, myFollowers, Date.now(), replyLog.authors, originals.length,
+      ).map((candidate) => candidate.post.author.toLowerCase()));
+      const accounts = rankedAccounts
+        .filter((candidate) => !covered.has(candidate.account.handle.toLowerCase()))
+        .slice(0, FRESH_REACH_ACCOUNT_CHECKS)
+        .map((candidate) => candidate.account);
+      freshHunt = await fetchFreshReachAuthorPosts(accounts);
+      const byId = new Map<string, TwttrTweet>();
+      for (const post of [...originals, ...freshHunt.posts]) {
+        if (!selfHandle || post.author.toLowerCase() !== selfHandle) byId.set(post.id, post);
       }
+      originals = [...byId.values()];
+    }
+    const freshCandidates = mode === "fresh-reach"
+      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, 12)
+      : [];
+    const discovered = mode === "fresh-reach" ? freshCandidates.map((candidate) => candidate.post) : originals;
+    const evidenceById = new Map<string, FreshReachEvidence>();
+    const observedAt = Date.now();
+    for (const candidate of freshCandidates) evidenceById.set(candidate.post.id, {
+      runId, discoveredAt: observedAt, observedAt,
+      expiresAt: (candidate.post.postedAt ?? observedAt) + FRESH_REACH_MAX_AGE_MS,
+      repliesObserved: candidate.post.replies!, sizeMultiple: candidate.sizeMultiple,
+      accountSource: freshAccountSource(candidate.post.author),
+      accountPriority: accountPriorityByHandle.get(candidate.post.author.toLowerCase()) ?? 0,
+      observedOpportunity: candidate.opportunity, contentFit: 0,
+    });
+    if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) Object.assign(lastFreshReachRun, {
+      state: "complete", accountsChecked: freshHunt.checked, originals: originals.length,
+      eligible: freshCandidates.length, budgetLimited: freshHunt.budgetLimited || radarRefresh.budgetLimited,
+      accountsDiscovered: Math.max(radarRefresh.discovered, heavyHitters.size - radarBefore),
+      radarSize: heavyHitters.size,
+      massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshAccount(entry.followers)).length,
+    });
+    // Refresh every returned original before applying the strict Fresh screen. A post that crossed
+    // the age/reply boundary must lose its live Fresh claim instead of keeping stale metrics merely
+    // because it no longer appears in `discovered`.
+    const observed = mode === "fresh-reach" ? originals : discovered;
+    let refreshed = 0;
+    observeOpportunityTweets(observed);
+    for (const t of observed) {
+      const existing = opps.get(t.id);
+      if (!existing) continue;
+      const nextMetrics = {
+        postedAt: t.postedAt ?? existing.postedAt, likes: t.likes ?? existing.likes,
+        replies: t.replies ?? existing.replies, reposts: t.reposts ?? existing.reposts,
+        views: t.views ?? existing.views, followers: t.followers ?? existing.followers,
+      };
+      if (nextMetrics.postedAt !== existing.postedAt || nextMetrics.likes !== existing.likes
+        || nextMetrics.replies !== existing.replies || nextMetrics.reposts !== existing.reposts
+        || nextMetrics.views !== existing.views || nextMetrics.followers !== existing.followers) refreshed++;
+      Object.assign(existing, nextMetrics);
+      if (mode === "fresh-reach" && freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()])) {
+        existing.source = "fresh-reach"; // provenance remains manual-only; live eligibility is rechecked at display/draft time
+        const evidence = evidenceById.get(t.id);
+        if (evidence) existing.freshReach = { ...evidence, contentFit: existing.score };
+      }
+    }
+    if (!discovered.length) {
+      toast(mode === "fresh-reach"
+        ? `Radar ${heavyHitters.size}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. ${freshHunt.checked ? `Scanned ${freshHunt.checked} ${freshHunt.checked === 1 ? "account" : "accounts"} plus Latest. ` : ""}No just-posted, uncrowded eligible opening right now${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
+        : "X returned no usable posts for this niche right now.");
+      return;
     }
     const found = discovered.filter((t) => !opps.has(t.id) && !seen.has(t.id));
     if (!found.length) {
@@ -655,10 +916,11 @@ async function findSpots() {
       return;
     }
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
-    const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string; products?: string[] }[]; error?: string }>({ type: "SCORE_POSTS", posts });
+    const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts });
     if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
     if (!resp || resp.error) { toast("Couldn't score the posts — try again."); return; }
     let added = 0;
+    let bestOpening = 0;
     for (const s of resp.scores ?? []) {
       const t = found[s.i];
       if (!t) continue;
@@ -667,9 +929,30 @@ async function findSpots() {
       const products = category === "promote" && Array.isArray(s.products)
         ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
         : undefined;
-      seen.set(t.id, { score: s.score, reason, category, products });
-      if (s.score >= THRESHOLD) {
-        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: "search" });
+      seen.set(t.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
+      const stillEligible = mode !== "fresh-reach"
+        || !!freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()]);
+      const contentEligible = mode === "fresh-reach" ? freshReachContentEligible(s) : s.score >= THRESHOLD;
+      if (contentEligible && stillEligible) {
+        const evidence = evidenceById.get(t.id);
+        if (evidence) {
+          evidence.contentFit = s.score;
+          evidence.openingScore = freshReachOpeningScore({
+            contentFit: s.score,
+            observedOpportunity: evidence.observedOpportunity,
+            momentum: opportunityMomentum(t.id)?.score,
+          });
+          bestOpening = Math.max(bestOpening, evidence.openingScore);
+        }
+        if (mode === "fresh-reach") {
+          const radar = heavyHitters.get(t.author.toLowerCase());
+          if (radar) {
+            radar.strongOpenings = (radar.strongOpenings ?? 0) + 1;
+            radar.at = Date.now();
+            schedulePersistReach();
+          }
+        }
+        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: mode === "fresh-reach" ? "fresh-reach" : "search", freshReach: evidence });
         if (t.author && t.followers != null) {
           const key = t.author.toLowerCase();
           authorReach.set(key, { ...authorReach.get(key), followers: t.followers, at: Date.now(), failed: false });
@@ -678,8 +961,22 @@ async function findSpots() {
         added++;
       }
     }
-    toast(added ? `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.` : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
+    if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) {
+      lastFreshReachRun.added = added;
+      lastFreshReachRun.bestOpening = bestOpening || undefined;
+    }
+    toast(added
+      ? mode === "fresh-reach"
+        ? `Radar ${heavyHitters.size} · found ${added} strong ${added === 1 ? "opening" : "openings"}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"}` : ""}. The best observed reach opening is pinned first.`
+        : `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.`
+      : mode === "fresh-reach"
+        ? `Radar ${heavyHitters.size}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. Scored ${discovered.length} live candidates; none had a strong enough specific contribution this time.`
+        : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
   } finally {
+    if (mode === "fresh-reach" && lastFreshReachRun?.id === runId && lastFreshReachRun.state === "searching") {
+      lastFreshReachRun.state = "failed";
+      lastFreshReachRun.note = "The data search did not complete.";
+    }
     findingSpots = false;
     renderDock();
   }
@@ -1010,21 +1307,23 @@ async function addManual(el: HTMLElement) {
   const opp: Opp = {
     id: info.id, author: info.author, text: text.slice(0, 400), manual: true,
     score: cached?.score ?? 0.5, reason: cached?.reason || "Added by you", category: cached?.category,
+    anchor: cached?.anchor, replyMove: cached?.replyMove, replyBrief: cached?.replyBrief, risk: cached?.risk,
     context: quotedText(el), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
     avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el), isReplyToOwnPost: ownReply || undefined,
   };
   opps.set(info.id, opp);
-  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category, isReplyToOwnPost: opp.isReplyToOwnPost });
+  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category, anchor: opp.anchor, replyMove: opp.replyMove, replyBrief: opp.replyBrief, risk: opp.risk, isReplyToOwnPost: opp.isReplyToOwnPost });
   badge(el, opp.reason, opp.category, effectiveScore(opp));
   dockOpen = true; renderDock();
   toast("Added to your reply list — scoring it…");
   // Score it for real (one call, bypasses the per-session cap) to fill in the tag/angle.
-  const resp = await send<{ scores?: { i: number; score: number; reason: string; category?: string }[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
+  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
   const s = resp?.scores?.[0];
   const cur = opps.get(info.id);
   if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
     cur.score = s.score; cur.reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ") || cur.reason; cur.category = catId(s.category) ?? cur.category;
-    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category, isReplyToOwnPost: cur.isReplyToOwnPost });
+    cur.anchor = s.anchor; cur.replyMove = s.replyMove; cur.replyBrief = s.replyBrief; cur.risk = s.risk;
+    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category, anchor: cur.anchor, replyMove: cur.replyMove, replyBrief: cur.replyBrief, risk: cur.risk, isReplyToOwnPost: cur.isReplyToOwnPost });
     if (statusInfo(el)?.id === info.id) badge(el, cur.reason, cur.category, effectiveScore(cur));
     renderDock();
   }
@@ -1140,6 +1439,8 @@ interface SentRecord {
   ageMs?: number;        // how old the post was when you replied (freshness)
   category?: string;     // opportunity category (promote/value/ask/…)
   angle?: string;        // the drafting angle used
+  source?: Opp["source"];// discovery provenance; lets measured cohorts compare Fresh reach honestly
+  freshReach?: FreshReachEvidence; // observed opening evidence at selection time (optional for old/non-Fresh records)
   growthExperimentId?: string; // top-level strategy active when this reply was handed off
   growthStrategyId?: GrowthStrategyId;
   norm?: string;         // normalized reply text (match + dedup)
@@ -1254,12 +1555,15 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
  *  painted). An element with a DIFFERENT extractable id is a different tweet and
  *  is never matched, so we can never act on a same-author lookalike. Off-page
  *  opps (e.g. search-discovered, whose id is not in the DOM) find nothing, so
- *  Like + insert degrades to copy + open when the post is not rendered. Pass no text to
+ *  Like + insert degrades to the exact-post review handoff when the post is not rendered. Pass no text to
  *  force a strict id-only lookup. */
 function findPost(id: string, text?: string): HTMLElement | null {
   let byText: HTMLElement | null = null;
   const needle = text?.slice(0, 60);
-  for (const a of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) {
+  // X's signed-in timeline currently marks posts with data-testid="tweet", while
+  // its newer public/status surface exposes plain <article> nodes. The canonical
+  // status permalink remains the durable identity contract on both surfaces.
+  for (const a of document.querySelectorAll<HTMLElement>("article")) {
     const info = statusInfo(a);
     if (info?.id === id) return a;  // id match wins
     if (info) continue;             // a different, identifiable tweet — never a fallback target
@@ -1290,6 +1594,19 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
   });
 }
 
+function waitForMatch(find: () => HTMLElement | null, ms: number): Promise<HTMLElement | null> {
+  return new Promise((res) => {
+    const now = find();
+    if (now) return res(now);
+    const obs = new MutationObserver(() => {
+      const found = find();
+      if (found) { clearTimeout(t); obs.disconnect(); res(found); }
+    });
+    const t = setTimeout(() => { obs.disconnect(); res(find()); }, ms);
+    obs.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Resolve X's real contenteditable from its tweetTextarea wrapper. */
@@ -1300,6 +1617,37 @@ function composerEditable(node: HTMLElement): HTMLElement {
 
 function composerText(node: HTMLElement): string {
   return (node.textContent || "").replace(/​/g, "").replace(/\s+/g, " ").trim();
+}
+
+function replyButtonIn(postEl: HTMLElement): HTMLElement | null {
+  const candidates = postEl.querySelectorAll<HTMLElement>('[data-testid="reply"], button[aria-label="Reply"], [role="button"][aria-label="Reply"]');
+  const semantic = Array.from(candidates).find((button) => !button.closest('[role="link"]'));
+  if (semantic) return semantic;
+  // Current X comment-bubble glyph supplied by the live UI. Use it only as a
+  // tertiary fallback, scoped to the already ID-matched article, and click its
+  // interactive parent rather than the SVG/path itself.
+  const bubblePath = Array.from(postEl.querySelectorAll<SVGPathElement>("svg path"))
+    .find((path) => isReplyBubblePath(path.getAttribute("d")));
+  return bubblePath?.closest<HTMLElement>('button,[role="button"]') || null;
+}
+
+function composerIn(root: ParentNode): HTMLElement | null {
+  const wrapper = root.querySelector<HTMLElement>('[data-testid^="tweetTextarea_"]');
+  if (wrapper) return wrapper;
+  return root.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]');
+}
+
+function dialogReplyComposer(): HTMLElement | null {
+  for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"]')) {
+    const composer = composerIn(dialog);
+    if (composer) return composer;
+  }
+  return null;
+}
+
+function pageReplyComposer(): HTMLElement | null {
+  const main = document.querySelector<HTMLElement>("main");
+  return main ? composerIn(main) : null;
 }
 
 function placeComposerCaretAtEnd(node: HTMLElement): void {
@@ -1352,16 +1700,17 @@ async function fillReplyComposer(node: HTMLElement, text: string): Promise<"ok" 
 
 /** Open only the selected post's reply composer and fill it. Never submits. */
 async function insertReplyIntoX(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "occupied" | "blocked"> {
-  const existingDialog = document.querySelector<HTMLElement>('[role="dialog"] [data-testid^="tweetTextarea_"]');
+  const existingDialog = dialogReplyComposer();
   if (existingDialog) return "occupied"; // do not risk filling an unrelated composer
   if (!postEl?.isConnected) return "no-composer";
   postEl.scrollIntoView({ block: "center" });
-  const reply = Array.from(postEl.querySelectorAll<HTMLElement>('[data-testid="reply"]')).find((button) => !button.closest('[role="link"]'));
+  const reply = replyButtonIn(postEl);
   if (!reply) return "no-composer";
   reply.click();
-  const editor =
-    (await waitFor('[role="dialog"] [data-testid^="tweetTextarea_"]', 2500)) ||
-    (location.pathname.includes("/status/") ? await waitFor('[data-testid^="tweetTextarea_"]', 600) : null);
+  const editor = await waitForMatch(
+    () => dialogReplyComposer() || (location.pathname.includes("/status/") ? pageReplyComposer() : null),
+    3500,
+  );
   if (!editor) return "no-composer";
   return fillReplyComposer(editor, text);
 }
@@ -1390,18 +1739,28 @@ interface PendingManualReply {
   opp?: Opp;
   angle?: string;
   author: string;
-  url: string;
-  postId?: string;
+  handoff: ReplyHandoff;
   copied: boolean;
+  opened: boolean;
+  status: "opening" | "ok" | "no-composer" | "occupied" | "blocked";
 }
 let pendingManualReply: PendingManualReply | undefined;
 
-function replyUrl(opp?: Opp): string {
-  const id = opp?.id ?? draftOppId;
-  const author = (opp?.author ?? draftOppAuthor).replace(/^@+/, "");
-  if (id && author) return `https://x.com/${encodeURIComponent(author)}/status/${encodeURIComponent(id)}`;
-  if (id) return `https://x.com/i/status/${encodeURIComponent(id)}`;
-  return author ? `https://x.com/${encodeURIComponent(author)}` : "https://x.com/home";
+function handoffToken(): string {
+  try { return crypto.randomUUID(); } catch { return `${Date.now()}.${Math.random().toString(36).slice(2)}`; }
+}
+
+function buildReplyHandoff(text: string, opp?: Opp): ReplyHandoff | null {
+  const postId = opp?.id ?? draftOppId ?? "";
+  if (!/^\d+$/.test(postId)) return null;
+  return {
+    version: 1,
+    token: handoffToken(),
+    postId,
+    author: (opp?.author ?? draftOppAuthor).replace(/^@+/, ""),
+    text,
+    createdAt: Date.now(),
+  };
 }
 
 async function copyReplyText(text: string): Promise<boolean> {
@@ -1420,22 +1779,32 @@ async function copyReplyText(text: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Start both handoff actions from the same user gesture so the new tab is not
- *  popup-blocked and the clipboard request retains browser permission. */
-async function copyReplyAndOpenPost(text: string, url: string): Promise<boolean> {
-  const copied = copyReplyText(text);
-  window.open(url, "_blank", "noopener");
-  return await copied;
+/** Copy immediately from the user's click, then ask the service worker to store
+ *  the one-shot draft and open the exact X status tab. The destination content
+ *  script owns the reply-icon click + verified composer fill. */
+async function copyReplyAndOpenPost(handoff: ReplyHandoff): Promise<{ copied: boolean; opened: boolean }> {
+  const copied = copyReplyText(handoff.text);
+  const opened = send<{ ok?: boolean }>({ type: "OPEN_REPLY_HANDOFF", handoff });
+  const [didCopy, result] = await Promise.all([copied, opened]);
+  return { copied: didCopy, opened: result?.ok === true };
 }
 
 async function copyAndOpenPendingReplyPost(): Promise<void> {
   const pending = pendingManualReply;
   if (!pending) return;
-  const copied = await copyReplyAndOpenPost(pending.text, pending.url);
-  if (pendingManualReply !== pending) return;
-  pending.copied = copied;
+  pending.handoff = { ...pending.handoff, token: handoffToken(), createdAt: Date.now() };
+  pending.status = "opening";
+  pending.opened = false;
   renderPendingManualReplyCard();
-  toast(copied ? "Draft copied and post opened." : "Post opened. Copy the draft from Goobi before replying.");
+  const result = await copyReplyAndOpenPost(pending.handoff);
+  if (pendingManualReply !== pending) return;
+  pending.copied = result.copied;
+  pending.opened = result.opened;
+  if (!result.opened && pending.status === "opening") pending.status = "no-composer";
+  renderPendingManualReplyCard();
+  toast(result.opened
+    ? "Opened the exact X post. Goobi is activating Reply and prefilling the draft."
+    : "X could not be opened. Your draft remains available in Goobi.");
 }
 
 function cancelPendingManualReply(): void {
@@ -1453,7 +1822,7 @@ function markPendingManualReplyPosted(): void {
   // only once. The normal record/nudge path owns every tally and safety update.
   pendingManualReply = undefined;
   const warn = recordReplyAndNudge(pending.text, pending.opp, pending.angle, pending.author, "manual");
-  if (pending.postId) repaintReplyPost(pending.postId);
+  if (pending.handoff.postId) repaintReplyPost(pending.handoff.postId);
   dismissPanel();
   toast(warn || "Reply marked as posted.");
 }
@@ -1469,14 +1838,26 @@ function renderPendingManualReplyCard(): void {
   const title = document.createElement("div"); title.className = "t"; title.id = "goobi-manual-title"; title.textContent = "Finish your reply on X";
   h.append(title);
   const state = document.createElement("div"); state.className = "manual-state";
-  const status = document.createElement("b"); status.textContent = pending.copied ? "Draft copied" : "Copy the draft below";
-  const help = document.createElement("span"); help.textContent = pending.copied
-    ? "Paste it into X, post it, then come back here. Goobi will not count it until you confirm."
-    : "X would not accept the insert and clipboard access was unavailable. Copy this text, post it on X, then confirm here.";
+  const status = document.createElement("b");
+  status.textContent = pending.status === "ok"
+    ? "X reply box ready · draft prefilled"
+    : pending.status === "opening"
+      ? "Opening the post · preparing Reply"
+      : pending.status === "occupied"
+        ? "X already has a reply draft open"
+        : "X post opened · paste the draft if needed";
+  const help = document.createElement("span");
+  help.textContent = pending.status === "ok"
+    ? "Goobi opened the exact post, clicked its Reply icon, and verified the draft in X's input. Review or edit it, post it yourself, then come back here."
+    : pending.status === "opening"
+      ? "Goobi is waiting for the exact post to render, then it will click Reply and verify the draft landed. Nothing is submitted automatically."
+      : pending.copied
+        ? "Goobi did not overwrite X's composer. The draft is on your clipboard; paste it into the reply box, review it, and post it yourself."
+        : "Goobi did not overwrite X's composer and clipboard access was unavailable. Copy the draft below, review it in X, and post it yourself.";
   const draft = document.createElement("textarea"); draft.className = "manual-draft"; draft.rows = 4; draft.readOnly = true; draft.value = pending.text; draft.setAttribute("aria-label", "Reply draft to copy");
   state.append(status, help, draft);
   const actions = document.createElement("div"); actions.className = "manual-actions";
-  const open = document.createElement("button"); open.className = "b"; open.textContent = "Copy reply & open post ↗"; open.onclick = () => void copyAndOpenPendingReplyPost();
+  const open = document.createElement("button"); open.className = "b"; open.textContent = "Reopen exact post ↗"; open.onclick = () => void copyAndOpenPendingReplyPost();
   const mark = document.createElement("button"); mark.className = "b primary"; mark.textContent = "Mark as posted"; mark.onclick = markPendingManualReplyPosted;
   const cancel = document.createElement("button"); cancel.className = "b"; cancel.textContent = "Cancel"; cancel.onclick = cancelPendingManualReply;
   actions.append(open, mark, cancel);
@@ -1485,6 +1866,48 @@ function renderPendingManualReplyCard(): void {
   root.append(p);
   requestAnimationFrame(() => { if (panelRoot === root) open.focus(); });
 }
+
+let fulfillingReplyHandoff = false;
+
+/** On the exact status tab opened by the service worker, claim the one-shot
+ *  handoff, click that article's Reply control, and verify the draft text landed.
+ *  A failure never overwrites an occupied composer and never submits anything. */
+async function maybeFulfillReplyHandoff(): Promise<void> {
+  const postId = statusIdFromPath(location.pathname);
+  if (!postId || fulfillingReplyHandoff || invalidated) return;
+  fulfillingReplyHandoff = true;
+  try {
+    const raw = await getLocal(CONFIG.X_REPLY_HANDOFF_KEY);
+    const candidates = (Array.isArray(raw) ? raw : raw == null ? [] : [raw])
+      .map((value) => validReplyHandoff(value))
+      .filter((value): value is ReplyHandoff => !!value);
+    if (!candidates.some((handoff) => handoffMatchesPath(handoff, location.pathname))) return;
+    const postEl = await waitForMatch(() => findPost(postId), 12_000);
+    if (!postEl || invalidated) return; // leave the unclaimed handoff available for a reload/retry
+    const claimed = await send<{ handoff?: ReplyHandoff | null }>({ type: "CLAIM_REPLY_HANDOFF", postId });
+    const handoff = claimed?.handoff;
+    if (!handoff || invalidated) return;
+    const status = await insertReplyIntoX(handoff.text, postEl);
+    await send({ type: "REPLY_HANDOFF_RESULT", handoff, status });
+    toast(status === "ok"
+      ? "Reply opened and draft prefilled. Review it, then post on X when ready."
+      : status === "occupied"
+        ? "X already has a reply draft open, so Goobi did not overwrite it. Your new draft was copied before this tab opened."
+        : "Goobi opened the post but could not safely fill X's reply box. Your draft was copied before this tab opened.");
+  } finally {
+    fulfillingReplyHandoff = false;
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg: Message) => {
+  if (msg.type !== "REPLY_HANDOFF_STATUS") return;
+  const pending = pendingManualReply;
+  if (!pending || pending.handoff.token !== msg.token) return;
+  pending.status = msg.status;
+  renderPendingManualReplyCard();
+  if (msg.status === "ok") toast("X's reply box is prefilled and ready for your review.");
+});
+
 /** Record a confirmed reply in the persisted reputation log and return the single
  *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
  *  Pattern-aware + cross-session, because X's penalties attach to the account. */
@@ -1513,6 +1936,8 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string, conf
     ageMs: opp?.postedAt ? Math.max(0, now - opp.postedAt) : undefined,
     category: opp?.category,
     angle: angle || opp?.category,
+    source: opp?.source,
+    freshReach: opp?.freshReach ? { ...opp.freshReach, contentFit: opp.score } : undefined,
     growthExperimentId: gx?.id,
     growthStrategyId: gx?.strategyId,
     norm: normalizeReply(text) || undefined,
@@ -1572,16 +1997,54 @@ function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, replyAutho
 }
 
 async function startCopyOpenHandoff(text: string, opp?: Opp, angle?: string): Promise<void> {
-  const pending: PendingManualReply = { text, opp, angle, author: opp?.author || draftOppAuthor, url: replyUrl(opp), postId: opp?.id ?? draftOppId ?? undefined, copied: false };
+  const handoff = buildReplyHandoff(text, opp);
+  if (!handoff) {
+    const copied = await copyReplyText(text);
+    toast(copied
+      ? "This opportunity no longer has a valid X post ID. The draft was copied instead."
+      : "This opportunity no longer has a valid X post ID. Copy the draft from Goobi instead.");
+    return;
+  }
+  const pending: PendingManualReply = { text, opp, angle, author: opp?.author || draftOppAuthor, handoff, copied: false, opened: false, status: "opening" };
   pendingManualReply = pending;
   renderPendingManualReplyCard();
-  const copied = await copyReplyAndOpenPost(text, pending.url);
+  const result = await copyReplyAndOpenPost(handoff);
   if (pendingManualReply !== pending) return;
-  pending.copied = copied;
+  pending.copied = result.copied;
+  pending.opened = result.opened;
+  if (!result.opened && pending.status === "opening") pending.status = "no-composer";
   renderPendingManualReplyCard();
-  toast(pending.copied
-    ? "Draft copied and post opened. Paste, review, and post it yourself, then return to confirm."
-    : "Post opened. Copy the draft from Goobi, then confirm only after you post it.");
+  toast(result.opened
+    ? "Opened the exact X post. Goobi is activating Reply and prefilling the draft."
+    : "X could not be opened. Your draft remains available in Goobi.");
+}
+
+/** Prefer X's already-rendered UI. If the exact post is on this page, click its
+ *  comment control and fill the local composer without opening or focusing any
+ *  other tab. The caller resolves the exact article synchronously so an off-page
+ *  fallback retains the original click gesture. */
+async function startVisiblePostReview(text: string, postEl: HTMLElement, opp?: Opp, angle?: string): Promise<void> {
+  const handoff = buildReplyHandoff(text, opp);
+  if (!handoff) return;
+  const copied = copyReplyText(text); // fallback starts inside the user gesture; success still uses X's input directly
+  const status = await insertReplyIntoX(text, postEl);
+  const pending: PendingManualReply = {
+    text,
+    opp,
+    angle,
+    author: opp?.author || draftOppAuthor,
+    handoff,
+    copied: await copied,
+    opened: true,
+    status,
+  };
+  pendingManualReply = pending;
+  renderPendingManualReplyCard();
+  toast(status === "ok"
+    ? "Clicked Reply on this post and prefilled the draft. Review it in X before posting."
+    : status === "occupied"
+      ? "X already has a reply draft open, so Goobi did not overwrite it."
+      : "Goobi found this post but could not safely fill its reply box. The draft is ready to paste.");
 }
 
 async function handoffReply(text: string): Promise<void> {
@@ -1590,7 +2053,10 @@ async function handoffReply(text: string): Promise<void> {
   inserting = true;
   try {
     const opp = draftOppId ? opps.get(draftOppId) : undefined;
-    await startCopyOpenHandoff(text, opp, lastDraft?.angle);
+    const angle = lastDraft?.angle;
+    const postEl = draftOppId ? findPost(draftOppId, opp?.source === "feed" ? opp.text : undefined) : null;
+    if (postEl) await startVisiblePostReview(text, postEl, opp, angle);
+    else await startCopyOpenHandoff(text, opp, angle);
   } finally {
     inserting = false;
   }
@@ -1603,7 +2069,7 @@ async function likeAndInsertReply(text: string): Promise<void> {
   try {
     const opp = draftOppId ? opps.get(draftOppId) : undefined;
     const angle = lastDraft?.angle;
-    const postEl = draftOppId ? findPost(draftOppId, opp?.source === "search" ? undefined : opp?.text) : null;
+    const postEl = draftOppId ? findPost(draftOppId, opp?.source === "feed" ? opp.text : undefined) : null;
     const result = await insertReplyIntoX(text, postEl);
     if (result === "ok") {
       const liked = draftOppId ? likeSelectedPost(draftOppId, postEl) : false;
@@ -1619,7 +2085,7 @@ async function likeAndInsertReply(text: string): Promise<void> {
     const reason = result === "occupied"
       ? "An X composer is already open or contains text."
       : result === "no-composer" ? "That post is not available in this tab." : "X blocked the composer fill.";
-    toast(`${reason} Switching to copy + open.`);
+    toast(`${reason} Switching to the exact-post review flow.`);
     await startCopyOpenHandoff(text, opp, angle);
   } finally {
     inserting = false;
@@ -1627,7 +2093,9 @@ async function likeAndInsertReply(text: string): Promise<void> {
 }
 
 function runReplyDraftAction(text: string): Promise<void> {
-  return xReplyInsertOn ? likeAndInsertReply(text) : handoffReply(text);
+  const opp = draftOppId ? opps.get(draftOppId) : undefined;
+  // Keyword-discovered cold opportunities always use X's official, manual review surface.
+  return xReplyInsertOn && opp?.source !== "fresh-reach" ? likeAndInsertReply(text) : handoffReply(text);
 }
 
 async function draftFor(req: DraftReq) {
@@ -1666,7 +2134,13 @@ async function draftFor(req: DraftReq) {
   const threadLine = ownReply
     ? "This is a direct comment on one of the user's own posts. Reply as the original poster continuing a warm inbound conversation, not as cold outreach."
     : undefined;
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, authorLine, threadLine });
+  const liveFresh = dOpp ? currentFreshReach(dOpp) : null;
+  const opportunityLine = dOpp?.source === "fresh-reach"
+    ? liveFresh
+      ? `Goobi currently observes this as ${liveFresh.ageMinutes} minutes old with ${dOpp.replies} replies from an account ${liveFresh.sizeMultiple.toFixed(1)} times the user's audience. These are product heuristics, not an X ranking guarantee. Write one self contained contribution for surrounding readers, not flattery for the author. Never mention targeting, timing, account size, Premium, a blue check, reach, or impressions in the reply.`
+      : "This post was found by Fresh reach but has since left Goobi's strict timing, competition, or audience window. Do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution that remains worthwhile for surrounding readers."
+    : undefined;
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, anchor: dOpp?.anchor, replyBrief: dOpp?.replyBrief, authorLine, threadLine, opportunityLine });
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${friendlyErr(resp.error)}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -1749,10 +2223,11 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     const n = document.createElement("div"); n.className = "load"; n.textContent = opts.note; p.append(n);
   } else {
     const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = 5; ta.value = opts.draft ?? ""; ta.setAttribute("aria-label", "Reply draft");
-    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = xReplyInsertOn ? "Like + insert reply in X" : "Copy reply & open post ↗";
-    insert.title = xReplyInsertOn
+    const manualReview = !xReplyInsertOn || (draftOppId ? opps.get(draftOppId)?.source === "fresh-reach" : false);
+    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = manualReview ? "Review & reply on X ↗" : "Like + insert reply in X";
+    insert.title = !manualReview
       ? "Like the selected post and fill X's reply box; you review and submit it"
-      : "Copy this draft and open the exact post on X; you paste and post it yourself";
+      : "Use this post's Reply control in place and prefill the draft; only off-page results open their exact status page";
     insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
     insert.onclick = () => void runReplyDraftAction(ta.value);
     // Steering: type how to nudge the reply, then Regenerate (or Enter) re-drafts with it.
@@ -1767,9 +2242,9 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     regen.onclick = () => { if (lastDraft) void draftFor({ ...lastDraft, steer: steer.value.trim() || undefined }); };
     steer.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); regen.click(); } };
     row.append(copy, regen);
-    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = xReplyInsertOn
+    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = !manualReview
       ? "On your click, Goobi likes this post, fills X's reply box, and updates its local activity state. It never submits."
-      : "Copy + open mode: you paste, review, and post it yourself.";
+      : "Manual review mode: X's official composer opens with the draft. You decide whether to edit and post it.";
     p.append(ta, insert, steer, row, foot);
     requestAnimationFrame(() => { if (panelRoot === root) ta.focus(); });
   }
@@ -1884,11 +2359,17 @@ const DOCK_CSS = `
 .ins-rel-mut { color:#6fcf7f; }
 .ins-rel-fan { color:#c9a25a; }
 .da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
+.discovery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; padding:0 14px 9px; flex:0 0 auto; }
+.discovery .findb { width:100%; min-width:0; }
+.fresh-receipt { grid-column:1/-1; min-width:0; padding:6px 8px; border-radius:8px; background:rgba(214,154,92,.07); color:#a99a83; font-size:10px; line-height:1.35; }
+.fresh-receipt strong { color:#e0a45c; font-weight:750; }
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
 .scanb:hover { background:rgba(214,154,92,.10); } .scanb:disabled { opacity:.6; cursor:default; }
 .findb { min-height:34px; padding:7px 12px; border:0; border-radius:9px; background:${ACCENT}; color:${INK}; font:700 11.5px -apple-system,system-ui,sans-serif; cursor:pointer; white-space:nowrap; }
 .findb:hover { filter:brightness(1.06); } .findb:disabled { opacity:.52; cursor:default; }
+.findb.secondary { border:1px solid var(--g-border); background:transparent; color:var(--g-accent-hover); }
+.findb.secondary:hover { background:rgba(214,154,92,.10); filter:none; }
 .foot .findb { margin-top:10px; }
 .iconb { background:none; border:1px solid var(--g-border); color:var(--g-subtle); border-radius:9px;
          width:34px; height:34px; cursor:pointer; font-size:15px; line-height:1; flex:0 0 auto; }
@@ -2111,6 +2592,10 @@ const DOCK_CSS = `
 .tg-foot { font-size:9.5px; color:#a89a85; margin-top:8px; line-height:1.4; }
 .tg-sughead { font:600 11.5px -apple-system,system-ui,sans-serif; color:#cbb89c; margin:2px 0; }
 .tg-sug { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:.5px solid rgba(214,154,92,.08); }
+.tg-radar-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; margin:2px 0 3px; border:1px solid rgba(214,154,92,.24); border-radius:11px; background:linear-gradient(135deg,rgba(214,154,92,.1),rgba(27,21,15,.72)); }
+.tg-radar-head > div { min-width:0; }
+.tg-radar-head .tg-foot { margin-top:2px; }
+.tg-radar-row { padding-left:4px; padding-right:4px; }
 .tg-track { padding:5px 10px; font-size:11px; flex:0 0 auto; }
 .tg-hh { margin-top:8px; }
 .dm-from-target { margin-left:7px; color:#bda98d; }
@@ -2189,6 +2674,11 @@ const DOCK_CSS = `
 .reply-card { border:1px solid transparent; border-radius:13px; background:transparent; transition:background .14s ease,border-color .14s ease,box-shadow .14s ease; }
 .reply-card:hover { background:rgba(214,154,92,.035); }
 .reply-card.open { background:#1b1712; border-color:rgba(214,154,92,.18); box-shadow:0 8px 24px rgba(0,0,0,.18); }
+.reply-card.fresh-hero { margin-bottom:7px; border-color:rgba(214,154,92,.36); background:linear-gradient(145deg,rgba(214,154,92,.12),rgba(27,23,18,.82) 62%); box-shadow:0 10px 28px rgba(0,0,0,.22); }
+.fresh-hero-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px 0; }
+.fresh-hero-title { color:#f0b56f; font-size:11.5px; font-weight:800; letter-spacing:.01em; }
+.fresh-hero-sub { margin-top:2px; color:#b6a892; font-size:10px; line-height:1.35; }
+.fresh-hero-band { flex:0 0 auto; padding:4px 7px; border-radius:999px; background:rgba(214,154,92,.18); color:#efbd80; font-size:9.5px; font-weight:750; text-transform:capitalize; white-space:nowrap; }
 .reply-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; padding:9px 10px; }
 .reply-toggle { min-width:0; display:flex; align-items:center; gap:10px; border-radius:9px; cursor:pointer; }
 .reply-toggle:focus-visible,.reply-disclose:focus-visible,.reply-draft-quick:focus-visible { outline:2px solid ${ACCENT}; outline-offset:2px; }
@@ -2336,7 +2826,8 @@ const DOCK_CSS = `
 @media (max-width: 480px) {
   .d,.d.wide { width:calc(100vw - 16px); max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); border-radius:13px; }
   .dh { padding:12px 12px 8px; align-items:center; }
-  .da { gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+  .da { gap:5px; }
+  .discovery { gap:6px; padding:0 10px 8px; }
   .scanb { display:none; }
   .modes,.tabs { padding-left:10px; padding-right:10px; overflow-x:auto; }
   .day-goals { padding-left:10px; padding-right:10px; }
@@ -2463,6 +2954,38 @@ const reachProfileComplete = (e?: { followers?: number; following?: number; bio?
  *  search-discovered opps) the count the search response already carried. */
 function knownFollowers(o: Opp): number | undefined {
   return authorReach.get(o.author.toLowerCase())?.followers ?? o.followers;
+}
+
+/** Fresh reach is live evidence, not a permanent badge. `source` records how the post entered the
+ * queue; this helper rechecks the current age, known reply competition, audience band, and author
+ * spread whenever the UI or drafter is about to make a Fresh claim. */
+function currentFreshReach(o: Opp, now = Date.now()) {
+  if (o.source !== "fresh-reach") return null;
+  const handle = o.author.replace(/^@+/, "").toLowerCase();
+  return freshReachCandidate({
+    id: o.id, author: o.author, text: o.text, postedAt: o.postedAt,
+    followers: knownFollowers(o), replies: o.replies, isReply: false,
+  }, myFollowers, now, replyLog.authors[handle]);
+}
+
+/** Live Fresh-specific ordering. This answers comparative opportunity, not predicted impressions. */
+function currentFreshOpeningScore(o: Opp, now = Date.now()): number {
+  const live = currentFreshReach(o, now);
+  if (!live || !freshReachContentEligible(o)) return 0;
+  return freshReachOpeningScore({
+    contentFit: o.score,
+    observedOpportunity: live.opportunity,
+    momentum: opportunityMomentum(o.id, now)?.score,
+  });
+}
+
+function bestFreshOpening(items: readonly Opp[], now = Date.now()): { opp: Opp; score: number } | undefined {
+  let best: { opp: Opp; score: number } | undefined;
+  for (const opp of items) {
+    const score = currentFreshOpeningScore(opp, now);
+    if (score > 0 && (!best || score > best.score || (score === best.score && (opp.postedAt ?? 0) > (best.opp.postedAt ?? 0)))) best = { opp, score };
+  }
+  return best;
 }
 
 /** Queue a follower lookup for `handle` if we don't already have/aren't fetching
@@ -2871,12 +3394,23 @@ function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
   const list = [...opps.values()].filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
   const now = Date.now();
+  const freshScores = new Map(list.map((o) => [o.id, currentFreshOpeningScore(o, now)]));
   const key = (o: Opp): number =>
     dockSort === "recent" ? (o.postedAt ?? 0) :
-    dockSort === "reach" ? (knownFollowers(o) ?? 0) :
+    dockSort === "reach" ? ((freshScores.get(o.id) || 0) > 0 ? 1 + freshScores.get(o.id)! : recommendationFor(o, now).discovery) :
     dockSort === "easy" ? easyScore(o) :
     rankScore(o, now); // "best" = fit + proven account tilt + measured post momentum (both neutral when absent)
-  return list.sort((a, b) => key(b) - key(a)).slice(0, 25);
+  list.sort((a, b) => key(b) - key(a));
+  // Fresh Reach is a first-class decision surface. On Best, pin the strongest live opening once;
+  // other sorts remain literal. Reach already uses the same opening index as its primary key.
+  if (dockSort === "best") {
+    const best = bestFreshOpening(list, now);
+    if (best) {
+      const index = list.findIndex((o) => o.id === best.opp.id);
+      if (index > 0) list.unshift(...list.splice(index, 1));
+    }
+  }
+  return list.slice(0, 25);
 }
 
 /** Category chip colors, keyed to the reply angle. */
@@ -2941,17 +3475,30 @@ function renderList(list: HTMLElement) {
     list.appendChild(e);
     return;
   }
+  const hero = dockSort === "best" || dockSort === "reach" ? bestFreshOpening(items) : undefined;
   for (const o of items) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const rec = recommendationFor(o);
+    const liveFresh = currentFreshReach(o);
     const open = expandedReplyCards.has(o.id);
-    const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "");
+    const isFreshHero = hero?.opp.id === o.id;
+    const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "") + (isFreshHero ? " fresh-hero" : "");
     const toggle = () => { const wasOpen = expandedReplyCards.has(o.id); expandedReplyCards.clear(); if (!wasOpen) expandedReplyCards.add(o.id); renderDock(); };
     const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
     const laneColor = rec.lane === "inbound" || rec.lane === "continue" ? "#6fcf7f" : rec.lane === "community" ? "#5dcaa5" : ACCENT;
     const age = fmtAge(o.postedAt);
     const strength = rec.strength === "best next" ? "Best next" : rec.strength === "good option" ? "Good" : "Later";
 
+    if (isFreshHero && liveFresh) {
+      const heroHead = document.createElement("div"); heroHead.className = "fresh-hero-head";
+      const heroCopy = document.createElement("div");
+      const heroTitle = document.createElement("div"); heroTitle.className = "fresh-hero-title"; heroTitle.textContent = "⚡ Best observed reach opening now";
+      const heroSub = document.createElement("div"); heroSub.className = "fresh-hero-sub";
+      heroSub.textContent = `${liveFresh.ageMinutes}m old · ${o.replies} ${o.replies === 1 ? "reply" : "replies"} · ${liveFresh.sizeMultiple.toFixed(1)}× your audience · ${Math.round(o.score * 100)} content fit`;
+      const band = document.createElement("span"); band.className = "fresh-hero-band"; band.textContent = `${freshReachOpeningBand(hero.score)} opening`;
+      band.title = "Comparative Goobi opportunity index from content fit, timing, thread room, audience fit, author spread, and bounded measured momentum. Not an impression forecast.";
+      heroCopy.append(heroTitle, heroSub); heroHead.append(heroCopy, band); card.append(heroHead);
+    }
     const summary = document.createElement("div"); summary.className = "reply-summary";
     const summaryToggle = document.createElement("div"); summaryToggle.className = "reply-toggle"; summaryToggle.setAttribute("role", "button"); summaryToggle.tabIndex = 0; summaryToggle.setAttribute("aria-expanded", String(open)); summaryToggle.title = open ? "Collapse reply details" : "Show why Goobi recommends this reply";
     summaryToggle.onclick = toggle;
@@ -2972,6 +3519,12 @@ function renderList(list: HTMLElement) {
     compactMeta.append(lane, strengthEl);
     if (rec.authorRepeat) { const repeat = document.createElement("span"); repeat.className = "reply-repeat"; repeat.textContent = `↻ replied ${rec.authorRepeat.label}`; repeat.title = rec.cautions[0] || "Recent reply to this author lowers all recommendation scores."; compactMeta.append(repeat); }
     if (age) { const ageEl = document.createElement("span"); ageEl.className = "reply-age"; ageEl.textContent = `· ${age}`; compactMeta.append(ageEl); }
+    if (o.source === "fresh-reach") {
+      const hunted = document.createElement("span"); hunted.className = "reply-age"; hunted.style.color = liveFresh ? "#e0a45c" : "#8c7d68"; hunted.textContent = liveFresh ? "· ⚡ fresh reach" : "· ⚡ hunt · cooled"; hunted.title = liveFresh
+        ? `Observed now: ${liveFresh.ageMinutes}m old, ${o.replies} replies, ${liveFresh.sizeMultiple.toFixed(1)}× your audience. Goobi thresholds are tunable heuristics, not X guarantees.`
+        : "Found by Fresh reach, but it is no longer inside Goobi's strict live window. The card stays available without an urgency claim.";
+      compactMeta.append(hunted);
+    }
     const rising = opportunityMomentum(o.id);
     const isRising = !!rising && rising.score >= 0.25 && o.postedAt != null && Date.now() - o.postedAt <= 2 * HOUR_MS && slotOdds(o.replies) > 0.45;
     if (isRising) { const up = document.createElement("span"); up.style.color = "#6fcf7f"; up.textContent = "↗ picking up"; compactMeta.append(up); }
@@ -2987,7 +3540,11 @@ function renderList(list: HTMLElement) {
       const detail = document.createElement("div"); detail.className = "reply-detail";
       const meta = document.createElement("div"); meta.className = "meta"; meta.style.marginTop = "0";
       if (o.isReplyToOwnPost) { const own = document.createElement("span"); own.className = "chip"; own.style.background = "rgba(111,207,127,.14)"; own.style.color = "#8bd397"; own.textContent = "↩ Comment on your post"; own.title = "X shows this post as replying directly to your account. Goobi prioritizes it as warm inbound conversation."; meta.append(own); }
-      if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎 Found by niche search"; s.title = "This post is not currently rendered on your X page."; meta.append(s); }
+      if (o.source === "fresh-reach") {
+        const s = document.createElement("span"); s.className = "srch"; s.textContent = liveFresh ? "⚡ Fresh reach · live" : "⚡ Fresh reach · cooled"; s.title = liveFresh
+          ? "Observed eligibility under Goobi's current heuristics: relevant niche result, larger but reachable account, under two hours old, and fewer than 30 known replies. It is not a reach prediction."
+          : "This came from the Fresh reach hunt but no longer passes its live timing/competition screen."; meta.append(s);
+      } else if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎 Found by niche search"; s.title = "This post is not currently rendered on your X page."; meta.append(s); }
       if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = `${catLabel(o.category)} angle`; meta.append(ct); }
       const btier = builderTierFor(o);
       if (btier) { const bc = document.createElement("span"); bc.className = "chip"; bc.style.background = "rgba(93,202,165,.16)"; bc.style.color = "#5dcaa5"; bc.textContent = btier === 2 ? "Peer in your space" : "Peer builder"; bc.title = "A relevant builder peer—useful for community-building when the post itself is a genuine fit."; meta.append(bc); }
@@ -2998,6 +3555,14 @@ function renderList(list: HTMLElement) {
       if (meta.childNodes.length) detail.append(meta);
 
       const post = document.createElement("div"); post.className = "reply-post"; post.textContent = o.text; if (meta.childNodes.length) post.style.marginTop = "8px"; detail.append(post);
+      if (o.replyBrief) {
+        const move = document.createElement("div"); move.className = "reply-why-card";
+        const moveLabel = document.createElement("div"); moveLabel.className = "reply-section-label"; moveLabel.textContent = "Best contribution";
+        const moveText = document.createElement("div"); moveText.className = "reply-why-line"; moveText.textContent = o.replyBrief;
+        move.append(moveLabel, moveText);
+        if (o.anchor) { const anchor = document.createElement("div"); anchor.className = "reply-evidence"; anchor.textContent = `Engage this exact detail: ${o.anchor}`; move.append(anchor); }
+        detail.append(move);
+      }
       if (rec.authorRepeat) { const warning = document.createElement("div"); warning.className = "reply-repeat-warning"; warning.textContent = o.isReplyToOwnPost
         ? `Already replied to @${o.author} ${rec.authorRepeat.label}. This is a direct comment on your post, so Goobi kept it important as an ongoing conversation. Reply only if you have something useful to add.`
         : `Already replied to @${o.author} ${rec.authorRepeat.label}. Goobi lowered all three scores to encourage account spread; continue only for a real ongoing conversation.`; detail.append(warning); }
@@ -3006,6 +3571,20 @@ function renderList(list: HTMLElement) {
       const reasons = [...new Set([...rec.reasons, o.reason].filter(Boolean))].slice(0, 3);
       for (const reason of reasons) { const line = document.createElement("div"); line.className = "reply-why-line"; const dot = document.createElement("span"); dot.className = "reply-why-dot"; dot.textContent = "◆"; const text = document.createElement("span"); text.textContent = reason; line.append(dot, text); why.append(line); }
       detail.append(why);
+      if (o.source === "fresh-reach") {
+        const coach = document.createElement("div"); coach.className = "reply-evidence";
+        coach.textContent = !liveFresh
+          ? "The original Fresh window has cooled. Reply only if the post still deserves a specific contribution; Goobi is no longer claiming a timing or competition advantage."
+          : premiumTier === "premium+" || premiumTier === "premium"
+            ? `Your ${premiumTier === "premium+" ? "Premium+" : "Premium"} reply may receive X's documented conversation-ranking preference. That is not a For You or impressions guarantee: write for surrounding readers, add one concrete point, and skip if you have nothing specific.`
+            : "The observed opportunity is timing plus audience fit, not a loophole. Write for surrounding readers, add one concrete point, and skip if you have nothing specific.";
+        detail.append(coach);
+        if (liveFresh) {
+          const observed = document.createElement("div"); observed.className = "reply-evidence";
+          observed.textContent = `Observed opening · ${liveFresh.ageMinutes}m old · ${o.replies} ${o.replies === 1 ? "reply" : "replies"} · ${liveFresh.sizeMultiple.toFixed(1)}× your audience. Rechecked when this card renders.`;
+          detail.append(observed);
+        }
+      }
 
       const signals = document.createElement("div"); signals.className = "reply-signal-grid"; signals.title = "Decision signals, not predicted X probabilities.";
       const signalWhy: Record<string, string> = {
@@ -3027,7 +3606,7 @@ function renderList(list: HTMLElement) {
       const openX = action("Open on X ↗", () => window.open(`https://x.com/${o.author}/status/${o.id}`, "_blank", "noopener"));
       const follow = action(followed.has(o.author) ? "✓ Following" : "+ Follow", () => { void (async () => {
         if (followed.has(o.author)) return; follow.disabled = true; follow.textContent = "Following…";
-        const result = await followAuthor(findPost(o.id, o.source === "search" ? undefined : o.text));
+        const result = await followAuthor(findPost(o.id, o.source === "feed" ? o.text : undefined));
         if (result === "followed") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Followed @${o.author}.`); touchGoobi(); goobiReact("happy", "New friend!", `following @${o.author}`, 2000); }
         else if (result === "already") { followed.add(o.author); follow.textContent = "✓ Following"; toast(`Already following @${o.author}.`); }
         else if (result === "paced") { follow.disabled = false; follow.textContent = "+ Follow"; toast("Slow down on follows — give it a minute."); }
@@ -4642,13 +5221,68 @@ async function draftTargetReply(handle: string): Promise<void> {
   if (!post?.text || targetBusy.has(handle)) return;
   targetBusy.add(handle); goobiDrafting = true; refreshGoobi(); renderDock();
   try {
-    const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author: post.author, text: post.text });
+    const target = targetStore.targets.find((t) => t.handle.toLowerCase() === handle.toLowerCase());
+    let opp = opps.get(post.id);
+    if (!opp) {
+      // Target cards used to bypass the content-fit scorer and all of the normal drafting context.
+      // Score once, then promote the fetched post into the shared opportunity model so drafting,
+      // reply logging, duplicate checks, and measured outcomes all see the same honest record.
+      const scored = await send<{ scores?: ScoredPost[]; error?: string }>({
+        type: "SCORE_POSTS", posts: [{ i: 0, author: post.author, text: post.text.slice(0, 400) }],
+      });
+      if (scored?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score and draft replies."); return; }
+      const s = scored?.scores?.[0];
+      if (!s) { toast("Couldn't score that post before drafting — try again."); return; }
+      const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
+      const category = catId(s.category);
+      const products = category === "promote" && Array.isArray(s.products)
+        ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
+        : undefined;
+      const freshCandidate = pickFreshReachCandidates([{
+        ...post, followers: target?.followers, isReply: false,
+      }], myFollowers, Date.now(), replyLog.authors, 1)[0];
+      const isFreshReach = freshReachContentEligible(s) && !!freshCandidate;
+      const targetFreshEvidence: FreshReachEvidence | undefined = isFreshReach && freshCandidate ? {
+        runId: `target.${Date.now().toString(36)}`, discoveredAt: Date.now(), observedAt: Date.now(),
+        expiresAt: (post.postedAt ?? Date.now()) + FRESH_REACH_MAX_AGE_MS,
+        repliesObserved: post.replies!, sizeMultiple: freshCandidate.sizeMultiple,
+        accountSource: "tracked", accountPriority: 1,
+        observedOpportunity: freshCandidate.opportunity, contentFit: s.score,
+        openingScore: freshReachOpeningScore({ contentFit: s.score, observedOpportunity: freshCandidate.opportunity }),
+      } : undefined;
+      opp = {
+        id: post.id, author: post.author, text: post.text.slice(0, 400), score: s.score,
+        reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk,
+        postedAt: post.postedAt, likes: post.likes, replies: post.replies,
+        reposts: post.reposts, views: post.views, followers: target?.followers,
+        source: isFreshReach ? "fresh-reach" : "search", freshReach: targetFreshEvidence,
+      };
+      opps.set(post.id, opp);
+      seen.set(post.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
+    }
+    const angle = initialAngle(opp.category);
+    const authorLine = [
+      `@${opp.author}`,
+      knownFollowers(opp) != null ? `~${fmtCount(knownFollowers(opp))} followers` : "",
+      "a user selected target in the user's niche",
+    ].filter(Boolean).join(" · ");
+    const targetLiveFresh = currentFreshReach(opp);
+    const opportunityLine = opp.source === "fresh-reach"
+      ? targetLiveFresh
+        ? `Goobi currently observes this tracked post as ${targetLiveFresh.ageMinutes} minutes old with ${opp.replies} replies. Write one self contained contribution for surrounding readers. Never mention targeting, timing, account size, Premium, a blue check, reach, or impressions.`
+        : "This tracked post was originally a Fresh reach opening but has since cooled or filled. Do not imply urgency; draft only a contribution that remains specifically worthwhile."
+      : "This is a user selected target account. The post is not inside the strict fresh reach window, so do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution.";
+    const resp = await send<{ reply?: string; error?: string }>({
+      type: "DRAFT_REPLY", author: post.author, text: post.text, angle,
+      product: productContext(opp.products?.[0]), reason: opp.reason, category: opp.category, anchor: opp.anchor, replyBrief: opp.replyBrief,
+      authorLine, opportunityLine,
+    });
     if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to draft replies."); return; }
     if (resp?.reply) targetDrafts.set(handle, resp.reply); else toast("Couldn't draft a reply — try again.");
   } finally { targetBusy.delete(handle); goobiDrafting = false; refreshGoobi(); renderDock(); }
 }
 
-/* ---- Heavy hitters: actively find big, HIGH-ENGAGEMENT in-niche accounts (a Top search) ---- */
+/* ---- Fresh Reach radar: discover larger accounts through governed Top + Latest searches ---- */
 /** Cross-session persistence for the two coverage caches — implements the governor's stated v2.
  *  MERGE-into-stored (never overwrite: the long-session memory bound clears the in-memory maps,
  *  and a plain write would wipe the compounding history), prune past-TTL on both load and write,
@@ -4671,8 +5305,8 @@ async function persistReachCaches(): Promise<void> {
   // heavyHitters: same merge, stamped with the niche that produced it
   const niche = xNiche.trim();
   if (niche) {
-    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as { niche?: string; entries?: Record<string, { followers: number; engRate: number; n: number; at?: number }> } | undefined;
-    const mergedH: Record<string, { followers: number; engRate: number; n: number; at?: number }> = {};
+    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as HeavyHitterStore | undefined;
+    const mergedH: Record<string, HeavyHitterEntry> = {};
     if (storedH?.niche === niche) for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
     for (const [k, v] of heavyHitters) if (v.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
     const hKeys = Object.keys(mergedH);
@@ -4686,46 +5320,109 @@ function schedulePersistReach(): void {
   persistReachTimer = setTimeout(() => { persistReachTimer = undefined; void persistReachCaches(); }, 2000) as unknown as number;
 }
 
-let heavyHitters = new Map<string, { followers: number; engRate: number; n: number; at?: number }>(); // handle(lower) → size + MEAN engagement-rate over their Top posts (+ TTL stamp)
+let heavyHitters = new Map<string, HeavyHitterEntry>(); // persistent Fresh Reach radar: size, observed engagement, checks, and strong openings
 let heavyLoading = false;
+let showAllFreshRadar = false;
+interface HeavyRefreshResult { discovered: number; total: number; budgetLimited: boolean; }
+let heavyFlight: Promise<HeavyRefreshResult> | undefined;
 let heavyTried = false; // auto-discover once per session on entering Targets
-/** The Top posts in your niche are written by the accounts whose content LANDS. One `search-v3
- *  type:Top` call surfaces those heavy hitters AND their engagement (a viral post's eng / followers)
- *  for free — which populates the suggestion ranker's engagement factor (size is no longer the only signal). */
-async function findHeavyHitters(): Promise<void> {
+
+/** Fold niche-search authors into the persistent radar. Top and Latest are discovery evidence only;
+ * every individual post still has to pass the strict live/content gates before it becomes a reply. */
+function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | "latest"): number {
+  const now = Date.now();
+  const before = heavyHitters.size;
+  const grouped = new Map<string, { followers: number; rates: number[] }>();
+  for (const tweet of tweets) {
+    if (tweet.isReply || !tweet.author || !tweet.followers || tweet.followers < Math.max(2, myFollowers * 2)) continue;
+    if (!tweet.text || looksLikeRT(tweet.text) || !isEnglish(tweet.text, tweet.lang) || isBait(tweet.text)) continue;
+    const handle = tweet.author.toLowerCase();
+    if (!/^[a-z0-9_]{1,15}$/.test(handle) || handle === selfHandle) continue;
+    const group = grouped.get(handle) ?? { followers: tweet.followers, rates: [] };
+    group.followers = tweet.followers;
+    group.rates.push(((tweet.likes ?? 0) + (tweet.reposts ?? 0)) / tweet.followers);
+    grouped.set(handle, group);
+  }
+  for (const [handle, group] of grouped) {
+    const previous = heavyHitters.get(handle);
+    const observedRate = group.rates.reduce((sum, rate) => sum + rate, 0) / Math.max(1, group.rates.length);
+    heavyHitters.set(handle, {
+      ...previous,
+      followers: group.followers,
+      engRate: source === "top" ? observedRate : (previous?.engRate ?? observedRate),
+      n: source === "top" ? group.rates.length : (previous?.n ?? group.rates.length),
+      at: now,
+      discoveredAt: previous?.discoveredAt ?? now,
+      lastSeenAt: now,
+      source: previous?.source === "top" ? "top" : source,
+    });
+    authorReach.set(handle, { ...(authorReach.get(handle) ?? { at: now }), followers: group.followers, at: now });
+  }
+  if (grouped.size) schedulePersistReach();
+  return heavyHitters.size - before;
+}
+/** Top search supplies account-discovery evidence and normalized observed engagement. It expands
+ * the radar; every individual post still has to pass the separate freshness, room, and content gates. */
+function findHeavyHitters(silent = false, queryOverride?: string): Promise<HeavyRefreshResult> {
   const niche = xNiche.trim();
-  if (!niche || heavyLoading) return;
-  heavyLoading = true; renderDock();
-  try {
+  if (!niche) return Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
+  if (heavyFlight) return heavyFlight;
+  heavyLoading = true; if (!silent) renderDock();
+  const flight = (async () => { try {
     // LIVE-VERIFIED 2026-07: the provider's Top tab REJECTS search operators (-filter:/lang: →
     // zero results) while honoring the OR-topic form — so the query is operator-FREE and the
     // quality filtering happens entirely in the client-side screen below (isBait/RT/lang), which
     // was already in place. (The operator suffix added in the "hardening" pass silently killed
     // this feature: 0 parsed → empty pool, no error.)
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: nicheSearchQuery(niche) }, intent: true });
+    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: queryOverride || nicheSearchQuery(niche) }, intent: true });
     if (!res?.ok) {
-      if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to find heavy hitters.");
-      else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — heavy-hitter search is paused.");
-      else toast("Couldn't search for heavy hitters — try again.");
-      return;
+      if (!silent) {
+        if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to expand the Fresh Reach radar.");
+        else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — Fresh Reach discovery is paused.");
+        else toast("Couldn't expand the Fresh Reach radar — try again.");
+      }
+      return { discovered: 0, total: heavyHitters.size, budgetLimited: !!res?.error?.startsWith("budget-") };
     }
-    const next = new Map(heavyHitters);
+    const now = Date.now();
+    const grouped = new Map<string, { followers: number; rates: number[] }>();
     for (const t of parseTimelineTweets(res.data)) {
-      if (t.isReply || !t.author || t.followers == null || t.followers <= 0) continue;
+      if (t.isReply || !t.author || t.followers == null || t.followers < Math.max(2, myFollowers * 2)) continue;
       // Same poison-exemplar screen as pickBest: a giveaway/RT/non-English "Top" post must not crown
       // an engagement FARMER as a heavy hitter (their audience is other farmers — worthless follows).
       // Skipping entirely (no authorReach enrichment either) keeps farmer accounts out of the pool.
       if (!t.text || looksLikeRT(t.text) || !isEnglish(t.text, t.lang) || isBait(t.text)) continue;
       const rate = ((t.likes ?? 0) + (t.reposts ?? 0)) / t.followers; // a post that landed, normalized for size
       const k = t.author.toLowerCase();
-      const prev = next.get(k);
-      // MEAN over the author's Top posts, not a single max — one viral fluke shouldn't crown an account
-      next.set(k, prev ? { followers: t.followers, engRate: (prev.engRate * prev.n + rate) / (prev.n + 1), n: prev.n + 1, at: Date.now() } : { followers: t.followers, engRate: rate, n: 1, at: Date.now() });
-      authorReach.set(k, { ...(authorReach.get(k) ?? { at: Date.now() }), followers: t.followers }); // enrich the reach cache so they enter the candidate pool
+      if (!/^[a-z0-9_]{1,15}$/.test(k) || k === selfHandle) continue;
+      const group = grouped.get(k) ?? { followers: t.followers, rates: [] };
+      group.followers = t.followers; group.rates.push(rate); grouped.set(k, group);
+      authorReach.set(k, { ...(authorReach.get(k) ?? { at: now }), followers: t.followers, at: now }); // enrich the reach cache so they enter the candidate pool
+    }
+    // Replace each author's current snapshot instead of folding the same cached Top posts into the
+    // mean repeatedly. Old authors remain only while their 30-day radar TTL is live.
+    const next = new Map([...heavyHitters].filter(([, value]) => value.at && now - value.at < HEAVY_HITTER_TTL_MS));
+    const before = next.size;
+    for (const [handle, group] of grouped) {
+      const previous = next.get(handle);
+      next.set(handle, {
+        ...previous,
+        followers: group.followers,
+        engRate: group.rates.reduce((sum, rate) => sum + rate, 0) / group.rates.length,
+        n: group.rates.length,
+        at: now,
+        discoveredAt: previous?.discoveredAt ?? now,
+        lastSeenAt: now,
+        source: "top",
+      });
     }
     heavyHitters = next;
     schedulePersistReach();
-  } finally { heavyLoading = false; renderDock(); }
+    return { discovered: Math.max(0, next.size - before), total: next.size, budgetLimited: false };
+  } finally { heavyLoading = false; if (!silent) renderDock(); } })();
+  heavyFlight = flight;
+  const clear = () => { if (heavyFlight === flight) heavyFlight = undefined; };
+  void flight.then(clear, clear);
+  return flight;
 }
 
 function buildTargets(): HTMLElement {
@@ -4739,7 +5436,7 @@ function buildTargets(): HTMLElement {
     return wrap;
   }
   const sub = document.createElement("div"); sub.className = "ideasub";
-  sub.textContent = "Comment EARLY on bigger accounts in your niche to borrow their crowd. A reply is a chance at their audience, not a promise — it only pays off when you add real value.";
+  sub.textContent = "Fresh Reach keeps a saved radar of larger accounts discovered through focused and broad searches—including massive accounts outside your niche. Each hunt expands the radar, rescans a diverse five-account slice, and only surfaces posts where you can add something specific.";
   head.append(sub);
   const addRow = document.createElement("div"); addRow.className = "tg-add";
   const inp = document.createElement("input"); inp.className = "idea-steerin"; inp.placeholder = "@handle to track";
@@ -4748,10 +5445,10 @@ function buildTargets(): HTMLElement {
   addB.onclick = doAdd; inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
   addRow.append(inp, addB); head.append(addRow);
   if (targetAddMsg) { const m = document.createElement("div"); m.className = "ideasub"; m.textContent = targetAddMsg; head.append(m); }
-  // Actively find big, high-engagement accounts in your niche (a Top search). Auto-runs once per session.
+  // Actively expand the saved Fresh Reach radar (a governed rotating Top search). Auto-runs once per session.
   const hhB = document.createElement("button"); hhB.className = "scanb tg-hh"; hhB.disabled = heavyLoading;
-  hhB.textContent = heavyLoading ? "🔥 Searching…" : heavyHitters.size ? "🔥 Refresh heavy hitters" : "🔥 Find heavy hitters";
-  hhB.onclick = () => void findHeavyHitters();
+  hhB.textContent = heavyLoading ? "⚡ Expanding radar…" : heavyHitters.size ? "⚡ Find more accounts" : "⚡ Build Fresh Reach radar";
+  hhB.onclick = () => void findHeavyHitters(false, nextFreshReachExploreQuery(xNiche));
   head.append(hhB);
   if (xNiche.trim() && !heavyHitters.size && !heavyLoading && !heavyTried) { heavyTried = true; void findHeavyHitters(); }
   wrap.append(head);
@@ -4761,6 +5458,45 @@ function buildTargets(): HTMLElement {
   const agg = aggregateAccounts(replyLog.sent, now); // one pass → reused for suggestions + every target's standing
   const body = document.createElement("div"); body.className = "dl";
   if (locked) { const l = document.createElement("div"); l.className = "tg-warn"; l.style.margin = "0 0 4px"; l.textContent = "Past your pace line for this hour — targeting is paused for a few minutes so you don't read as automated."; body.append(l); }
+
+  const radarAccounts = [...heavyHitters.entries()]
+    .filter(([, entry]) => entry.at && now - entry.at < HEAVY_HITTER_TTL_MS)
+    .sort((a, b) => {
+      const ay = (a[1].strongOpenings ?? 0) / Math.max(1, a[1].checks ?? 0);
+      const by = (b[1].strongOpenings ?? 0) / Math.max(1, b[1].checks ?? 0);
+      return by - ay || (b[1].strongOpenings ?? 0) - (a[1].strongOpenings ?? 0)
+        || b[1].engRate - a[1].engRate || b[1].followers - a[1].followers;
+    });
+  if (radarAccounts.length) {
+    const radarHead = document.createElement("div"); radarHead.className = "tg-radar-head";
+    const radarCopy = document.createElement("div");
+    const radarTitle = document.createElement("div"); radarTitle.className = "tg-sughead"; radarTitle.textContent = `Fresh Reach radar · ${radarAccounts.length} saved`;
+    const radarMeta = document.createElement("div"); radarMeta.className = "tg-foot";
+    const massiveN = radarAccounts.filter(([, entry]) => isMassiveFreshAccount(entry.followers)).length;
+    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · strong-opening history influences which five get checked`;
+    radarCopy.append(radarTitle, radarMeta);
+    const scanRadar = document.createElement("button"); scanRadar.className = "scanb tg-track"; scanRadar.textContent = findingSpots ? "Scanning…" : "Scan + expand";
+    scanRadar.disabled = findingSpots || locked; scanRadar.onclick = () => void findSpots("fresh-reach");
+    radarHead.append(radarCopy, scanRadar); body.append(radarHead);
+    for (const [handle, entry] of radarAccounts.slice(0, showAllFreshRadar ? radarAccounts.length : 12)) {
+      const row = document.createElement("div"); row.className = "tg-sug tg-radar-row";
+      row.append(avatarChip(handle, lastSeenFor(handle)));
+      const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
+      const link = document.createElement("a") as HTMLAnchorElement; link.className = "ins-h"; link.textContent = `@${handle}`; link.href = `https://x.com/${handle}`; link.target = "_blank"; link.rel = "noopener"; link.style.textDecoration = "none"; mid.append(link);
+      const meta = document.createElement("div"); meta.className = "ins-meta";
+      const facts = [`${fmtCount(entry.followers)} followers`, isMassiveFreshAccount(entry.followers) ? "massive exploration" : "practical reach"];
+      if (entry.strongOpenings) facts.push(`${entry.strongOpenings} strong ${entry.strongOpenings === 1 ? "opening" : "openings"}`);
+      if (entry.lastCheckedAt) facts.push(`checked ${fmtAge(entry.lastCheckedAt)}`);
+      meta.textContent = facts.join(" · "); mid.append(meta); row.append(mid); body.append(row);
+    }
+    if (radarAccounts.length > 12) {
+      const more = document.createElement("button"); more.className = "lk";
+      more.textContent = showAllFreshRadar ? "Show strongest 12" : `Show all ${radarAccounts.length} saved accounts`;
+      more.title = showAllFreshRadar ? "Collapse the radar list" : `${radarAccounts.length - 12} more accounts remain in automatic scan rotation even while hidden`;
+      more.onclick = () => { showAllFreshRadar = !showAllFreshRadar; renderDock(); };
+      body.append(more);
+    }
+  }
 
   // Suggested for you — FREE: the in-niche authors your last "Find spots" search already cached in
   // authorReach (followers only at Tier A), gated to the reach sweet-spot, ranked by suggestionScore.
@@ -4780,7 +5516,7 @@ function buildTargets(): HTMLElement {
   const suggestions = rankSuggestions(cands, myFollowers, dismissedSuggestions, 5);
   if (suggestions.length) {
     const sh = document.createElement("div"); sh.className = "tg-sughead"; sh.textContent = "Suggested for you"; body.append(sh);
-    const by = document.createElement("div"); by.className = "tg-foot"; by.style.margin = "0 0 6px"; by.textContent = `Big, in-reach accounts from your niche${heavyHitters.size ? " + heavy-hitter search" : ""} — ranked by size AND engagement, computed not guaranteed.`; body.append(by);
+    const by = document.createElement("div"); by.className = "tg-foot"; by.style.margin = "0 0 6px"; by.textContent = "Practical-size accounts you may want to track continuously. Massive accounts stay in the automatic Fresh Reach radar instead of the ambient Target poller."; body.append(by);
     for (const s of suggestions) {
       const sc = document.createElement("div"); sc.className = "tg-sug";
       sc.append(avatarChip(s.handle, lastSeenFor(s.handle)));
@@ -4796,7 +5532,7 @@ function buildTargets(): HTMLElement {
 
   if (!targetStore.targets.length) {
     const e = document.createElement("div"); e.className = "idea-empty";
-    e.textContent = suggestions.length ? "Track a suggestion above, or add an account up to ~25× your size by @handle." : "Add a target by @handle, or tap 🔥 Find heavy hitters to pull the big, high-engagement accounts in your niche.";
+    e.textContent = suggestions.length ? "Track a practical suggestion above, or let Fresh Reach keep scanning the saved radar automatically." : "Add a practical target by @handle, or expand the Fresh Reach radar to discover larger accounts automatically.";
     body.append(e);
   }
   if (!locked) void pollTargets(); // ambient freshness — ≤5 budgeted polls, per-target 12-min TTL, conserve-mode-aware
@@ -4834,7 +5570,7 @@ function buildTargets(): HTMLElement {
     const busy = targetBusy.has(tg.handle);
     const post = targetPosts.get(tg.handle);
     if (!post) {
-      const find = document.createElement("button"); find.className = "tg-find"; find.textContent = busy ? "Looking…" : "Find a fresh post →"; find.disabled = busy || locked; find.onclick = () => void findTargetPost(tg.handle); c.append(find);
+      const find = document.createElement("button"); find.className = "tg-find"; find.textContent = busy ? "Looking…" : "Find latest original →"; find.disabled = busy || locked; find.onclick = () => void findTargetPost(tg.handle); c.append(find);
     } else if (!post.text) {
       const none = document.createElement("div"); none.className = "ins-meta"; none.style.marginTop = "8px"; none.textContent = "No recent original post found right now.";
       const retry = document.createElement("button"); retry.className = "tg-find"; retry.textContent = "Check again"; retry.disabled = locked; retry.onclick = () => void findTargetPost(tg.handle);
@@ -4862,16 +5598,19 @@ function buildTargets(): HTMLElement {
         c.append(ta);
         const warn = replyQualityWarning(draft); if (warn) { const w = document.createElement("div"); w.className = "tg-warn"; w.textContent = warn; c.append(w); }
         const row = document.createElement("div"); row.className = "idea-actions";
-        const handoff = document.createElement("button"); handoff.className = "idea-open"; handoff.textContent = xReplyInsertOn ? "Like + insert reply in X" : "Copy reply & open post ↗";
+        const manualReview = !xReplyInsertOn || opps.get(post.id)?.source === "fresh-reach";
+        const handoff = document.createElement("button"); handoff.className = "idea-open"; handoff.textContent = manualReview ? "Review & reply on X ↗" : "Like + insert reply in X";
         handoff.onclick = () => {
           const liveDraft = targetDrafts.get(tg.handle) || "";
-          draftOppId = post.id; draftOppAuthor = tg.handle; lastDraft = null;
+          const sharedOpp = opps.get(post.id);
+          draftOppId = post.id; draftOppAuthor = tg.handle;
+          lastDraft = { author: post.author, text: post.text, oppId: post.id, angle: initialAngle(sharedOpp?.category) };
           void runReplyDraftAction(liveDraft);
         };
         row.append(handoff); c.append(row);
-        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = xReplyInsertOn
-          ? "Your click tries Like + insert first and updates local activity on success; off-page posts fall back to copy + open. Nothing submits on its own."
-          : "Copy + open mode. You paste, review, and submit on X, then confirm it in Goobi.";
+        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = !manualReview
+          ? "Your click tries Like + insert first and updates local activity on success; off-page posts fall back to the exact-post review flow. Nothing submits on its own."
+          : "Manual review mode. If this post is visible, Goobi uses its Reply control in place; off-page posts open their exact status page. You edit and post it yourself, then confirm it in Goobi.";
         c.append(foot);
       }
     }
@@ -5409,7 +6148,12 @@ function renderDock() {
     sb.disabled = paused || findingSpots;
     sb.title = paused ? "Paused — resume to search" : findingSpots ? "Searching…" : "Find spots — search X for fresh posts in your niche";
     sb.onclick = (e) => { e.stopPropagation(); void findSpots(); };
-    ctl.append(pb, sb); l.append(ctl);
+    const rb = document.createElement("button"); rb.className = "lbtn"; rb.textContent = "⚡";
+    rb.setAttribute("aria-label", "Find fresh posts from larger reachable accounts");
+    rb.disabled = paused || findingSpots || !myFollowers;
+    rb.title = paused ? "Paused — resume to search" : !myFollowers ? "Set your X handle first" : findingSpots ? "Searching…" : "Fresh Reach — expand the saved account radar and scan practical plus massive accounts for open new posts";
+    rb.onclick = (e) => { e.stopPropagation(); void findSpots("fresh-reach"); };
+    ctl.append(pb, sb, rb); l.append(ctl);
     root.appendChild(l);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
@@ -5474,13 +6218,6 @@ function renderDock() {
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
-  if (!paused && !dockPlayOpen && dockView === "replies") {
-    const find = document.createElement("button"); find.className = "findb"; find.textContent = findingSpots ? "Searching…" : "✦ Find spots";
-    find.title = xNiche.trim() ? "Search X for fresh posts in your niche" : "Set your niche in the Goobi panel first";
-    find.disabled = findingSpots || !xNiche.trim();
-    find.onclick = () => void findSpots();
-    acts.append(find);
-  }
   const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear"; kb.setAttribute("aria-label", "More actions");
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
   acts.append(kb);
@@ -5489,6 +6226,31 @@ function renderDock() {
   acts.append(x);
   h.append(dhl, acts);
   d.append(h);
+
+  if (!paused && !dockPlayOpen && dockView === "replies") {
+    const discovery = document.createElement("div"); discovery.className = "discovery"; discovery.setAttribute("aria-label", "Find reply opportunities");
+    const find = document.createElement("button"); find.className = "findb secondary"; find.textContent = findingSpots ? "Searching…" : "✦ Find spots";
+    find.title = xNiche.trim() ? "Search X for fresh posts in your niche" : "Set your niche in the Goobi panel first";
+    find.disabled = findingSpots || !xNiche.trim();
+    find.onclick = () => void findSpots();
+    const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = findingSpots ? "Searching…" : "⚡ Fresh reach";
+    reach.title = !myFollowers ? "Set your X handle first so Goobi can compare account size" : "Expand your saved account radar, then scan practical and massive accounts for unusually open new posts";
+    reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
+    reach.onclick = () => void findSpots("fresh-reach");
+    discovery.append(find, reach);
+    if (lastFreshReachRun) {
+      const receipt = document.createElement("div"); receipt.className = "fresh-receipt";
+      const lead = document.createElement("strong"); lead.textContent = lastFreshReachRun.state === "searching" ? "⚡ Hunting now" : lastFreshReachRun.state === "failed" ? "⚡ Hunt paused" : "⚡ Last hunt";
+      const detail = document.createElement("span");
+      detail.textContent = lastFreshReachRun.state === "searching"
+        ? " · building the account pool and checking fresh originals"
+        : lastFreshReachRun.state === "failed"
+          ? ` · ${lastFreshReachRun.note || "the search did not complete"}`
+          : ` · discovered ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.massiveSaved ? ` (${lastFreshReachRun.massiveSaved} massive)` : ""} · scanned ${lastFreshReachRun.accountsChecked} · ${lastFreshReachRun.originals} originals · ${lastFreshReachRun.eligible} timing/room matches · ${lastFreshReachRun.added} strong ${lastFreshReachRun.added === 1 ? "opening" : "openings"}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}`;
+      receipt.append(lead, detail); discovery.append(receipt);
+    }
+    d.append(discovery);
+  }
 
   // One dominant workspace switcher sits directly under the header. Everything
   // else is contextual to the selected workspace.
@@ -5696,7 +6458,7 @@ function renderDock() {
   const toolrow = document.createElement("div"); toolrow.className = "reply-tools";
   const toolLabel = document.createElement("span"); toolLabel.className = "reply-tools-label"; toolLabel.textContent = n ? "Reply queue" : "Watching for reply spots";
   const toolButton = document.createElement("button"); toolButton.className = "reply-tools-btn";
-  const sortNames: Record<DockSort, string> = { best: "Best fit", recent: "Recent", reach: "High reach", easy: "Easy replies" };
+  const sortNames: Record<DockSort, string> = { best: "Best fit", recent: "Recent", reach: "Reach opportunity", easy: "Easy replies" };
   toolButton.textContent = `${sortNames[dockSort]}${dockFilter ? " · filtered" : ""} ${replyToolsOpen ? "▴" : "▾"}`;
   toolButton.setAttribute("aria-expanded", String(replyToolsOpen));
   toolButton.onclick = () => { replyToolsOpen = !replyToolsOpen; renderDock(); };
@@ -5710,7 +6472,7 @@ function renderDock() {
   const TABS: { id: DockSort; label: string; title: string }[] = [
     { id: "best", label: "Best", title: "Best reply-fit first" },
     { id: "recent", label: "Recent", title: "Newest posts first" },
-    { id: "reach", label: "High reach", title: "Biggest accounts first" },
+    { id: "reach", label: "Reach", title: "Best observed reach opening first—not simply the biggest account" },
     { id: "easy", label: "Easy replies", title: "Short, answerable posts you can reply to fast and early" },
   ];
   for (const td of TABS) {
@@ -5731,11 +6493,15 @@ function renderDock() {
   const f2 = document.createElement("div"); f2.className = "foot2";
   if (!n) { // no spots surfaced — the genuine "nothing to do" / watching state
     f1.textContent = "✦ You're all caught up";
-    f2.textContent = "New reply spots appear as you scroll, or search your niche now.";
+    f2.textContent = "New reply spots appear as you scroll. Search your niche, or hunt fresh posts from larger reachable accounts.";
     const find = document.createElement("button"); find.className = "findb"; find.textContent = findingSpots ? "Searching X…" : "Find spots in my niche";
     find.disabled = findingSpots || !xNiche.trim(); find.title = xNiche.trim() ? "Search X for fresh, high-fit reply spots" : "Set your niche in the Goobi panel first";
     find.onclick = () => void findSpots();
-    foot.append(f1, f2, find); d.append(foot);
+    const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = "⚡ Fresh reach";
+    reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
+    reach.title = !myFollowers ? "Set your X handle first" : "Expand the saved radar and scan practical plus massive accounts for just-posted, uncrowded conversations";
+    reach.onclick = () => void findSpots("fresh-reach");
+    foot.append(f1, f2, find, reach); d.append(foot);
   }
 
   root.appendChild(d);
@@ -5775,6 +6541,7 @@ function installDebugHook(): void {
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
+  void maybeFulfillReplyHandoff(); // a user-started handoff does not depend on re-running Claude or the dock setup path
   const xDataConsent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
   const hasAnthropicKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
   const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
@@ -5791,7 +6558,7 @@ async function boot() {
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
-  xReplyInsertOn = (await getLocal(CONFIG.X_REPLY_INSERT_KEY)) !== false; // absent = on for fresh and existing installs
+  xReplyInsertOn = (await getLocal(CONFIG.X_REPLY_INSERT_KEY)) === true; // absent = safe manual handoff; true preserves explicit legacy opt-in
   learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — flips on only once the backtest proves the learned signal predicts
   debugOn = (await getLocal(CONFIG.X_DEBUG_KEY)) === true;
   installDebugHook(); // dev-only window.__goobiExport() when debugOn (no-op otherwise)
@@ -5839,7 +6606,7 @@ async function boot() {
     opportunityMetrics = pruneOpportunityMetrics((await getLocal(CONFIG.X_OPPORTUNITY_METRICS_KEY)) as OpportunityMetricStore | undefined, now);
     const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, { followers?: number; following?: number; bio?: string; at: number }> | undefined;
     for (const [k, v] of Object.entries(storedR ?? {})) if (v?.at && now - v.at < AUTHOR_REACH_TTL_MS && !authorReach.has(k)) authorReach.set(k, v);
-    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as { niche?: string; entries?: Record<string, { followers: number; engRate: number; n: number; at?: number }> } | undefined;
+    const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as HeavyHitterStore | undefined;
     if (storedH?.niche && storedH.niche === xNiche.trim()) {
       for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS && !heavyHitters.has(k)) heavyHitters.set(k, v);
     }
@@ -5857,7 +6624,8 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_REPLY_INSERT_KEY]) xReplyInsertOn = changes[CONFIG.X_REPLY_INSERT_KEY].newValue !== false;
+    if (changes[CONFIG.X_REPLY_INSERT_KEY]) xReplyInsertOn = changes[CONFIG.X_REPLY_INSERT_KEY].newValue === true;
+    if (changes[CONFIG.X_REPLY_HANDOFF_KEY]) void maybeFulfillReplyHandoff(); // an already-open exact status tab can claim the new draft without a duplicate tab
     if (changes[CONFIG.X_DAILY_GOALS_KEY]) { dailyGoals = normalizeDailyGoals(changes[CONFIG.X_DAILY_GOALS_KEY].newValue); renderDock(); }
     if (changes[CONFIG.X_LEARN_LOOP_KEY]) { learnLoopOn = changes[CONFIG.X_LEARN_LOOP_KEY].newValue === true; invalidateLearnedMults(); renderDock(); } // flip the loop live (no reload), and re-rank the dock under the new weighting
     if (changes[CONFIG.X_DEBUG_KEY]) { debugOn = changes[CONFIG.X_DEBUG_KEY].newValue === true; installDebugHook(); }
@@ -5868,7 +6636,7 @@ async function boot() {
     }
     if (changes[CONFIG.X_NICHE_KEY]) {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
-      heavyHitters = new Map(); heavyTried = false; // niche-derived pool no longer applies; auto-search re-fires for the new niche (persisted copy is niche-stamped, so it can't bleed back)
+      heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false; // the radar is tied to the active scoring context; re-discover when that context changes
     }
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; captureGrowthData(); renderDock(); }
@@ -5937,6 +6705,7 @@ async function boot() {
     dismissPanel();
     if (seen.size > 600) { seen.clear(); opps.clear(); authorReach.clear(); } // bound memory across long sessions
     selfHandle = "";
+    void maybeFulfillReplyHandoff();
     requestScan();
     renderDock();
   }, 700);

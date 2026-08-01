@@ -4,7 +4,7 @@
  * SPECIFICITY is a ranked variable — and specificity is a function of the context the drafter
  * gets. This block hands Sonnet what the system already knows (the user's niche, why the scorer
  * flagged the post, who the author is, what measurably works for THIS user) as USER-message
- * context, keeping X_DRAFT_SYSTEM byte-stable for the prompt-invariant guard.
+ * context, separate from the reusable drafting rules.
  *
  * Import-free + pure so the live eval (scripts/eval-draft-reply-live.mjs) imports the REAL
  * assembler and measures bare-vs-enriched drafts with the same code the extension ships.
@@ -14,8 +14,11 @@ export interface DraftContextIn {
   niche?: string;       // the user's full niche text (intent clause included — it helps here)
   reason?: string;      // the scorer's ≤6-word "why this post is worth a reply"
   category?: string;    // the scorer's angle read (value/ask/connect/…)
+  anchor?: string;      // the exact post claim/detail the scorer selected
+  replyBrief?: string;  // the useful move the scorer recommends, never fabricated experience
   authorLine?: string;  // one honest line about the author from cached data ("@x · ~4.2K followers · a two-way niche peer")
   threadLine?: string;  // direct-thread context (for example: this is a comment on the user's own post)
+  opportunityLine?: string; // observed discovery context (fresh/reachable/uncrowded), never a reach promise
   measuredLine?: string; // stage 2 (gated on the live eval): the user's measured-best angle line
 }
 
@@ -26,6 +29,9 @@ export function buildDraftContext(c: DraftContextIn): string {
   if (c.niche?.trim()) lines.push(`The user's niche / what they care about: ${c.niche.trim()}`);
   if (c.authorLine?.trim()) lines.push(`About the post's author: ${c.authorLine.trim()}`);
   if (c.threadLine?.trim()) lines.push(`Conversation relationship: ${c.threadLine.trim()}`);
+  if (c.opportunityLine?.trim()) lines.push(`Observed opportunity context: ${c.opportunityLine.trim()}`);
+  if (c.anchor?.trim()) lines.push(`Exact post detail to engage: ${c.anchor.trim()}`);
+  if (c.replyBrief?.trim()) lines.push(`Useful reply move: ${c.replyBrief.trim()}`);
   if (c.reason?.trim() || c.category?.trim()) {
     const why = [c.reason?.trim(), c.category?.trim() ? `angle: ${c.category.trim()}` : ""].filter(Boolean).join(" — ");
     lines.push(`Why this post was flagged as reply-worthy: ${why}`);
