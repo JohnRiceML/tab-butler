@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr-policy.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
-const { classForPath, degradeMode, canFetch, monthKeyOf, TWTTR_CLASS, allowedTwttrPath } = mod;
+const { classForPath, degradeMode, canFetch, monthKeyOf, providerUsedFraction, providerRetryAt, TWTTR_CLASS, allowedTwttrPath } = mod;
 
 let pass = 0, fail = 0;
 const eq = (a, b, l) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; else { fail++; console.error("  FAIL:", l, "got", JSON.stringify(a), "want", JSON.stringify(b)); } };
@@ -58,11 +58,17 @@ ok(canFetch("cheap", "lockdown", true) === false, "lockdown: everything blocked"
 eq(monthKeyOf(Date.parse("2026-06-22T10:00:00Z")), "2026-06", "monthKey June");
 eq(monthKeyOf(Date.parse("2026-12-31T23:59:59Z")), "2026-12", "monthKey Dec");
 ok(monthKeyOf(Date.parse("2026-06-30T23:59:59Z")) !== monthKeyOf(Date.parse("2026-07-01T00:00:00Z")), "month rolls at boundary");
+eq(providerUsedFraction(1000, 250), 0.75, "provider quota headers produce authoritative used fraction");
+eq(providerUsedFraction(undefined, undefined), 0, "missing provider quota headers stay neutral");
+eq(providerUsedFraction(1000, 0, 1_000, 1_000 + mod.PROVIDER_QUOTA_OBSERVATION_TTL_MS), 0, "stale provider quota observations permit a bounded later re-probe");
+eq(providerRetryAt("30", 1_000), 31_000, "provider rate reset seconds become an absolute retry time");
+eq(providerRetryAt("1700000000", 1_000), 1_700_000_000_000, "provider epoch-second reset is recognized");
 
 
 /* ---- persistence TTL authority (the caches prune on these; declared HERE, single source) ---- */
 ok(mod.AUTHOR_REACH_TTL_MS === TWTTR_CLASS.followers.ttl, "author-reach persistence reuses the followers-class TTL (no forked authority)");
 ok(mod.HEAVY_HITTER_TTL_MS === 30 * 24 * 3_600_000, "Fresh Reach radar accounts persist for 30 days and can be refreshed by later hunts");
+ok(mod.TWTTR_CACHE_MAX_BYTES >= 6 * 1024 * 1024, "response cache can retain one expanded cold Fresh Reach hunt");
 
 console.log(fail === 0 ? `\n✓ twttr policy: ${pass} assertions passed` : `\n✗ twttr policy: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

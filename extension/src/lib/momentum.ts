@@ -6,24 +6,27 @@
  * unit-tested (scripts/test-momentum.mjs).
  *
  * The keystone: it is structurally incapable of rewarding unsafe volume. The score
- * SATURATES at a healthy daily target, and crossing Goobi's conservative ease-off line,
- * via reputationStatus) flips it to "overheating" — red, and LOWER, never "max". It reads
- * its safety verdict from the same reputationStatus() the dock's pace chip + Goobi's
+ * SATURATES at a healthy daily target, and crossing Goobi's conservative ease-off line
+ * via replyPaceStatus flips it to "overheating" — red, and LOWER, never "max". It reads
+ * its safety verdict from the same adaptive status the dock's pace chip + Goobi's
  * "worn" mood read, so the two can never contradict.
  *
  * Real reach (X-reported views) is shown separately in the UI; it is a measured stat, not
  * a lever — it must never push the score, or this stops being honest.
  */
 
+import { REPLY_PACE_CAUTION, REPLY_PACE_EASEOFF, type RepLevel } from "./reply-hygiene";
+
+export type { RepLevel } from "./reply-hygiene";
+
 export type MomentumState = "cold" | "warming" | "inflow" | "peak" | "cooling" | "overheating";
-export type RepLevel = "healthy" | "caution" | "easeoff";
 
 export interface MomentumInput {
   repliesToday: number;
   postedToday: number;
   replyStreak: number;     // consecutive days you've replied
   minsSinceLast: number;   // minutes since your last reply/post (big = idle)
-  repLevel: RepLevel;      // reputationStatus(repliesThisHour).level — the safety source of truth
+  repLevel: RepLevel;      // replyPaceStatus(events).level — the safety source of truth
 }
 export interface Momentum { score: number; state: MomentumState; label: string; cue: string; color: string; }
 
@@ -38,7 +41,7 @@ const COPY: Record<MomentumState, { label: string; cue: string; color: string }>
   inflow:      { label: "In flow",            cue: "Good rhythm. This is the sweet spot.",                       color: "#6fcf7f" },
   peak:        { label: "In the zone",        cue: "Steady and healthy — exactly where you want to be.",         color: "#6fcf7f" },
   cooling:     { label: "Cooling off",        cue: "Tapering — a reply keeps the rhythm, if you've got one.",    color: "#e8b06a" },
-  overheating: { label: "Too hot — ease off", cue: "30+ replies an hour reads as automated. Give it a few minutes.", color: "#d6604a" },
+  overheating: { label: "Too hot — ease off", cue: `Goobi's adaptive pace pressure reached ${REPLY_PACE_EASEOFF}. It decays with time; take a break or reset the local meter if its baseline is stale. This does not reset X.`, color: "#d6604a" },
 };
 
 export function computeMomentum(input: MomentumInput): Momentum {
@@ -60,7 +63,7 @@ export function computeMomentum(input: MomentumInput): Momentum {
   if (repLevel === "caution") {
     const score = Math.round(Math.max(0, Math.min(raw, 74)));
     const state: MomentumState = score <= 14 ? "cold" : score <= 44 ? "warming" : "inflow";
-    return { score, state, label: COPY[state].label, cue: "Good pace — ease off the throttle a touch, you're nearing the line.", color: "#e89a3c" };
+    return { score, state, label: COPY[state].label, cue: `Goobi's adaptive caution band starts at ${REPLY_PACE_CAUTION} pressure. Warm conversations count less and older activity fades — slow down and prioritize genuine conversations.`, color: "#e89a3c" };
   }
 
   const score = Math.round(Math.max(0, Math.min(raw, 100)));

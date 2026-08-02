@@ -44,13 +44,50 @@ export interface LearnReply {
   author?: string;
   score?: number;       // effectiveScore (0..1) of the opportunity
   angle?: string;       // the drafting angle used (REPLY_ANGLES id) — feature learning
+  source?: string;      // discovery provenance for settled cohort diagnostics
+  lane?: string;        // recommendation lane for settled cohort diagnostics
   ageMs?: number;       // post age at reply time — the timing lever, measured
   followers?: number;
   norm?: string;        // normalized reply text (for match-back)
   snippet?: string;
   confirmedAt?: number; // actual reply found through RapidAPI, or explicitly confirmed by the user
   confirmation?: "rapidapi" | "manual";
-  outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; tweetId?: string; authorReplied?: boolean; frozen?: boolean };
+  outcome?: ReplyOutcome;
+}
+
+export interface ReplyOutcome {
+  at: number;
+  likes?: number;
+  replies?: number;
+  views?: number;
+  reposts?: number;
+  tweetId?: string;
+  authorReplied?: boolean;
+  frozen?: boolean;
+}
+
+/** Monotonic cross-tab merge for facts learned independently about the same reply.
+ * Engagement counters, observation time, frozen state, and reply-back truth may advance but
+ * never regress when a stale tab writes its older snapshot. Missing fields cannot erase proof. */
+export function mergeReplyOutcomes(a?: ReplyOutcome, b?: ReplyOutcome): ReplyOutcome | undefined {
+  if (!a) return b ? { ...b } : undefined;
+  if (!b) return { ...a };
+  const maxDefined = (x?: number, y?: number): number | undefined => {
+    if (x == null) return y;
+    if (y == null) return x;
+    return Math.max(x, y);
+  };
+  const newer = b.at >= a.at ? b : a;
+  return {
+    at: Math.max(a.at, b.at),
+    likes: maxDefined(a.likes, b.likes),
+    replies: maxDefined(a.replies, b.replies),
+    views: maxDefined(a.views, b.views),
+    reposts: maxDefined(a.reposts, b.reposts),
+    tweetId: newer.tweetId ?? a.tweetId ?? b.tweetId,
+    authorReplied: a.authorReplied === true || b.authorReplied === true || undefined,
+    frozen: a.frozen === true || b.frozen === true || undefined,
+  };
 }
 
 /** A reply is confirmed only when the RapidAPI match-back found the actual X reply
@@ -121,6 +158,7 @@ export interface AggResult { accounts: Record<string, AccountAgg>; muInvest: num
 /** A join-only outcome (authorReplied, no numbers) is NOT a measured engagement result — fit
  *  consumers must require real counts or "author engaged back" scores as the worst outcome. */
 const hasMeasuredCounts = (o?: { likes?: number; replies?: number }): boolean => o != null && (o.likes != null || o.replies != null);
+const hasSettledMeasuredCounts = (o?: ReplyOutcome): boolean => o?.frozen === true && hasMeasuredCounts(o);
 const canonicalHandle = (h: string | undefined): string => (h || "").replace(/^@+/, "").trim().toLowerCase();
 
 export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
@@ -138,7 +176,7 @@ export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
     if (!r.author) continue;
     const w = recencyW((now - r.at) / DAY_MS);
     gw += w; gwv += w * (r.score ?? NEUTRAL_SCORE);
-    if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
+    if (hasSettledMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); gwo += w * fit; gwf += w; }
   }
   const muInvest = gw > 0 ? gwv / gw : NEUTRAL_SCORE;
   const muObs = gwf > 0 ? gwo / gwf : 0;
@@ -152,7 +190,7 @@ export function aggregateAccounts(sent: LearnReply[], now: number): AggResult {
       sw += w; swv += w * (r.score ?? NEUTRAL_SCORE);
       if (r.at > lastAt) lastAt = r.at;
       if (r.followers != null && r.at >= fAt) { followers = r.followers; fAt = r.at; }
-      if (hasMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
+      if (hasSettledMeasuredCounts(r.outcome)) { const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP); swfit += w * fit; swo += w; nOut++; }
     }
     const invest = (K * muInvest + sw * (swv / sw)) / (K + sw);
     const obs = swo > 0 ? (K * muObs + swo * (swfit / swo)) / (K + swo) : undefined;
@@ -213,7 +251,7 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
   return inter / (a.size + b.size - inter);
 }
 export interface FetchedReply { text: string; at?: number; likes?: number; replies?: number; views?: number; reposts?: number; id?: string /* the reply's own tweet id — enables comments-on-your-reply ground truth later */; }
-export interface OutcomeMatch { index: number; likes: number; replies: number; views?: number; reposts?: number; replyId?: string; }
+export interface OutcomeMatch { index: number; likes?: number; replies?: number; views?: number; reposts?: number; replyId?: string; }
 /** For each fetched reply, find the single best-matching stored reply (by text Jaccard,
  *  within a time window, with a unique winner). Returns outcomes to write, keyed by index
  *  into `sent`. Ambiguous matches are dropped, never guessed. */
@@ -233,7 +271,9 @@ export function matchOutcomes(fetched: FetchedReply[], sent: LearnReply[]): Outc
     }
     if (best >= 0 && bestSim >= MATCH_SIM && bestSim - second >= 0.15) { // unique-winner margin — wide enough that two similar replies to DIFFERENT accounts don't cross-attribute
       used.add(best);
-      out.push({ index: best, likes: f.likes ?? 0, replies: f.replies ?? 0, views: f.views, reposts: f.reposts, replyId: f.id });
+      // Preserve missing provider fields as missing. Coercing them to zero creates false measured
+      // underperformance when a payload shape changes or an endpoint omits one metric.
+      out.push({ index: best, likes: f.likes, replies: f.replies, views: f.views, reposts: f.reposts, replyId: f.id });
     }
   }
   return out;
@@ -333,15 +373,18 @@ export function accountTrend(snaps: Record<string, TrendSnap>, now: number): Acc
 // the per-post category (fit is post-specific; this learner is user-specific).
 
 export interface AngleLearn { angle: string; n: number; rel: number } // rel = shrunk fit / the user's global mean
+export interface CohortLearn { key: string; n: number; rel: number } // source/lane slice, same shrinkage + gate as angles
 export interface AgeBucketLearn { label: string; n: number; fit: number }
 export interface FeatureLearn {
   nOut: number;                 // settled outcomes seen
   angles: AngleLearn[];         // ranked desc, only slices with n >= N_MIN_OUT
+  sources: CohortLearn[];       // discovery provenance, ranked only after the same min-N gate
+  lanes: CohortLearn[];         // recommendation lane at handoff, ranked only after the same min-N gate
   bestAngle?: string;           // only when >=2 angles ranked AND the top is clearly above avg
   ageBuckets: AgeBucketLearn[]; // the timing lever measured on YOUR replies
   ageGradient?: number;         // fresh (<15m) fit / stale (>=1h) fit — only when both sides clear the gate
   freshN?: number; staleN?: number;
-  fitCorr?: number;             // Spearman(stage-1 fit, outcome) — runs the audit's "is fit real?" test continuously
+  fitCorr?: number;             // same-sample Spearman(stage-1 fit, engagement outcome); alignment diagnostic, not held-out prediction
   fitCorrViews?: number;        // same test against X-reported reply VIEWS (distribution, not applause) — the 2026 ranker serves views first; compare with fitCorr BEFORE ever making views the primary metric
 }
 
@@ -374,17 +417,17 @@ function spearman(pairs: Array<[number, number]>): number {
 }
 
 export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
-  const out: Array<{ fit: number; w: number; angle?: string; ageMs?: number; score?: number; views?: number }> = [];
+  const out: Array<{ fit: number; w: number; angle?: string; source?: string; lane?: string; ageMs?: number; score?: number; views?: number }> = [];
   let gwo = 0, gwf = 0;
   for (const r of sent) {
-    if (!hasMeasuredCounts(r.outcome)) continue; // join-only outcomes (authorReplied, no counts) never enter fit
+    if (!hasSettledMeasuredCounts(r.outcome)) continue; // provisional and join-only outcomes never enter settled fit slices
     const w = recencyW((now - r.at) / DAY_MS);
     const fit = ((r.outcome!.likes ?? 0) + W_REPOST * (r.outcome!.reposts ?? 0) + W_REPLY * (r.outcome!.replies ?? 0)) / Math.max(expected(r.followers ?? FALLBACK_FOLLOWERS), MIN_EXP);
-    out.push({ fit, w, angle: r.angle, ageMs: r.ageMs, score: r.score, views: r.outcome!.views });
+    out.push({ fit, w, angle: r.angle, source: r.source, lane: r.lane, ageMs: r.ageMs, score: r.score, views: r.outcome!.views });
     gwo += w * fit; gwf += w;
   }
   const mu = gwf > 0 ? gwo / gwf : 0;
-  const res: FeatureLearn = { nOut: out.length, angles: [], ageBuckets: [] };
+  const res: FeatureLearn = { nOut: out.length, angles: [], sources: [], lanes: [], ageBuckets: [] };
   if (!out.length || mu <= 0) return res;
 
   // per-angle: shrunk toward the user's own mean; below the gate a slice doesn't rank at all
@@ -398,6 +441,29 @@ export function learnFeatures(sent: LearnReply[], now: number): FeatureLearn {
   }
   res.angles.sort((a, b) => b.rel - a.rel);
   if (res.angles.length >= 2 && res.angles[0].rel >= BEST_ANGLE_REL) res.bestAngle = res.angles[0].angle;
+
+  // Discovery source and recommendation lane stay diagnostic-only. They use the exact same
+  // settled/min-N/shrinkage contract as angles, but never alter ranking on their own.
+  const cohortRows = (field: "source" | "lane"): CohortLearn[] => {
+    const groups = new Map<string, typeof out>();
+    for (const o of out) {
+      const key = o[field]?.trim();
+      if (!key) continue;
+      const xs = groups.get(key);
+      if (xs) xs.push(o); else groups.set(key, [o]);
+    }
+    const rows: CohortLearn[] = [];
+    for (const [key, xs] of groups) {
+      if (xs.length < N_MIN_OUT) continue;
+      let sw = 0, swf = 0;
+      for (const o of xs) { sw += o.w; swf += o.w * o.fit; }
+      const shrunk = (K * mu + sw * (swf / sw)) / (K + sw);
+      rows.push({ key, n: xs.length, rel: shrunk / mu });
+    }
+    return rows.sort((a, b) => b.rel - a.rel);
+  };
+  res.sources = cohortRows("source");
+  res.lanes = cohortRows("lane");
 
   // age buckets: the timing lever, measured on the user's own replies
   for (const b of AGE_BUCKETS) {
@@ -437,8 +503,8 @@ export function isActionGradeReply(r: LearnReply): boolean {
 }
 
 /** Per-account RANKING multipliers from MEASURED outcomes — the ranking half of the closed loop.
- *  Gated on the fitCorr "is stage-1 fit even predictive for this user?" test: if their own ranking
- *  doesn't correlate with real outcomes, we tilt NOTHING (applied=false, every account neutral) —
+ *  Gated on the fitCorr same-sample alignment test: if their own ranking doesn't correlate with
+ *  real outcomes, we tilt NOTHING (applied=false, every account neutral) —
  *  never amplify a signal the data says is noise. When it does correlate, an account's shrunk
  *  measured `score` tilts its rank relative to the user's own measured mean (muObs), clamped to
  *  [MIN,MAX]. Accounts with no SETTLED measured score are omitted → the caller reads them as a

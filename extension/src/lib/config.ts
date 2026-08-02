@@ -38,6 +38,7 @@ export const CONFIG = {
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
   X_MY_FOLLOWERS_KEY: "xMyFollowers", // the user's own follower count, for the reach sweet-spot ratio
   X_REPLY_LOG_KEY: "xReplyLog", // cross-session reply-reputation log (rate + repeat-author + duplicate-reply guards)
+  X_PACE_RESET_KEY: "xPaceResetAt", // user-set baseline for Goobi's local adaptive pace pressure; never deletes reply history or resets X
   X_IDEAS_KEY: "xIdeas", // persisted post-ideas drafts queue (working + shipped), survives reloads
   X_MY_POSTS_KEY: "xMyPosts", // cached: the user's own recent original posts (for idea de-dupe + voice), ~24h TTL
   X_GOOBI_SEEN_KEY: "goobiLastSeen", // last time you actively used Goobi (powers the neglect / welcome-back beat)
@@ -48,12 +49,13 @@ export const CONFIG = {
   X_TARGETS_KEY: "xTargets", // "Target accounts" mode: large in-reach niche accounts to comment on early, device-local
   X_DM_WORKSPACE_KEY: "goobi_x_dm_workspace_v1", // prefix for per-account, device-local DM planning + user-marked conversation history
   X_AUTHOR_REACH_KEY: "xAuthorReach", // persisted author-reach cache (PUBLIC data: followers/following/bio per handle) — compounds target-selection coverage across sessions
-  X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted 30-day Fresh Reach account radar: niche-stamped reach, engagement, scan yield, and freshness-check history
+  X_HEAVY_HITTERS_KEY: "xHeavyHitters", // persisted 30-day Fresh Reach radar: niche distribution + max-10 measured massive-account keep-list and check history
+  X_FRESH_REACH_WATCHLIST_KEY: "xFreshReachWatchlist", // owner-scoped private pins for massive accounts the user wants checked directly
   X_OPPORTUNITY_METRICS_KEY: "xOpportunityMetrics", // compact public-post metric snapshots — two observations power a short-lived momentum lift
   X_RELATIONSHIP_MEMORY_KEY: "xRelationshipMemory", // exact completed reply exchanges, account-scoped and text-free; powers the ongoing-connection context chip
   X_PROFILE_KEY: "xProfile", // own-profile harvest (pinned post id + bio length) — the profile coach's $0 input
   X_PREMIUM_KEY: "xPremium", // the user's X Premium tier ("", "premium", "premium+") — an honest covariate, NEVER a score input
-  X_LEARN_LOOP_KEY: "xLearnLoop", // close-the-loop flag: when on, MEASURED per-account/per-angle outcomes influence ranking + the drafter's default angle (default OFF until the backtest proves the signal is predictive). Reversible kill switch.
+  X_LEARN_LOOP_KEY: "xLearnLoop", // close-the-loop flag: when on, MEASURED per-account/per-angle outcomes influence ranking + the drafter's default angle (default OFF until a real-data backtest validates the signal out of sample). Reversible kill switch.
   X_GROWTH_LOOP_KEY: "xGrowthLoop", // account-scoped 14-day strategy experiments + daily follower/post snapshots
   X_DEBUG_KEY: "xDebug", // dev-only: exposes window.__goobiExport() to dump the learning data (reply log + trend snaps) for backtesting. No effect on the product.
 } as const;

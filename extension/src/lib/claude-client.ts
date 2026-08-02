@@ -112,7 +112,7 @@ export async function recall(query: string, candidates: Candidate[]): Promise<Ra
 
 /* ---------- X reply copilot (BYO-key) ---------- */
 
-export interface XPost { i: number; author: string; text: string; meta?: string; }
+export interface XPost { i: number; author: string; text: string; meta?: string; context?: string; }
 export type XReplyMove = "add_detail" | "counterpoint" | "concrete_example" | "narrow_question" | "substantive_support";
 export type XReplyRisk = "none" | "generic" | "promotional" | "context_mismatch" | "hostile";
 const X_REPLY_MOVES = new Set<XReplyMove>(["add_detail", "counterpoint", "concrete_example", "narrow_question", "substantive_support"]);
@@ -137,7 +137,12 @@ export interface XScore {
 export async function scorePosts(posts: XPost[], niche: string, products: { name: string; blurb?: string }[] = []): Promise<XScore[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
-  const list = posts.map((p) => `${p.i}. @${p.author}${p.meta ? ` [${p.meta}]` : ""}: ${p.text}`).join("\n");
+  const list = posts.map((p) => {
+    const text = p.text.trim().slice(0, 400);
+    const context = p.context?.trim().slice(0, 320);
+    const outer = `${p.i}. @${p.author}${p.meta ? ` [${p.meta}]` : ""}: ${text}`;
+    return context ? `${outer}\n   PARENT/QUOTED CONTEXT (context only): ${context}` : outer;
+  }).join("\n");
   const prods = products.length
     ? `\n\nThe user's products (for a post you categorize "promote", set "products" to the 0-based indices of the product(s) that genuinely fit, most relevant first, up to 2; omit if none clearly fits):\n${products.map((p, i) => `${i}. ${p.name}${p.blurb ? ` — ${p.blurb}` : ""}`).join("\n")}`
     : "";

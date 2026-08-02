@@ -1,6 +1,6 @@
 /**
  * LIVE integration test — verifies the provider-facing assumptions everything rests on, against
- * the REAL twitter241 API with the REAL parsers. OPT-IN (spends ~2 MB of the monthly budget).
+ * the REAL twitter241 API with the REAL parsers. OPT-IN (can spend roughly 3–6 MB per uncached run).
  *
  *   TWTTR_KEY=your-x-rapidapi-key node scripts/live-integration.mjs --live
  *
@@ -15,6 +15,8 @@
  *   D. parseUser on /user: id/handle/followers/following/bio (gates reach enrichment + voice).
  *   E. user-replies-v2: do REPLY payloads carry views/likes/id? (gates fitCorrViews + the
  *      outcome upgrade + future comments-on-your-reply ground truth.)
+ *   F. Direct `from:<handle>` searches return exact-author originals with the live fields the
+ *      private Massive watchlist requires.
  * Without --live / a key it prints usage and exits 0.
  */
 import { readFileSync } from "node:fs";
@@ -26,7 +28,7 @@ const LIVE = process.argv.includes("--live");
 const KEY = process.env.TWTTR_KEY;
 const HOST = "twitter241.p.rapidapi.com";
 if (!LIVE || !KEY) {
-  console.log(`Live integration test (opt-in, ~2 MB of the monthly X-data budget).
+  console.log(`Live integration test (opt-in, roughly 3–6 MB of provider transfer per uncached run).
   Run:  TWTTR_KEY=your-x-rapidapi-key node scripts/live-integration.mjs --live
   Verifies OR-topic search handling, payload field coverage, the heavy-hitter query form,
   parseUser, and reply-payload views — the provider-facing assumptions the audits flagged.`);
@@ -54,10 +56,23 @@ const pct = (n, d) => (d ? `${Math.round((100 * n) / d)}%` : "n/a");
 const results = [];
 const verdict = (name, pass, detail) => { results.push({ name, pass, detail }); console.log(`${pass === true ? "✅" : pass === false ? "❌" : "⚠️ "} ${name}: ${detail}`); };
 
+// Fail fast before a multi-call test. Missing subscription is not a query/parser failure, and
+// continuing only turns the first honest 403 into misleading 429 noise.
+const preflight = await get("user", { username: "naval" });
+if (!preflight.ok) {
+  const auth = preflight.status === 401 || preflight.status === 403;
+  console.log(`${auth ? "⛔" : "⚠️"} Provider preflight failed (HTTP ${preflight.status ?? "?"}): ${preflight.body || "no response detail"}`);
+  console.log(auth
+    ? "VERDICT: SUBSCRIPTION BLOCKED — update the stored key/subscription for twitter241 before judging search quality. No further calls made."
+    : preflight.status === 429
+      ? "VERDICT: PROVIDER RATE-LIMITED — wait for the plan rate window, then rerun. No search claim was tested."
+      : "VERDICT: PROVIDER UNAVAILABLE — no search/parser claim was tested.");
+  process.exit(0);
+}
+
 // ---------- A. OR-topic search handling ----------
 {
   const qA = "indie saas", qB = "ai agents";
-  const [rA, rB, rOr] = [];
   const a = await get("search-v3", { type: "Latest", count: "20", query: qA });
   const b = await get("search-v3", { type: "Latest", count: "20", query: qB });
   const or = await get("search-v3", { type: "Latest", count: "20", query: nicheSearchQuery(`${qA}, ${qB}`) }); // the REAL query builder → "((indie saas) OR (ai agents))"
@@ -96,7 +111,7 @@ const verdict = (name, pass, detail) => { results.push({ name, pass, detail }); 
   // Top REJECTS operators (live-verified) — this mirrors the real findHeavyHitters form (OR only).
   const q = nicheSearchQuery("indie saas, build in public");
   const r = await get("search-v3", { type: "Top", count: "40", query: q });
-  if (!r.ok) verdict("C. heavy-hitter Top query", false, `the hardened Top form errors (${r.status}) — findHeavyHitters would toast-fail`);
+  if (!r.ok) verdict("C. heavy-hitter Top query", r.status === 429 ? null : false, `the hardened Top form errors (${r.status})${r.status === 429 ? " — provider rate limit, query not judged" : " — findHeavyHitters would toast-fail"}`);
   else {
     const ts = parseTimelineTweets(r.data);
     const withF = ts.filter((t) => t.followers != null && t.followers > 0).length;
@@ -106,7 +121,7 @@ const verdict = (name, pass, detail) => { results.push({ name, pass, detail }); 
 
 // ---------- D. parseUser ----------
 {
-  const r = await get("user", { username: "naval" });
+  const r = preflight;
   if (!r.ok) verdict("D. /user + parseUser", false, `fetch failed (${r.status})`);
   else {
     const u = parseUser(r.data);
@@ -116,12 +131,29 @@ const verdict = (name, pass, detail) => { results.push({ name, pass, detail }); 
   }
 }
 
+// ---------- F. exact-handle Fresh Reach checks ----------
+{
+  const argAt = process.argv.findIndex((arg) => arg === "--handles" || arg.startsWith("--handles="));
+  const raw = argAt >= 0
+    ? (process.argv[argAt].includes("=") ? process.argv[argAt].split("=")[1] : process.argv[argAt + 1])
+    : "elonmusk,MKBHD";
+  const handles = String(raw || "").split(",").map((handle) => handle.trim().replace(/^@+/, "").toLowerCase()).filter((handle) => /^[a-z0-9_]{1,15}$/.test(handle)).slice(0, 4);
+  for (const handle of handles) {
+    const r = await get("search-v3", { type: "Latest", count: "10", query: `from:${handle}` });
+    if (!r.ok) { verdict(`F. direct @${handle}`, r.status === 429 ? null : false, `fetch failed (${r.status})`); continue; }
+    const exact = parseTimelineTweets(r.data).filter((tweet) => tweet.author.toLowerCase() === handle && !tweet.isReply);
+    const usable = exact.filter((tweet) => tweet.postedAt != null && tweet.replies != null && tweet.followers != null);
+    verdict(`F. direct @${handle}`, exact.length ? usable.length > 0 : null,
+      `${exact.length} recent originals · ${usable.length} with age + replies + followers${exact.length ? "" : " (account may simply have no recent original in the provider window)"}`);
+  }
+}
+
 // ---------- E. user-replies-v2 reply payloads ----------
 {
   const uid = globalThis.__uid;
   if (!uid) verdict("E. user-replies-v2", null, "skipped — no user id from D");
   else {
-    const r = await get("user-replies-v2", { user: uid, count: "40" });
+    const r = await get("user-replies-v2", { user: uid, count: "80" });
     if (!r.ok) verdict("E. user-replies-v2", false, `fetch failed (${r.status})`);
     else {
       const ts = parseTimelineTweets(r.data).filter((t) => t.isReply);

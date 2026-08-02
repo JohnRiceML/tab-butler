@@ -37,7 +37,14 @@ const actions = [
 const ev = m.evaluateGrowthExperiment(start.store, start.experiment, actions, NOW);
 ok(ev.ready && ev.decision === "double-down", "a materially stronger comparable window recommends another run");
 ok(ev.taggedPosts === 2 && ev.taggedReplies === 1, "strategy adherence uses actions stamped at ship time");
-ok(ev.reasons.every((r) => r.includes("%")), "explanation exposes measured window changes");
+ok(ev.reasons.every((r) => r.includes("Observed co-movement") && r.includes("%")), "explanation labels measured window changes as observational");
+ok(ev.headline.includes("observed windows"), "directional copy does not claim the strategy caused the result");
+
+const beforeFullWindow = m.evaluateGrowthExperiment(start.store, start.experiment, actions, NOW - DAY);
+ok(!beforeFullWindow.ready && beforeFullWindow.decision === "collect", "even strong interim numbers cannot issue a directional verdict before the full window ends");
+ok(beforeFullWindow.headline.includes("full editorial window"), "the interim state explicitly says why it is still collecting");
+const endedEarly = m.finishGrowthExperiment(start.store, start.experiment.id, actions, NOW - DAY);
+ok(endedEarly.experiments[0].outcome?.decision === "collect" && endedEarly.experiments[0].outcome?.headline.includes("ended early"), "manually ending early freezes a non-directional read");
 
 const settled = m.settleGrowthExperiments(start.store, actions, NOW + DAY);
 ok(settled.settled === 1 && settled.store.experiments[0].status === "completed", "due experiments settle automatically");
@@ -58,6 +65,44 @@ const unexecuted = m.evaluateGrowthExperiment(start.store, start.experiment, [],
 ok(!unexecuted.ready && !unexecuted.executionReady && unexecuted.decision === "collect", "ambient growth cannot award an unexecuted strategy");
 ok(unexecuted.reasons[0].includes("Execution recorded"), "thin execution has an actionable explanation");
 
+let zeroBase = m.freshGrowthStore("me");
+for (let i = 28; i >= 0; i--) {
+  const at = NOW - i * DAY, inCurrent = i <= 14;
+  zeroBase = m.captureGrowthSnapshot(zeroBase, "me", at, day(at), undefined, [{
+    id: `z${i}`, day: day(at), postedAt: at,
+    views: inCurrent ? 40 : 0, likes: inCurrent ? 4 : 0, reposts: 0, replies: 0,
+  }]);
+}
+const zeroStart = m.startGrowthExperiment(zeroBase, "builder", started);
+const zeroActions = [1, 2].map((i) => ({ at: started + i * DAY, experimentId: zeroStart.experiment.id, strategyId: "builder", kind: "post", confirmed: true }));
+const zeroEval = m.evaluateGrowthExperiment(zeroStart.store, zeroStart.experiment, zeroActions, NOW);
+ok(!zeroEval.ready && zeroEval.decision === "collect", "a real zero baseline is preserved but cannot manufacture a percentage verdict");
+ok(zeroEval.reasons.some((r) => r.includes("baseline was zero") && r.includes("0.0 → 40.0")), "zero-baseline copy reports the absolute observed move");
+
+let outlier = m.freshGrowthStore("me");
+const addPost = (s, id, at, views, engagement) => m.captureGrowthSnapshot(s, "me", at, day(at), undefined, [{ id, day: day(at), postedAt: at, views, likes: engagement, reposts: 0, replies: 0 }]);
+outlier = addPost(outlier, "ob1", started - 10 * DAY, 100, 10);
+outlier = addPost(outlier, "ob2", started - 7 * DAY, 100, 10);
+outlier = addPost(outlier, "ob3", started - 3 * DAY, 100, 10);
+outlier = addPost(outlier, "oc1", started + DAY, 100, 10);
+outlier = addPost(outlier, "oc2", started + 5 * DAY, 100, 10);
+outlier = addPost(outlier, "oc3", started + 9 * DAY, 10_000, 1_000);
+const outlierStart = m.startGrowthExperiment(outlier, "community", started);
+const outlierActions = [1, 2].map((i) => ({ at: started + i * DAY, experimentId: outlierStart.experiment.id, strategyId: "community", kind: "post", confirmed: true }));
+const outlierEval = m.evaluateGrowthExperiment(outlierStart.store, outlierStart.experiment, outlierActions, NOW);
+ok(outlierEval.ready && outlierEval.decision === "tighten", "one breakout post cannot by itself crown the editorial bet");
+ok(outlierEval.current.viewsPerPost > outlierEval.baseline.viewsPerPost && outlierEval.reasons.some((r) => r.includes("+0% median views")), "the UI mean remains real while the directional read uses the outlier-resistant median");
+
+let sparseFollowers = m.freshGrowthStore("me");
+for (const [offset, followers] of [[-13, 100], [-12, 101], [1, 102], [2, 104]]) {
+  const at = started + offset * DAY;
+  sparseFollowers = m.captureGrowthSnapshot(sparseFollowers, "me", at, day(at), followers, []);
+}
+const sparseStart = m.startGrowthExperiment(sparseFollowers, "point-of-view", started);
+const sparseActions = Array.from({ length: 8 }, (_, i) => ({ at: started + (i + 1) * DAY, experimentId: sparseStart.experiment.id, strategyId: "point-of-view", kind: "reply", confirmed: true }));
+const sparseEval = m.evaluateGrowthExperiment(sparseStart.store, sparseStart.experiment, sparseActions, NOW);
+ok(!sparseEval.ready && sparseEval.executionReady, "two adjacent follower snapshots do not masquerade as a full-window pace comparison");
+
 let thin = m.freshGrowthStore("me");
 const thinStart = m.startGrowthExperiment(thin, "operator", NOW).experiment;
 const thinEval = m.evaluateGrowthExperiment(thin, thinStart, [], NOW + 3 * DAY);
@@ -69,7 +114,8 @@ const b = m.captureGrowthSnapshot(m.freshGrowthStore("me"), "me", NOW + 1, day(N
 const merged = m.mergeGrowthStores(a, b, "me", NOW + 1);
 ok(merged.days[day(NOW)].followers === 124 && merged.days[day(NOW)].posts.same.views === 25, "cross-tab merge keeps newest follower and max post metrics");
 const zero = m.captureGrowthSnapshot(m.freshGrowthStore("me"), "me", NOW, day(NOW), 10, [{ id: "zero", day: day(NOW), postedAt: NOW, views: 0, likes: 0, reposts: 0, replies: 0 }]);
-ok(zero.days[day(NOW)].posts.zero.views === 0 && m.summarizeGrowthWindow(zero, NOW - 1, NOW + 1).measuredPosts === 1, "zero-view posts remain measured instead of disappearing from the denominator");
+const zeroWindow = m.summarizeGrowthWindow(zero, NOW - 1, NOW + 1);
+ok(zero.days[day(NOW)].posts.zero.views === 0 && zeroWindow.measuredPosts === 1 && zeroWindow.viewsMedianPerPost === 0 && zeroWindow.engagementMedianPerPost === 0, "zero outcomes remain measured in both means and medians instead of disappearing from the denominator");
 ok(m.mergeGrowthStores(a, b, "other", NOW).ownerHandle === "other" && Object.keys(m.mergeGrowthStores(a, b, "other", NOW).days).length === 0, "account switch never leaks growth history");
 
 ok(m.recommendedGrowthStrategy(m.freshGrowthStore("me"), true).id === "proof", "profile proof gap makes proof-led authority the cold-start test");

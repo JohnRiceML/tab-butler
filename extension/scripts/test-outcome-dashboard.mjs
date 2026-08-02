@@ -25,12 +25,14 @@ const settled = (i, over = {}) => ({
   author: `acct${i % 4}`,
   score: 0.4 + (i % 5) * 0.1,
   angle: i % 2 ? "value" : "joke",
+  source: ["feed", "search", "target", "fresh-reach"][i % 4],
+  lane: ["inbound", "continue", "community", "discovery"][i % 4],
   ageMs: i % 2 ? 5 * 60_000 : 2 * 3_600_000, // alternate fresh (<15m) / stale (1-6h)
   followers: 1000,
   norm: `reply number ${i} about shipping`,
   confirmedAt: NOW - (i % 20) * DAY + 60_000,
   confirmation: "rapidapi",
-  outcome: { at: NOW, likes: 2 + (i % 5) * 3, replies: i % 3, tweetId: `t${i}`, frozen: true },
+  outcome: { at: NOW, likes: 2 + (i % 5) * 3, replies: i % 3, views: 100 + (i % 5) * 400, tweetId: `t${i}`, frozen: true },
   ...over,
 });
 
@@ -38,7 +40,7 @@ const settled = (i, over = {}) => ({
 {
   const vm = m.buildOutcomeDashboard([], NOW);
   ok(vm.state === "learning", "empty: state is learning");
-  ok(vm.angles.length === 0 && vm.timing.length === 0 && vm.accountsTop.length === 0, "empty: no rows are invented");
+  ok(vm.angles.length === 0 && vm.sources.length === 0 && vm.lanes.length === 0 && vm.timing.length === 0 && vm.accountsTop.length === 0, "empty: no rows are invented");
   ok(vm.fit.kind === "waiting" && vm.fit.need === ls.FIT_CORR_MIN_N, "empty: fit read waits, need = imported FIT_CORR_MIN_N");
   ok(vm.missing.some((s) => s.includes(`of ${ls.GLOBAL_THIN} replies logged`)), "empty: missing names the GLOBAL_THIN gate");
   ok(vm.verification.attempted === 0, "empty: verification summary is zeroed");
@@ -76,11 +78,17 @@ const settled = (i, over = {}) => ({
   ok(vm.angles.length === 2, "rich: both angles cleared N_MIN_OUT");
   ok(vm.angles.every((a) => a.n >= ls.N_MIN_OUT), "rich: every angle row carries n at/above the gate");
   ok(vm.angles.every((a) => Number.isFinite(a.relPct)), "rich: angle rows carry a finite rel-vs-own-mean");
+  ok(vm.sources.length === 4 && vm.sources.every((c) => c.n >= ls.N_MIN_OUT), "rich: discovery-source cohorts are visible only after the settled min-N gate");
+  ok(vm.lanes.length === 4 && vm.lanes.every((c) => c.n >= ls.N_MIN_OUT), "rich: recommendation-lane cohorts are visible only after the settled min-N gate");
   ok(vm.timing.length >= 2 && vm.timing.every((t) => t.n >= ls.N_MIN_OUT), "rich: timing buckets gate at N_MIN_OUT");
   ok(vm.timing.every((t) => t.relPct === null || Number.isFinite(t.relPct)), "rich: timing rel is finite or null, never NaN");
   ok(vm.ageGradient != null && vm.ageGradient.freshN >= ls.N_MIN_OUT && vm.ageGradient.staleN >= ls.N_MIN_OUT, "rich: gradient only with both sides gated");
   ok(vm.fit.kind === "measured" && vm.fit.n >= ls.FIT_CORR_MIN_N, "rich: fit read is measured with its n");
   ok(typeof vm.fit.rho === "number" && vm.fit.rho >= -1 && vm.fit.rho <= 1, "rich: rho is a real correlation");
+  ok(vm.fit.kind === "measured" && typeof vm.fit.viewRho === "number" && vm.fit.viewN >= ls.FIT_CORR_MIN_N, "rich: distribution alignment is surfaced separately when reply views clear the gate");
+  ok(vm.fit.kind === "measured" && vm.fit.tiltEligible && !vm.fit.learningEnabled && !vm.fit.tilting, "rich: an eligible tilt is still reported as inactive while the learning switch is off");
+  const enabled = m.buildOutcomeDashboard(sent, NOW, true);
+  ok(enabled.fit.kind === "measured" && enabled.fit.learningEnabled && enabled.fit.tiltEligible && enabled.fit.tilting, "rich: the dashboard reports an actual tilt only when both the switch and evidence gate are on");
   ok(vm.accountsTop.length > 0 && vm.accountsTop.every((a) => a.n > 0), "rich: account rows carry reply counts");
   ok(vm.accountsTop.every((a) => a.tier !== "measured" || a.nOut >= ls.N_MIN_OUT), "rich: measured tier only with enough settled outcomes");
   ok(vm.missing.length === 0 || !vm.missing.some((s) => s.includes("replies logged")), "rich: global-gate line gone once passed");

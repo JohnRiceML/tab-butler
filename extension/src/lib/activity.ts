@@ -60,8 +60,8 @@ export function pickCallout(ctx: {
   freeTier?: boolean; // true only when the user has SET their tier to free (unset = unknown = silence)
 }): Callout {
   if (ctx.easeoff) return {
-    text: "Ease off — Goobi's conservative hourly guard is reached. Scanning is paused so you can take a real break (⟳ Rescan overrides).",
-    why: "Volume/burst heuristics are the corroborated spam trigger class (2026 shadowban guides); the chain is never worth tripping them.",
+    text: "Ease off — Goobi's adaptive pace pressure is high. It will decay on its own; take a break, use ⟳ Rescan once, or reset the local meter if its baseline is stale.",
+    why: "Goobi's local adaptive product guard—not a published X limit. A reset changes only Goobi's baseline; X activity and limits are unaffected.",
     kind: "prior",
   };
   if (ctx.trend === "cooling") return {

@@ -17,7 +17,7 @@ Two grounding files this spec maps to, exactly as-is:
 - Animation keys: the `STATES` object in `mascot-lab.html` (every key below is one of these — no new art required for v1).
 - Signals: `reputationStatus` (`reply-hygiene.ts`), `replyLog`/`repliesToday()`/`recordSentReply` (`x-copilot.ts`), `getData()` mem%/idleCount (`popup.ts`).
 
-Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59,46)`) only when genuinely unwell. We reuse that exactly: **the only thing that reddens Goobi is the ease-off pace** — red = "you reached Goobi's conservative hourly guard," nothing else. This keeps red meaningful without pretending X publishes a safe line.
+Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59,46)`) only when genuinely unwell. We reuse that exactly: **the only thing that reddens Goobi is adaptive ease-off pressure**. This keeps red meaningful without pretending X publishes a safe line.
 
 ---
 
@@ -25,14 +25,14 @@ Body color note: Goobi reddens (`bodyColor` heat lerp toward `HOT` = `rgb(210,59
 
 Every row maps a REAL, already-computed value to a mascot-lab animation key. "NEW" flags a signal that needs instrumenting before that row can ship (deferred to v2 — see §5).
 
-### A. X reply pace — `reputationStatus(repliesThisHour)` (`reply-hygiene.ts`)
-This is the spine. Thresholds are conservative Goobi product guardrails, not X limits (`REPLY_SOFT_PER_HOUR=6`, `REPLY_HARD_PER_HOUR=10`); X publishes no guaranteed safe hourly reply rate.
+### A. X reply pace — `replyPaceStatus(events, now, resetAt)` (`reply-hygiene.ts`)
+This is the spine. Thresholds are Goobi product pressure points, not X limits (`REPLY_PACE_CAUTION=8`, `REPLY_PACE_EASEOFF=12`); warm conversation counts less and activity decays after 15 minutes.
 
 | Real signal & threshold | Goobi mood | Animation key(s) | Why (honest-mirror) |
 |---|---|---|---|
-| `repliesThisHour < 20` → `healthy` | Content / calm | `idle`, `breathe`, `blink`, `float` | "You're pacing like a person." The default good state. |
-| `repliesThisHour 6–9` → `caution` | Mildly woozy, slowing down | `sleepy`, `sway` | Visibly easing — eyelids drop. NOT alarmed; a gentle "let's slow down." |
-| `repliesThisHour ≥ 30` → `easeoff` | Worn out, needs a rest (+ red tint) | `dizzy` (idle), `panic` only on the *crossing beat* | The "Goobi looks exhausted — give it a rest" moment. Red body via the existing heat lerp. |
+| `pressure < 8` → `healthy` | Content / calm | `idle`, `breathe`, `blink`, `float` | Default good state. |
+| `pressure 8–11.9` → `caution` | Mildly woozy, slowing down | `sleepy`, `sway` | Visibly easing—not alarmed. |
+| `pressure ≥ 12` → `easeoff` | Worn out, needs a rest (+ red tint) | `dizzy` (idle), `panic` only on the *crossing beat* | The "Goobi looks exhausted—give it a rest" moment. |
 | **You then PAUSE while at caution/easeoff** (`setPaused(true)`) | **Proud / relieved** | `love` → settle to `sleep` | THE anti-dark-pattern keystone: the happiest pace-related reaction is earned by *stopping*, not replying. |
 
 ### B. Replies sent today + streak — `replyLog.daily` / `repliesToday()` / `recordSentReply`
@@ -77,8 +77,8 @@ Goobi resolves ONE mood per render from the live signals, using a fixed **preced
 
 1. **Paused-and-proud** (transient, ~6s after `setPaused(true)` while pace was caution/easeoff) → `love`→`sleep`.
    *Outranks everything*: pausing when hot is the single best thing the user can do, so it must beat a happy streak, a fresh reply, everything.
-2. **Ease-off** (`repliesThisHour ≥ 30`) → `dizzy` + red. The safety signal outranks all positive states — you can't be "happy" while your account is at risk. (A happy streak does NOT override this; that's the key anti-dark-pattern guard.)
-3. **Caution** (`repliesThisHour 6–9`) → `sleepy`.
+2. **Ease-off** (`pressure ≥ 12`) → `dizzy` + red. The safety signal outranks all positive states.
+3. **Caution** (`pressure 8–11.9`) → `sleepy`.
 4. **Overwhelmed** (`mem.pct > 85` OR `idleCount ≥ 25`) → `shake`→`dizzy`.
 5. **Neglect-asleep** (`lastOpenedAt` ≥ 2d) → `sleep`. (Below tool-state so a freshly-opened cluttered/hot session still reads correctly; neglect only surfaces once nothing more urgent is true.)
 6. **Transient reaction beats** (one-shots from §3: reply-counted `happy`, tidy-up `cheer`, first-reply `wave`, return-from-neglect `wave`→`happy`). These play for their duration, then fall back to the ambient mood.
@@ -102,9 +102,9 @@ Each beat names the trigger (real code hook), Goobi's reaction (animation key), 
 
 | Beat | Trigger (existing hook) | Goobi does | Rule honored |
 |---|---|---|---|
-| **Reply confirmed** | `recordSentReply` fires after posted/replied confirmation AND pace `healthy` | `happy` one-shot (~1.4s) → ambient | Earned + calm; small so it never reads as "do it again." |
-| **Reply confirmed while hot** | same, but pace `caution`/`easeoff` | **No celebration** — holds `sleepy`/`dizzy` | Refuses to reward volume past the safe line. |
-| **Hitting ease-off** | `repliesThisHour` crosses 30 | `panic` for ~1.5s (the crossing beat) → settle to `dizzy` + red | Honest alarm at the line, then a steady tired hold (not endless panic). |
+| **Reply confirmed** | `recordSentReply` fires after posted/replied confirmation while pace is `healthy` or `caution` | `happy` one-shot (~1.4s) → ambient | Earned + calm; caution is visible but not treated like a hard stop. |
+| **Reply confirmed while hot** | same, but pace is `easeoff` | **No celebration** — holds `dizzy` | Refuses to reward activity past Goobi's local ease-off line. |
+| **Hitting ease-off** | `currentReplyPace().level` enters `easeoff` at 12 pressure | `panic` for ~1.5s (the crossing beat) → settle to `dizzy` + red | Honest alarm at the line, then a steady tired hold (not endless panic). |
 | **Pausing** | `setPaused(true)` while caution/easeoff | `love` → `sleep` ("good, rest now") | The healthiest action gets the warmest reaction. Tenet 1 keystone. |
 | **Tidy-up** | tabs archived (`reclaim`/`apply-rec`, `archivedCount` rose) | `cheer` one-shot, shadow `dance` | Reward lands on the genuinely useful action. |
 | **All caught up** | dock footer state `n>0` "You're all caught up" / no pending spots | calm `float` + a single `blink` | Quiet contentment, not a "keep going" nudge. |
@@ -124,13 +124,13 @@ Short, warm, lowercase-friendly, never naggy. One line per beat; rotate within a
 - "nice and steady. this is the pace that keeps your reach safe."
 - "all calm here. you're replying like a person, not a bot."
 
-**Caution (6–9/hr)**
-- "let's ease up a touch — you're getting close to x's pace line."
+**Caution (8–11.9 pressure)**
+- "let's ease up a touch — local pace pressure is building."
 - "good momentum. maybe space the next few out a bit?"
 
-**Ease-off (≥10/hr)**
-- "okay, i'm wiped — that's enough replies for this hour. let's take a real breather."
-- "time to rest. nothing good happens past 30 an hour."
+**Ease-off (≥12 pressure)**
+- "okay, i'm wiped — let's take a real breather. this will cool down."
+- "time to rest — or reset my local meter if the baseline is stale."
 
 **Pausing (the proud beat)**
 - "good call. resting now — your reach thanks you."
@@ -174,8 +174,8 @@ Short, warm, lowercase-friendly, never naggy. One line per beat; rotate within a
 
 v1 mood set (6 moods + reaction beats):
 1. **Content** — pace healthy + tabs tidy → `idle`/`breathe`/`blink`/`float` (ambient rotation).
-2. **Easing** (caution) — `repliesThisHour 6–9` → `sleepy`/`sway`.
-3. **Worn out** (ease-off) — `repliesThisHour ≥ 30` → `dizzy` + red, `panic` on the crossing beat.
+2. **Easing** (caution) — pressure 8–11.9 → `sleepy`/`sway`.
+3. **Worn out** (ease-off) — pressure ≥12 → `dizzy` + red, `panic` on the crossing beat.
 4. **Proud-to-pause** — `setPaused` while hot → `love`→`sleep`. *(highest precedence)*
 5. **Buried** — `mem.pct > 85` OR `idleCount ≥ 25` → `shake`→`dizzy`.
 6. **Reaction beats** — reply-counted `happy`, tidy-up `cheer`, all-caught-up `float`+`blink`, click-to-pet squish (+ status line).
@@ -199,9 +199,9 @@ Implementation shape (suggested, in scope for the engineer):
 
 **Homes (v1):**
 - **Header, always** — the existing `#goobi-face` slot in `popup.ts` (mounted via `mountGoobi`). This is Goobi's primary home and where most moods render. He reflects whatever the popup just computed in `getData()` (mem/idle + replyStats + safety).
-- **On-page x.com dock** — the collapsed dock blob (`"✦ Goobi"` button / the avatar-stack pill in `renderDock`). On x.com, Goobi mirrors the **live pace** specifically (this is where ease-off/caution/proud-to-pause matter most, right next to the pace chip). Reuse the dock's existing `reputationStatus(rhh)` read — no new query.
+- **On-page x.com dock** — the collapsed dock blob (`"✦ Goobi"` button / the avatar-stack pill in `renderDock`). On x.com, Goobi mirrors the **live pace** specifically (this is where ease-off/caution/proud-to-pause matter most, right next to the pace chip). Reuse the dock's existing `currentReplyPace()` read — no new query.
   - Keep it *quiet*: Goobi in the dock animates subtly and never blocks the reply work. The pace chip stays the precise readout; Goobi is the at-a-glance feeling next to it.
 
 **Care-loop scope (v1):** **none of the chore loop.** No needs to feed, no bars to refill, no timers that punish absence. The "loop" is entirely passive + honest: Goobi reflects real state, reacts to real moments, and can be petted for reassurance. The only thing resembling a care timer is the (optional v1.1) neglect slope, which is soft, terminal-free, and silent. This is a deliberate KISS choice — a status-display-with-feelings, not a needy game.
 
-**One-line summary for the implementing engineer:** build a pure `goobiMood()` resolver over the values already in `getData()` + `replyLog`/`reputationStatus`, map its output to an existing `STATES` key, render it in the header (always) and the x.com dock (pace-focused), and fire the four reaction one-shots (`happy` on reply, `cheer` on tidy, `love`→`sleep` on pause-while-hot, squish on pet) at the call sites that already exist. Ship that; defer the neglect timestamp and streak marker to the first follow-up.
+**One-line summary for the implementing engineer:** build a pure `goobiMood()` resolver over the values already in `getData()` + `replyLog`/`replyPaceStatus`, map its output to an existing `STATES` key, render it in the header (always) and the x.com dock (pace-focused), and fire the four reaction one-shots (`happy` on reply, `cheer` on tidy, `love`→`sleep` on pause-while-hot, squish on pet) at the call sites that already exist. Ship that; defer the neglect timestamp and streak marker to the first follow-up.

@@ -1,15 +1,19 @@
 /**
- * Unit test for the warm-up/momentum model (momentum.ts). Transpiled with esbuild +
+ * Unit test for the warm-up/momentum model (momentum.ts). Bundled with esbuild +
  * imported from a data URL. Run: node scripts/test-momentum.mjs
  */
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, "../src/lib/momentum.ts"), "utf8");
-const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
+const js = esbuild.buildSync({
+  entryPoints: [join(here, "../src/lib/momentum.ts")],
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "browser",
+}).outputFiles[0].text;
 const mod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 const { computeMomentum } = mod;
 
@@ -26,6 +30,9 @@ const hot = computeMomentum({ repliesToday: 8, postedToday: 2, replyStreak: 7, m
 ok(hot.state === "overheating", "easeoff -> overheating regardless of activity");
 ok(hot.score <= 60, "overheating score is capped low, not 100");
 ok(hot.color === "#d6604a", "overheating is red");
+ok(/adaptive pace pressure reached 12/i.test(hot.cue), "ease-off copy uses the shared adaptive pressure guardrail");
+ok(/does not reset X/i.test(hot.cue), "ease-off copy scopes the local reset honestly");
+ok(!/30\+|reads as automated/i.test(hot.cue), "ease-off copy makes no unsupported automation claim");
 
 // Peak is reachable ONLY at a healthy pace.
 const peak = computeMomentum({ repliesToday: 8, postedToday: 2, replyStreak: 7, minsSinceLast: 1, repLevel: "healthy" });
@@ -38,7 +45,9 @@ const caution = computeMomentum({ repliesToday: 8, postedToday: 2, replyStreak: 
 ok(caution.state !== "peak" && caution.state !== "overheating", "caution sits below peak (inflow)");
 ok(caution.score <= 74, "caution capped below the peak band");
 ok(caution.color === "#e89a3c", "caution is the chip's amber, not the healthy green");
-ok(/ease off/i.test(caution.cue), "caution cue nudges the pace down");
+ok(/starts at 8 pressure/i.test(caution.cue), "caution copy uses the shared adaptive pressure guardrail");
+ok(/older activity fades/i.test(caution.cue), "caution copy explains dynamic recovery");
+ok(/slow down/i.test(caution.cue), "caution cue nudges the pace down");
 
 // Volume saturates — more replies past the target does NOT raise the score.
 const at8 = computeMomentum({ ...idle, repliesToday: 8, minsSinceLast: 1 }).score;

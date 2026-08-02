@@ -1,6 +1,6 @@
 /**
- * The Twttr request governor: a durable monthly budget meter, an 8/sec token
- * bucket (under the 10/sec hard limit), graceful degradation (throttle expensive classes first, never starve
+ * The Twttr request governor: a durable local UTC-month safety meter, an 8/sec token
+ * bucket, provider quota/rate-header awareness, graceful degradation (throttle expensive classes first, never starve
  * /user), and in-flight coalescing — all wrapping the single HTTP chokepoint in
  * the service worker. Lives in the worker (not the content script) so the budget
  * survives navigation and is shared across every x.com tab.
@@ -9,13 +9,27 @@
  * live in twttr-policy.ts), so repeated identical reads do not spend requests.
  */
 import { TWTTR_CLASS, TWTTR_BUDGET, classForPath, degradeMode, canFetch, monthKeyOf,
+  providerRetryAt, providerUsedFraction,
   type TwttrCache, cacheExpiry, cacheFresh, pruneCache, TWTTR_CACHE_MAX_ENTRY } from "./twttr-policy";
 
 const METER_KEY = "twttrMeter";
 const CACHE_KEY = "twttrCache";
 
-export interface TwttrMeter { monthKey: string; requests: number; bytes: number; }
+export interface TwttrMeter {
+  /** Local safety estimate, rolled by UTC calendar month; not the provider billing cycle. */
+  monthKey: string; requests: number; bytes: number;
+  /** Plan-specific values observed from RapidAPI's last response. */
+  providerRequestLimit?: number; providerRequestsRemaining?: number;
+  providerRateLimit?: number; providerRateRemaining?: number; providerRateResetAt?: number;
+  providerObservedAt?: number;
+}
 export interface GovResult { ok: boolean; status?: number; data?: unknown; error?: string }
+
+interface ProviderSnapshot {
+  providerRequestLimit?: number; providerRequestsRemaining?: number;
+  providerRateLimit?: number; providerRateRemaining?: number; providerRateResetAt?: number;
+  providerObservedAt?: number;
+}
 
 async function loadMeter(now: number): Promise<TwttrMeter> {
   const m = (await chrome.storage.local.get(METER_KEY))[METER_KEY] as TwttrMeter | undefined;
@@ -28,12 +42,13 @@ async function loadMeter(now: number): Promise<TwttrMeter> {
 // is logged but NEVER rejects the chain — otherwise the rejection would poison
 // every later link and make governedFetch's `await bumpMeter` throw on success.
 let meterChain: Promise<void> = Promise.resolve();
-async function bumpMeter(now: number, bytes: number): Promise<void> {
+async function bumpMeter(now: number, bytes: number, provider?: ProviderSnapshot): Promise<void> {
   meterChain = meterChain.then(async () => {
     try {
       const m = await loadMeter(now);
       m.requests += 1;
       m.bytes += Math.max(0, bytes);
+      if (provider) for (const [key, value] of Object.entries(provider)) if (value != null) (m as unknown as Record<string, number>)[key] = value;
       await chrome.storage.local.set({ [METER_KEY]: m });
     } catch (e) {
       console.warn("[goobi] twttr meter write failed", e);
@@ -64,8 +79,8 @@ function writeCache(url: string, cls: ReturnType<typeof classForPath>, data: unk
 }
 
 // ---- token bucket (in-memory; resets on SW restart, which is fine for a burst guard) ----
-// Start nearly empty (1) rather than full, so a cold-start flood can't exceed the
-// refill rate in the first second (~RATE/sec) and stay under the 10/sec hard limit.
+// Start nearly empty (1) rather than full, so a cold-start flood cannot burst above
+// the configured local smoothing rate in its first second.
 let tokens: number = 1;
 let lastRefill = Date.now();
 function takeToken(): Promise<void> {
@@ -83,6 +98,29 @@ function takeToken(): Promise<void> {
 
 // ---- coalescing: identical concurrent requests share one fetch ----
 const inflight = new Map<string, Promise<GovResult>>();
+
+// Provider-wide circuit: subscription/rate failures affect every endpoint, so retrying a dozen
+// different URLs only creates noise. It is memory-only and keyed to the credential; changing the
+// key immediately clears it. Successful responses clear stale transient circuits.
+let providerCircuit: { key: string; until: number; status: number; error: string } | undefined;
+function headerNumber(headers: Headers, name: string): number | undefined {
+  const value = Number(headers.get(name));
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function providerSnapshot(headers: Headers, now: number): ProviderSnapshot {
+  const reset = headers.get("x-ratelimit-reset");
+  const providerRequestLimit = headerNumber(headers, "x-ratelimit-requests-limit");
+  const providerRequestsRemaining = headerNumber(headers, "x-ratelimit-requests-remaining");
+  return {
+    providerRequestLimit,
+    providerRequestsRemaining,
+    providerRateLimit: headerNumber(headers, "x-ratelimit-limit"),
+    providerRateRemaining: headerNumber(headers, "x-ratelimit-remaining"),
+    providerRateResetAt: reset ? providerRetryAt(reset, now) : undefined,
+    // Do not refresh an old plan-quota observation when this response omitted plan headers.
+    providerObservedAt: providerRequestLimit != null || providerRequestsRemaining != null ? now : undefined,
+  };
+}
 
 /** Governed Twttr fetch: budget/degradation gate -> 8/sec token bucket -> one
  *  HTTP call -> meter the real bytes. `intent` marks a user-initiated call, which
@@ -112,9 +150,18 @@ export async function governedFetch(host: string, key: string, path: string, que
   // network response is identical and they safely share one flight regardless of intent.
   const gateNow = Date.now();
   const gateMeter = await loadMeter(gateNow);
-  const gateUsedFrac = Math.max(gateMeter.bytes / TWTTR_BUDGET.BYTES, gateMeter.requests / TWTTR_BUDGET.REQUESTS);
+  const gateUsedFrac = Math.max(
+    gateMeter.bytes / TWTTR_BUDGET.BYTES,
+    gateMeter.requests / TWTTR_BUDGET.REQUESTS,
+    providerUsedFraction(gateMeter.providerRequestLimit, gateMeter.providerRequestsRemaining, gateMeter.providerObservedAt, gateNow),
+  );
   const gateMode = degradeMode(gateUsedFrac);
   if (!canFetch(tier, gateMode, intent)) return { ok: false, status: 0, error: `budget-${gateMode}` };
+
+  if (providerCircuit?.key !== key) providerCircuit = undefined;
+  if (providerCircuit && gateNow < providerCircuit.until) {
+    return { ok: false, status: providerCircuit.status, error: `provider-backoff:${providerCircuit.error}` };
+  }
 
   const existing = inflight.get(ckey);
   if (existing) return existing; // permitted duplicate callers coalesce by actual network URL
@@ -124,22 +171,42 @@ export async function governedFetch(host: string, key: string, path: string, que
 
     await takeToken();
     try {
-      const res = await fetch(url, { headers: { "Content-Type": "application/json", "x-rapidapi-key": key, "x-rapidapi-host": host } });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: controller.signal, headers: { "Content-Type": "application/json", "x-rapidapi-key": key, "x-rapidapi-host": host } });
+      } finally { clearTimeout(timeout); }
       const text = await res.text();
       const bytes = Number(res.headers.get("content-length")) || text.length;
-      await bumpMeter(now, bytes);
+      const provider = providerSnapshot(res.headers, Date.now());
+      await bumpMeter(now, bytes, provider);
       if (!res.ok) {
         const detail = text.replace(/\s+/g, " ").trim().slice(0, 160);
+        const retryHeader = res.headers.get("retry-after") || res.headers.get("x-ratelimit-reset");
+        if (res.status === 401 || res.status === 402 || res.status === 403) {
+          providerCircuit = { key, until: Date.now() + TWTTR_BUDGET.FAIL_TTL, status: res.status, error: detail || `HTTP ${res.status}` };
+        } else if (res.status === 429) {
+          providerCircuit = { key, until: providerRetryAt(retryHeader, Date.now()), status: 429, error: detail || "rate limited" };
+        } else if (res.status >= 500) {
+          providerCircuit = { key, until: Date.now() + 30_000, status: res.status, error: detail || `HTTP ${res.status}` };
+        }
         console.warn("[goobi] twttr", path, res.status, detail);
         return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
       }
+      // The plan rate window can be exhausted on an otherwise successful final request.
+      if (provider.providerRateRemaining === 0) {
+        providerCircuit = { key, until: provider.providerRateResetAt ?? Date.now() + 60_000, status: 429, error: "provider rate window exhausted" };
+      } else providerCircuit = undefined;
       try {
         const data = JSON.parse(text);
         if (useCache) await writeCache(url, cls, data, bytes, now); // make the fresh response visible before another narrow caller can miss it
         return { ok: true, data };
       } catch { return { ok: false, status: res.status, error: "bad-json" }; }
     } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      const message = (e as Error).name === "AbortError" ? "provider request timed out" : (e as Error).message;
+      providerCircuit = { key, until: Date.now() + 30_000, status: 0, error: message };
+      return { ok: false, status: 0, error: message };
     }
   })();
 

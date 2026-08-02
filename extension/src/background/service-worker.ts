@@ -342,7 +342,7 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
 /** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
  *  search). The host is fixed (CONFIG.TWTTR_HOST); only the BYO key lives in
  *  storage (popup settings) and is never bundled. Routed through the governor
- *  (monthly budget meter + 8/sec token bucket + degradation + coalescing). */
+ *  (local safety meter + provider quota headers + 8/sec smoothing + degradation + coalescing). */
 async function twttrFetch(path: string, query?: Record<string, string>, intent = false): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
   if (!allowedTwttrPath(path)) return { ok: false, error: "endpoint-not-allowed" };
   const store = await chrome.storage.local.get(CONFIG.TWTTR_KEY_KEY);

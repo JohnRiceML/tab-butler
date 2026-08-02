@@ -9,6 +9,7 @@ import * as esbuild from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/learn-stats.ts"), "utf8");
+const copilotSrc = readFileSync(join(here, "../src/content/x-copilot.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const m = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 
@@ -53,10 +54,24 @@ const DAY = 86_400_000;
 
 // ---- Tier-2 measured score: undefined until N_MIN_OUT settled outcomes ----
 {
-  const three = []; for (let i = 0; i < 3; i++) three.push({ at: NOW - i * DAY, author: "acct3", score: 0.7, followers: 1000, outcome: { at: NOW, likes: 10, replies: 2 } });
+  const three = []; for (let i = 0; i < 3; i++) three.push({ at: NOW - i * DAY, author: "acct3", score: 0.7, followers: 1000, outcome: { at: NOW, likes: 10, replies: 2, frozen: true } });
   ok(m.aggregateAccounts(three, NOW).accounts.acct3.score === undefined, "tier2: 3 outcomes < N_MIN_OUT → no measured score");
-  const four = []; for (let i = 0; i < 4; i++) four.push({ at: NOW - i * DAY, author: "acct4", score: 0.7, followers: 1000, outcome: { at: NOW, likes: 10, replies: 2 } });
+  const four = []; for (let i = 0; i < 4; i++) four.push({ at: NOW - i * DAY, author: "acct4", score: 0.7, followers: 1000, outcome: { at: NOW, likes: 10, replies: 2, frozen: true } });
   ok(typeof m.aggregateAccounts(four, NOW).accounts.acct4.score === "number", "tier2: 4 settled outcomes → a measured score appears");
+  const provisional = four.map((r) => ({ ...r, outcome: { ...r.outcome, frozen: false } }));
+  const provisionalAgg = m.aggregateAccounts(provisional, NOW).accounts.acct4;
+  ok(provisionalAgg.nOut === 0 && provisionalAgg.score === undefined, "tier2: provisional counts never unlock a settled account score");
+}
+
+// ---- cross-tab outcome merge: proof and counters can advance, never regress ----
+{
+  const settled = { at: NOW, likes: 10, replies: 2, views: 500, tweetId: "reply-1", authorReplied: true, frozen: true };
+  const stale = { at: NOW - DAY, likes: 4, replies: 1, reposts: 3, frozen: false };
+  const merged = m.mergeReplyOutcomes(settled, stale);
+  ok(merged.at === NOW && merged.likes === 10 && merged.replies === 2 && merged.views === 500 && merged.reposts === 3, "outcome merge preserves newest/max counters while filling missing fields");
+  ok(merged.tweetId === "reply-1" && merged.authorReplied === true && merged.frozen === true, "stale outcome cannot erase tweet proof, reply-back truth, or thaw a frozen record");
+  const advanced = m.mergeReplyOutcomes(merged, { at: NOW + DAY, likes: 12, replies: 2, views: 700, reposts: 2, tweetId: "reply-1" });
+  ok(advanced.at === NOW + DAY && advanced.likes === 12 && advanced.views === 700 && advanced.reposts === 3 && advanced.frozen === true, "new observations advance counters without regressing prior maxima or frozen state");
 }
 
 // ---- decay over an elapsed gap ----
@@ -98,6 +113,8 @@ const DAY = 86_400_000;
   const matches = m.matchOutcomes(fetched, sent);
   ok(matches.length === 1 && matches[0].index === 0 && matches[0].likes === 5, "match: a fetched reply credits the right stored reply's outcome");
   ok(m.matchOutcomes([{ text: "nothing in common whatsoever", at: NOW }], sent).length === 0, "match: a non-match is dropped, never guessed");
+  const missing = m.matchOutcomes([{ text: "ship daily and measure what sticks", at: NOW, views: 20 }], sent)[0];
+  ok(missing.likes === undefined && missing.replies === undefined && missing.views === 20, "match: omitted provider counts stay missing instead of becoming false zeroes");
 }
 
 // ---- RapidAPI verification: attempts stay pending until an actual reply match exists ----
@@ -125,7 +142,7 @@ const DAY = 86_400_000;
   const MIN = 60_000;
   const corr = Array.from({ length: 14 }, (_, i) => ({
     at: NOW - ((i % 5) + 1) * 86_400_000, author: "a", angle: "value", ageMs: 5 * MIN, followers: 1000, score: i / 14,
-    outcome: { at: NOW, likes: 2, replies: 0, views: i * 400 },
+    outcome: { at: NOW, likes: 2, replies: 0, views: i * 400, frozen: true },
   }));
   const fl = m.learnFeatures(corr, NOW);
   ok(fl.fitCorrViews > 0.8, "fitCorrViews measures fit-vs-DISTRIBUTION when views are tracked");
@@ -157,7 +174,7 @@ const DAY = 86_400_000;
   m.fillAuthorReplied([{ at: NOW - 2 * HR, handle: "fay", kind: "reply" }], sent);
   ok(m.fillAuthorReplied([{ at: NOW - 1 * HR, handle: "fay", kind: "reply" }], sent) === 0, "already-credited records aren't re-marked");
   // aggregateAccounts surfaces the measured count
-  const reps = [mk("gil", NOW - 2 * HR, { outcome: { at: NOW, likes: 1, replies: 0, authorReplied: true } }), mk("gil", NOW - 5 * HR)];
+  const reps = [mk("gil", NOW - 2 * HR, { outcome: { at: NOW, likes: 1, replies: 0, authorReplied: true, frozen: true } }), mk("gil", NOW - 5 * HR)];
   const agg = m.aggregateAccounts(reps, NOW);
   ok(agg.accounts["gil"].backs === 1, "aggregate carries the measured engaged-back count per account");
   // HONESTY GUARD: a join-only outcome (authorReplied, no counts) must count as a "back" but NEVER
@@ -175,7 +192,7 @@ const DAY = 86_400_000;
   const MIN = 60_000;
   const rec = (angle, ageMs, likes, score, daysAgo = 1) => ({
     at: NOW - daysAgo * 86_400_000, author: "a", angle, ageMs, followers: 1000, score,
-    outcome: { at: NOW, likes, replies: 0 },
+    outcome: { at: NOW, likes, replies: 0, frozen: true },
   });
   // "ask" replies consistently outperform "value" ones
   const sent = [
@@ -185,6 +202,18 @@ const DAY = 86_400_000;
   const fl = m.learnFeatures(sent, NOW);
   ok(fl.nOut === 12 && fl.angles.length === 2, "both angles clear the min-N gate");
   ok(fl.angles[0].angle === "ask" && fl.bestAngle === "ask", "the measured-best angle wins the star");
+  const provisional = sent.map((r) => ({ ...r, outcome: { ...r.outcome, frozen: false } }));
+  const provisionalFl = m.learnFeatures(provisional, NOW);
+  ok(provisionalFl.nOut === 0 && provisionalFl.angles.length === 0 && provisionalFl.bestAngle === undefined, "provisional outcomes cannot select the learned default angle");
+  const cohorts = sent.slice(0, 8).map((r, i) => ({
+    ...r,
+    source: i < 4 ? "feed" : "search",
+    lane: i < 4 ? "community" : "discovery",
+    outcome: { ...r.outcome, likes: i < 4 ? 2 : 30 },
+  }));
+  const cohortFl = m.learnFeatures(cohorts, NOW);
+  ok(cohortFl.sources.length === 2 && cohortFl.sources[0].key === "search" && cohortFl.sources.every((c) => c.n >= m.N_MIN_OUT), "settled discovery-source cohorts are min-N gated and ranked");
+  ok(cohortFl.lanes.length === 2 && cohortFl.lanes[0].key === "discovery" && cohortFl.lanes.every((c) => c.n >= m.N_MIN_OUT), "settled recommendation-lane cohorts are min-N gated and ranked");
   // min-N gate: 3 outcomes never rank
   const thin = m.learnFeatures([...Array.from({ length: 3 }, (_, i) => rec("joke", 5 * MIN, 50, 0.5, i + 1))], NOW);
   ok(thin.angles.length === 0 && thin.bestAngle === undefined, "a 3-outcome angle stays unranked (min-N gate)");
@@ -247,10 +276,14 @@ const DAY = 86_400_000;
     outcome: { at: NOWR, likes: 5, replies: 1, reposts, frozen: true } }];
   const withR = m.aggregateAccounts(mk(3), NOWR).accounts.a;
   const withoutR = m.aggregateAccounts(mk(0), NOWR).accounts.a;
-  ok(withR.nOut === 1 && withoutR.nOut === 1, "repost fixture: both outcomes measured");
+ok(withR.nOut === 1 && withoutR.nOut === 1, "repost fixture: both outcomes measured");
   // score is undefined below N_MIN_OUT, so compare the raw obs path via muObs instead
   ok(m.aggregateAccounts(mk(3), NOWR).muObs > m.aggregateAccounts(mk(0), NOWR).muObs, "reposts now raise measured fit (W_REPOST, was silently dropped)");
 }
+
+ok(copilotSrc.includes('path: "user-replies-v2", query: { user: restId, count: "80" }'), "reply verification requests the expanded 80-row recent window");
+ok(copilotSrc.includes("if (text.trim()) scheduleReplyVerification()"), "manual text-bearing reply confirmations enter the RapidAPI verification path");
+ok(copilotSrc.includes("pending.outcome?.tweetId ? 12 * HOUR_MS : VERIFY_RETRY_MS"), "proven provisional outcomes use a bounded twelve-hour settlement refresh cadence");
 
 console.log(fail === 0 ? `\n✓ learn-stats: ${pass} assertions passed` : `\n✗ learn-stats: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

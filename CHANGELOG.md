@@ -4,6 +4,34 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Fresh Reach deep scan + provider-aware measurement:** expanded each manual hunt to 12 due
+  account checks and up to 24 pre-Claude post candidates (two per author across two bounded scorer
+  batches), then keeps only the strongest strict content × opening result per author. Find people
+  now has an owner-scoped private max-12 massive-account watchlist with four rotating direct-check
+  lanes, while measured winners and evidence-backed massive exploration remain separately bounded.
+  Fame alone and authors replied to in the last day cannot force a reserved slot. Public
+  distribution evidence decays on a 14-day half-life, strong-opening yield counts only unique posts
+  from direct successful checks, cross-tab radar updates merge monotonically, and a query-specific
+  Latest failure can use saved accounts without retrying through auth/subscription/rate/provider
+  failures. The visible Fresh measurement funnel shows logged → API-matched → view-bearing → settled
+  → kept accounts. Manual confirmations now enter the six-minute verification path; reply fetches
+  ask for 80 recent rows, missing metrics remain unknown, and late replies cannot teach the winner
+  lane. The RapidAPI governor now reads plan/rate headers, applies credential-wide backoff, honors
+  reset headers, aborts after 15 seconds, caches up to 6 MB, and labels its UTC-month meter as a local
+  estimate rather than a universal plan limit. The live harness preflights once and stops cleanly on
+  subscription/rate blockers before spending the multi-call matrix.
+
+- **Adaptive, resettable ease-off:** replaced the rigid raw 6/10 replies-per-hour switch with
+  one shared local pace-pressure model. Caution now begins at 8 pressure and ease-off at 12;
+  cold discovery replies carry weight 1, warm inbound 0.7, ongoing connections 0.85, and
+  community replies 0.95. Activity stays full-weight for 15 minutes, then decays smoothly to
+  zero by one hour, with a 30-second local refresh so scanning resumes without a page action.
+  The dock menu and popup Account safety card now expose **Reset local pace meter**. Reset writes
+  only a separate baseline timestamp: reply history, daily/all-time progress, measured outcomes,
+  repeat-author/duplicate protection, and X's own activity/limits remain untouched. The pace chip
+  and popup show raw replies and weighted pressure together, and every gate—ambient scan, Targets,
+  momentum, Goobi mood/cheer, and post-send nudges—reads the same pure `replyPaceStatus()` result.
+
 - **Review & reply now uses the visible post in place instead of a generic Web Intent:**
   when the exact article is already rendered, Goobi stays in the current tab, clicks
   that post's Reply/comment-bubble control, and verifies the draft text in X's composer.
@@ -17,30 +45,37 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 - **Fresh reach hunt — timely, reachable conversations without the algorithm-hack fiction:**
   Replies now exposes **⚡ Fresh reach**, a persistent larger-account radar. Every click
-  runs one rotating operator-free Top discovery query—interleaving niche terms with broad
-  general-interest domains—alongside niche Latest, merges newly
-  observed authors into a 30-day/200-account niche-stamped radar, then directly checks at most five ranked accounts
+  runs a focused niche Top query plus one rotating operator-free Top discovery query—interleaving
+  niche topics with broad general-interest domains—alongside niche Latest, merges newly
+  observed authors into a 30-day/200-account niche-stamped radar, then directly checks up to 12 ranked accounts
   for their newest original posts. Per-handle searches are concurrency-bounded, share the
-  12-minute provider cache and Target data, and rotate toward due accounts. Scan lanes reserve
-  coverage for explicit targets, previously productive accounts, currently active authors,
-  and one massive account when available. Successful checks and strong content openings are
+  12-minute provider cache and Target data, and rotate toward due accounts. Bounded lanes cover
+  the private massive watchlist, a max-10 keep-list learned from settled X-reported views on the
+  user's own RapidAPI-matched Fresh Reach replies, and a separate evidence-backed new-massive
+  exploration account. Tracked, productive, proven-distribution, and Latest-active signals feed
+  priority without each claiming a hard reservation. The rotating Top lens is forced distinct from the
+  focused lens, so even the first hunt expands account discovery.
+  Radar entries retain normalized distribution plus peak observed views/engagement. Successful checks and strong content openings are
   persisted, so accounts that repeatedly produce worthwhile posts earn future scan priority.
-  The post gate keeps only known-age originals ≤2h from accounts at least 2× the user's size, with fewer than
-  30 replies and at most one result per author. Pure `lib/fresh-reach.ts` account/post
+  The post gate keeps only known-age originals ≤2h from accounts at least 2× the user's size and at most one result per author.
+  It separates normal **Early + open** (<30 replies), measured **Breakout pace** (exceptional age-normalized views or
+  likes/reposts/quotes, ≤90m, <50 replies), and **Major account · early** (≤20m, <80 replies, with live distribution
+  required above the normal room limit). Pure `lib/fresh-reach.ts` account/post
   policies make the sourcing and opportunity ordering inspectable/tested; freshness and
   thread room dominate, repeat authors are damped, and massive audience gaps receive a penalty
   instead of an exclusion or automatic reward. Premium is deliberately not a score
   input. The scorer now has to identify an exact post anchor, a useful reply move and brief,
   and no generic/promotional/context risk at a stricter content-fit gate before a large-account
   result can enter the queue. Hunt receipts report newly captured/radar/massive account counts,
-  timing/room matches, strong openings, and budget limits. The Find-people view exposes the
-  saved radar and its scan/strong-opening history, with one-click **Scan + expand**. Cards revalidate the live window,
-  visibly cool when age or competition crosses the boundary, show their observed evidence,
+  breakout/major candidates, strong openings, and budget limits. The Find-people view exposes the
+  saved radar and its peak-view/scan/opening history, with one-click **Scan + expand**. Cards revalidate the live window,
+  visibly cool when age or competition crosses the boundary, and show observed views, average view pace,
+  likes/reposts/quotes, replies, and opportunity class,
   and carry that discovery snapshot into confirmed reply records for later outcome analysis.
   Fresh results now share one final opening index—content fit × live timing/thread-room/
   audience opportunity, with measured momentum capped at a 12% lift. The top live result is
-  pinned as **Best observed reach opening now** with its age, reply count, audience multiple,
-  and content fit. The Reach sort uses this index rather than blindly sorting by follower count.
+  pinned with a class-specific breakout/major/early headline and its live evidence. The Reach
+  sort uses this index rather than blindly sorting by follower count.
   Cards explain X's documented verified-reply
   effect as a slight conversation-ranking preference, never an impressions guarantee.
   Fresh-reach drafts get explicit surrounding-reader/value guidance, target-account drafts
@@ -51,8 +86,8 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 - **Measured-outcomes dashboard in the popup — the learning loop, made visible:** a new
   "Measured outcomes" fold surfaces the per-angle win-rates, per-account top/bottom reads
   (measured ✓ vs invest-only ✦, with confidence and settled-outcome counts), the post-age
-  timing buckets, and the continuous fit↔outcome correlation check ("your reply-fit scores
-  predicted outcomes: ρ=… over N settled replies") — all numbers the loop already computed
+  timing buckets, and the continuous baseline-priority↔outcome association check
+  ("baseline priority aligned/did not reliably align: ρ=… over N settled replies") — all numbers the loop already computed
   in `lib/learn-stats.ts` but never showed. A new pure `lib/outcome-dashboard.ts`
   (unit-tested, `scripts/test-outcome-dashboard.mjs`) shapes the display model and inherits
   every existing min-N gate (`GLOBAL_THIN`/`N_MIN_OUT`/`FIT_CORR_MIN_N` imported, never
@@ -120,7 +155,8 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
   passes that relationship into both Haiku scoring and Sonnet drafting. Same-author
   warnings remain visible but are softened for a real ongoing conversation. The
   Comments workspace now distinguishes direct comments from mentions on every row.
-- **Default-on Like + insert reply:** restored the user-clicked workflow that likes
+- **Historical: Like + insert reply was default-on in this release** (the current build
+  defaults it OFF): restored the user-clicked workflow that likes
   the selected post and fills its empty X reply composer in one verified operation.
   A visible side-panel setting switches to copy + open. Occupied/unavailable composers
   fall back safely and nothing auto-submits. A successful fill now records the assisted
@@ -294,7 +330,8 @@ reply copilot with a pet mascot. The tab manager still ships. What landed:
   streak, how live you are right now). States run Cold → Warming → In flow → **Peak (at
   the *healthy* sweet spot)** → Cooling → **Overheating**. It reads the **same
   `reputationStatus` the pace chip + Goobi's "worn" mood read**, so it can never
-  celebrate over a safety warning: past ~30 replies/hr the score *drops* to red
+  celebrate over a safety warning: at Goobi's product ease-off line (the then-static 10/hr model)
+  the score *drops* to red
   "ease off", and at caution pace it turns amber to match the chip — Peak is reachable
   only at a healthy pace. Beside the meter, a neutral **real-views readout** — your
   X-reported views on today's posts — pulled by *extending* the existing

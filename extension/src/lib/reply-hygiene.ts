@@ -1,31 +1,83 @@
 /**
  * Reply-reputation hygiene — the pure logic behind the anti-spam nudges.
  *
- * X penalizes PATTERNS, not single replies, and the penalty attaches to the
- * account's reputation (so it suppresses reach ongoing, not just one reply):
- *   - X publishes no guaranteed safe hourly reply rate;
- *   - copy-pasted or near-duplicate replies across threads trigger a reply
- *     deboost / "ghost ban" (replies hidden under "show probable spam");
- *   - aggressive tone is deboosted even when it gets engagement.
- * So the guardrails must be persistent (cross-session) and pattern-aware.
+ * X's authenticity rules prohibit bulk/aggressive unsolicited replies and
+ * duplicative or irrelevant content, but X publishes no guaranteed safe hourly
+ * reply rate or account-reputation formula. So Goobi's guardrails are explicit
+ * local heuristics: persistent, cross-session, and pattern-aware.
  *
  * Pure (no chrome / no DOM), unit-tested in scripts/test-hygiene.mjs.
  */
 
-// Conservative Goobi product guardrails, not claimed X limits. X's published
-// 200/day figure is a technical ceiling and explicitly not a safety guarantee.
-export const REPLY_SOFT_PER_HOUR = 6;
-export const REPLY_HARD_PER_HOUR = 10;
+// Conservative Goobi product guardrails, not claimed X limits. These are adaptive pressure
+// points—not raw reply counts. X's published daily figure is a technical ceiling and explicitly
+// not a safety guarantee.
+export const REPLY_PACE_CAUTION = 8;
+export const REPLY_PACE_EASEOFF = 12;
+export const REPLY_PACE_WINDOW_MS = 60 * 60_000;
+export const REPLY_PACE_FULL_WEIGHT_MS = 15 * 60_000;
 
 export type RepLevel = "healthy" | "caution" | "easeoff";
+export type ReplyPaceLane = "inbound" | "continue" | "community" | "discovery";
 
-/** Overall reply-pace health from replies-in-the-last-hour, on the same soft/hard
- *  lines the nudges use. Drives the dock pace chip + the popup "Account safety"
- *  panel so the protection is visible: healthy < 6, caution 6–9, easeoff >= 10. */
-export function reputationStatus(repliesThisHour: number): { level: RepLevel; label: string } {
-  if (repliesThisHour >= REPLY_HARD_PER_HOUR) return { level: "easeoff", label: "ease off" };
-  if (repliesThisHour >= REPLY_SOFT_PER_HOUR) return { level: "caution", label: "pace yourself" };
+export interface ReplyPaceEvent { at: number; lane?: ReplyPaceLane; }
+export interface ReplyPaceStatus {
+  level: RepLevel;
+  label: string;
+  /** Every locally recorded reply still inside the rolling hour, including pre-reset history. */
+  repliesThisHour: number;
+  /** Replies currently contributing pressure after the latest manual baseline reset. */
+  countedReplies: number;
+  /** Recency- and conversation-weighted local pressure. Never presented as an X score. */
+  pressure: number;
+  warmReplies: number;
+  resetAt?: number;
+}
+
+/** Overall reply-pace health from the adaptive pressure value. Kept as a small standalone gate so
+ * momentum and older callers can share the exact same boundaries. */
+export function reputationStatus(pressure: number): { level: RepLevel; label: string } {
+  if (pressure >= REPLY_PACE_EASEOFF) return { level: "easeoff", label: "ease off" };
+  if (pressure >= REPLY_PACE_CAUTION) return { level: "caution", label: "pace yourself" };
   return { level: "healthy", label: "healthy pace" };
+}
+
+/** Warm/solicited conversation is lower-pressure than cold discovery, but never free. */
+export function replyPaceLaneWeight(lane?: ReplyPaceLane): number {
+  if (lane === "inbound") return 0.7;
+  if (lane === "continue") return 0.85;
+  if (lane === "community") return 0.95;
+  return 1;
+}
+
+/** Full weight for the newest 15 minutes, then a smooth recovery to zero by one hour. */
+export function replyPaceRecencyWeight(ageMs: number): number {
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs >= REPLY_PACE_WINDOW_MS) return 0;
+  if (ageMs <= REPLY_PACE_FULL_WEIGHT_MS) return 1;
+  return Math.max(0, Math.min(1, (REPLY_PACE_WINDOW_MS - ageMs) / (REPLY_PACE_WINDOW_MS - REPLY_PACE_FULL_WEIGHT_MS)));
+}
+
+/**
+ * Dynamic local ease-off model. It distinguishes warm from cold conversation, decays smoothly,
+ * and accepts a user-set baseline reset without deleting the underlying activity ledger. A reset
+ * has no effect on X's own limits, enforcement, or activity recorded outside Goobi.
+ */
+export function replyPaceStatus(events: readonly ReplyPaceEvent[], now: number, resetAt?: number): ReplyPaceStatus {
+  const validReset = typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt <= now + 30_000 && now - resetAt < REPLY_PACE_WINDOW_MS
+    ? resetAt : undefined;
+  let repliesThisHour = 0, countedReplies = 0, warmReplies = 0, pressure = 0;
+  for (const event of events) {
+    if (!event || !Number.isFinite(event.at)) continue;
+    const age = now - event.at;
+    if (age < 0 || age >= REPLY_PACE_WINDOW_MS) continue;
+    repliesThisHour++;
+    if (validReset != null && event.at <= validReset) continue;
+    countedReplies++;
+    if (event.lane === "inbound" || event.lane === "continue") warmReplies++;
+    pressure += replyPaceLaneWeight(event.lane) * replyPaceRecencyWeight(age);
+  }
+  pressure = Math.round(pressure * 10) / 10;
+  return { ...reputationStatus(pressure), repliesThisHour, countedReplies, pressure, warmReplies, resetAt: validReset };
 }
 
 /** Lowercase, drop links + punctuation, collapse whitespace — so trivial edits
@@ -73,11 +125,12 @@ export function replyQualityWarning(text: string): string | null {
 }
 
 /** The single most important reputation nudge to show after an insert, or null.
- *  Priority: duplicate-reply > hourly volume > repeat-author. */
-export function pickReplyNudge(opts: { duplicate: boolean; repliesThisHour: number; repeatAuthor: string | null }): string | null {
+ *  Priority: duplicate-reply > adaptive pace > repeat-author. */
+export function pickReplyNudge(opts: { duplicate: boolean; repliesThisHour: number; repeatAuthor: string | null; pacePressure?: number }): string | null {
   if (opts.duplicate) return "This reply is nearly identical to one you used recently. X flags copy-pasted replies as spam, so tweak it before posting.";
-  if (opts.repliesThisHour >= REPLY_HARD_PER_HOUR) return `${opts.repliesThisHour} replies this hour. Goobi's conservative hourly guard is reached, so take a real break before replying more.`;
-  if (opts.repliesThisHour === REPLY_SOFT_PER_HOUR) return `${REPLY_SOFT_PER_HOUR} replies this hour. X publishes no guaranteed safe pace; slow down and prioritize genuine conversations.`;
+  const pressure = opts.pacePressure ?? opts.repliesThisHour;
+  if (pressure >= REPLY_PACE_EASEOFF) return `${opts.repliesThisHour} replies recorded this hour · ${pressure.toFixed(1)} pace pressure. Goobi's adaptive guard is reached, so take a real break or reset the local meter if it no longer reflects your session.`;
+  if (pressure >= REPLY_PACE_CAUTION && pressure < REPLY_PACE_CAUTION + 1) return `${opts.repliesThisHour} replies recorded this hour · ${pressure.toFixed(1)} pace pressure. X publishes no guaranteed safe pace; slow down and favor warm conversations.`;
   if (opts.repeatAuthor) return `You already replied to @${opts.repeatAuthor} recently. Spreading across new accounts grows faster and avoids the reply-spam pattern.`;
   return null;
 }

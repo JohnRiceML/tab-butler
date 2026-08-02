@@ -1,10 +1,9 @@
 /**
- * Cost + budget policy for the Twttr X-data API. The binding limit is BANDWIDTH,
- * not request count: /user (~10KB) is effectively free (it hits the 100k/mo
- * request wall at only ~1GB), while search/timeline/followers (~300-400KB) are
- * 30-40x costlier per call. So the expensive classes get budget-gated access and
- * are the first to be throttled as the monthly budget fills — /user keeps flowing
- * so the on-page reach ranking never goes dark before the month rolls over.
+ * Cost + budget policy for the Twttr X-data API. Search/timeline responses are
+ * materially larger than /user, so expensive classes are throttled first as the
+ * local safety envelope fills. RapidAPI plan quotas are subscription-specific:
+ * the governor folds its observed quota headers into the same gate instead of
+ * presenting these local fallback ceilings as provider guarantees.
  *
  * Pure functions only (no chrome / no fetch), so the decision logic is unit-tested
  * in isolation — see scripts/test-policy.mjs. The IO orchestration lives in
@@ -32,14 +31,18 @@ export const TWTTR_CLASS: Record<TwttrClass, ClassPolicy> = {
 };
 
 export const TWTTR_BUDGET = {
-  BYTES: 8 * 1024 * 1024 * 1024, // 8GB working budget (10GB hard cap, 2GB safety margin)
-  REQUESTS: 80_000,              // 80% of the 100k/mo request wall
+  BYTES: 8 * 1024 * 1024 * 1024, // conservative local UTC-month transfer envelope; billing-cycle dashboard remains authoritative
+  REQUESTS: 80_000,              // conservative local fallback when plan quota headers are unavailable
   CONSERVE: 0.70,
   FROZEN: 0.85,
   LOCKDOWN: 0.95,
-  RATE_PER_SEC: 8,               // token-bucket refill, under the hard 10/sec
+  RATE_PER_SEC: 8,               // local smoothing ceiling; provider response headers may impose a tighter window
   FAIL_TTL: 600_000,             // negative-cache a failure for 10 min
 } as const;
+/** Plan request quotas may be daily or monthly and RapidAPI exposes no universal billing-reset
+ * timestamp in these headers. Let one later request re-probe after six hours rather than turning
+ * an old near-zero snapshot into a permanent local lockout. */
+export const PROVIDER_QUOTA_OBSERVATION_TTL_MS = 6 * 3_600_000;
 
 /** Map a request path to its cost class. Order matters: the more specific
  *  timeline/followers prefixes are checked before the bare "user" prefix. */
@@ -96,6 +99,35 @@ export function monthKeyOf(ts: number): string {
   return new Date(ts).toISOString().slice(0, 7);
 }
 
+/** Authoritative plan usage when RapidAPI supplies its per-response quota headers. */
+export function providerUsedFraction(
+  limit: number | undefined,
+  remaining: number | undefined,
+  observedAt?: number,
+  now = Date.now(),
+): number {
+  if (observedAt != null && now - observedAt >= PROVIDER_QUOTA_OBSERVATION_TTL_MS) return 0;
+  if (!Number.isFinite(limit) || !Number.isFinite(remaining) || (limit ?? 0) <= 0) return 0;
+  return Math.max(0, Math.min(1, ((limit as number) - (remaining as number)) / (limit as number)));
+}
+
+/** RapidAPI documents rate reset as either seconds remaining or a timestamp; Retry-After may also
+ * be an HTTP date. Clamp absurd/missing values to a short safe default instead of retrying hot. */
+export function providerRetryAt(value: string | null | undefined, now: number, fallbackMs = 60_000): number {
+  const raw = (value || "").trim();
+  if (raw) {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      if (numeric > 10_000_000_000) return numeric; // epoch milliseconds
+      if (numeric > 1_000_000_000) return numeric * 1000; // epoch seconds
+      return now + numeric * 1000; // documented seconds remaining
+    }
+    const date = Date.parse(raw);
+    if (Number.isFinite(date) && date > now) return date;
+  }
+  return now + Math.max(1_000, fallbackMs);
+}
+
 /* ---- storage-backed per-resource response cache (the governor's "planned v2") ----
  * A cache HIT costs zero bytes and zero requests, so it is served BEFORE the budget /
  * rate gates — even in lockdown. The freshness window is the class's own TTL (how fast
@@ -105,7 +137,7 @@ export function monthKeyOf(ts: number): string {
  * Pure + unit-tested here (scripts/test-twttr-cache.mjs); the IO lives in the governor. */
 export interface CacheEntry { at: number; exp: number; bytes: number; data: unknown; }
 export type TwttrCache = Record<string, CacheEntry>;
-export const TWTTR_CACHE_MAX_BYTES = 4 * 1024 * 1024; // 4MB — safe under a 10MB default local quota, leaves room for the meter + coverage caches
+export const TWTTR_CACHE_MAX_BYTES = 6 * 1024 * 1024; // enough for one 15-search deep hunt at observed estimates, still below Chrome's default local quota
 export const TWTTR_CACHE_MAX_ENTRY = 1024 * 1024;     // never cache a single response bigger than this (defensive; no real response is)
 
 /** Expiry stamp for a freshly-fetched response of the given class. */

@@ -3,12 +3,15 @@
  *
  * The lower-level systems optimize replies, posts, targets, and DMs. This module remembers the
  * strategic bet that connected them, compares the bet's window with the immediately preceding
- * window, and recommends keep / tighten / switch. It never claims profile-click attribution:
- * X does not expose that event here, so follower and post outcomes are reported as co-movement.
+ * window, and returns a directional editorial read after the full window ends. It never claims
+ * profile-click attribution or causal proof: X does not expose that event here, so follower and
+ * post outcomes are reported only as observed co-movement.
  */
 
 export const GROWTH_WINDOW_DAYS = 14;
 export const GROWTH_KEEP_DAYS = 90;
+export const GROWTH_MIN_POSTS_PER_WINDOW = 3;
+export const GROWTH_MIN_FOLLOWER_SPAN_DAYS = 7;
 const DAY_MS = 86_400_000;
 
 export type GrowthStrategyId = "proof" | "operator" | "builder" | "community" | "point-of-view";
@@ -74,8 +77,11 @@ export interface GrowthDay {
 }
 export interface GrowthWindow {
   startAt: number; endAt: number; observedDays: number;
-  followerStart?: number; followerEnd?: number; followerDelta?: number; followerPerDay?: number;
-  posts: number; measuredPosts: number; views: number; engagement: number; viewsPerPost?: number; engagementPerPost?: number;
+  followerStart?: number; followerEnd?: number; followerDelta?: number; followerPerDay?: number; followerSpanDays?: number;
+  posts: number; measuredPosts: number; views: number; engagement: number;
+  viewsPerPost?: number; engagementPerPost?: number;
+  /** Robust descriptive centers used by the editorial evaluator; means remain available for UI. */
+  viewsMedianPerPost?: number; engagementMedianPerPost?: number;
 }
 export interface GrowthEvaluation {
   ready: boolean;
@@ -134,6 +140,12 @@ const finite = (n: unknown): n is number => typeof n === "number" && Number.isFi
 const maxMetric = (a: number | undefined, b: number | undefined): number | undefined => {
   if (!finite(a) && !finite(b)) return undefined;
   return Math.max(finite(a) ? a : 0, finite(b) ? b : 0);
+};
+const median = (values: number[]): number | undefined => {
+  if (!values.length) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
 const clone = (s: GrowthStore): GrowthStore => ({ version: 1, ownerHandle: s.ownerHandle, days: Object.fromEntries(Object.entries(s.days).map(([k, d]) => [k, { ...d, posts: { ...d.posts } }])), experiments: s.experiments.map((e) => ({ ...e, outcome: e.outcome ? { ...e.outcome, reasons: [...e.outcome.reasons], current: { ...e.outcome.current }, baseline: { ...e.outcome.baseline } } : undefined })), profileChanges: s.profileChanges?.map((p) => ({ ...p, outcome: p.outcome ? { ...p.outcome, lines: [...p.outcome.lines], caveats: [...p.outcome.caveats], before: { ...p.outcome.before }, after: { ...p.outcome.after } } : undefined })) });
 
@@ -256,12 +268,15 @@ export function summarizeGrowthWindow(store: GrowthStore, startAt: number, endAt
   const spanDays = followers.length >= 2
     ? Math.max(1, ((followers.at(-1)!.followerAt ?? followers.at(-1)!.at) - (followers[0].followerAt ?? followers[0].at)) / DAY_MS)
     : undefined;
+  const engagementByPost = posts.map((p) => (p.likes ?? 0) + (p.reposts ?? 0) + (p.replies ?? 0));
   return {
     startAt, endAt, observedDays: followers.length, followerStart, followerEnd, followerDelta,
-    followerPerDay: followerDelta != null && spanDays ? followerDelta / spanDays : undefined,
+    followerPerDay: followerDelta != null && spanDays ? followerDelta / spanDays : undefined, followerSpanDays: spanDays,
     posts: posts.length, measuredPosts: measured.length, views, engagement,
     viewsPerPost: measured.length ? views / measured.length : undefined,
     engagementPerPost: posts.length ? engagement / posts.length : undefined,
+    viewsMedianPerPost: median(measured.map((p) => p.views as number)),
+    engagementMedianPerPost: median(engagementByPost),
   };
 }
 
@@ -285,9 +300,33 @@ function nextUntried(store: GrowthStore, after: GrowthStrategyId): GrowthStrateg
 
 const ratioChange = (cur?: number, prev?: number): number | undefined => {
   if (cur == null || prev == null) return undefined;
-  if (prev === 0) return cur === 0 ? 0 : cur > 0 ? 1 : -1;
+  // A zero baseline is a real observation, but it cannot support a finite relative change. Keep it
+  // visible in the explanation without turning 0 -> 1 into an arbitrary "+100%" vote.
+  if (prev === 0) return cur === 0 ? 0 : undefined;
   return (cur - prev) / Math.abs(prev);
 };
+
+function observedReason(label: string, cur: number | undefined, prev: number | undefined, change: number | undefined, sample: string): string | undefined {
+  if (cur == null || prev == null) return undefined;
+  if (prev === 0 && cur !== 0) return `Observed co-movement: ${label} ${prev.toFixed(1)} → ${cur.toFixed(1)} (${sample}); the baseline was zero, so this does not cast a percentage vote.`;
+  const pct = change == null ? "" : `${change >= 0 ? "+" : ""}${Math.round(change * 100)}%`;
+  return `Observed co-movement: ${pct} ${label} vs the prior window (${sample}).`;
+}
+
+const direction = (change: number | undefined): -1 | 0 | 1 | undefined => {
+  if (change == null) return undefined;
+  return change >= 0.2 ? 1 : change <= -0.2 ? -1 : 0;
+};
+
+/** Views and engagement come from the same posts, so they form one signal family, not two
+ * independent votes. A strong keep/switch read requires that family and follower pace to agree. */
+function postDirection(changes: Array<number | undefined>): -1 | 0 | 1 | undefined {
+  const dirs = changes.map(direction).filter((v): v is -1 | 0 | 1 => v != null);
+  if (!dirs.length) return undefined;
+  if (dirs.some((v) => v > 0) && !dirs.some((v) => v < 0)) return 1;
+  if (dirs.some((v) => v < 0) && !dirs.some((v) => v > 0)) return -1;
+  return 0;
+}
 
 export function evaluateGrowthExperiment(store: GrowthStore, experiment: GrowthExperiment, actions: TaggedGrowthAction[], now: number): GrowthEvaluation {
   const endAt = Math.min(now, experiment.endedAt ?? experiment.endsAt);
@@ -297,36 +336,54 @@ export function evaluateGrowthExperiment(store: GrowthStore, experiment: GrowthE
   const tagged = actions.filter((a) => a.experimentId === experiment.id && a.at >= experiment.startedAt && a.at <= endAt);
   const taggedPosts = tagged.filter((a) => a.kind === "post").length;
   const taggedReplies = tagged.filter((a) => a.kind === "reply" && a.confirmed !== false).length;
-  const elapsedDays = duration / DAY_MS;
-  const followerChange = current.observedDays >= 2 && baseline.observedDays >= 2 ? ratioChange(current.followerPerDay, baseline.followerPerDay) : undefined;
-  const viewsChange = current.measuredPosts >= 2 && baseline.measuredPosts >= 2 ? ratioChange(current.viewsPerPost, baseline.viewsPerPost) : undefined;
-  const engagementChange = current.posts >= 2 && baseline.posts >= 2 ? ratioChange(current.engagementPerPost, baseline.engagementPerPost) : undefined;
+  const plannedDays = Math.max(1, (experiment.endsAt - experiment.startedAt) / DAY_MS);
+  const minFollowerSpan = Math.min(GROWTH_MIN_FOLLOWER_SPAN_DAYS, Math.max(1, plannedDays / 2));
+  const windowComplete = endAt >= experiment.endsAt;
+  const followerComparable = current.observedDays >= 2 && baseline.observedDays >= 2
+    && (current.followerSpanDays ?? 0) >= minFollowerSpan && (baseline.followerSpanDays ?? 0) >= minFollowerSpan;
+  const viewsComparable = current.measuredPosts >= GROWTH_MIN_POSTS_PER_WINDOW && baseline.measuredPosts >= GROWTH_MIN_POSTS_PER_WINDOW;
+  const engagementComparable = current.posts >= GROWTH_MIN_POSTS_PER_WINDOW && baseline.posts >= GROWTH_MIN_POSTS_PER_WINDOW;
+  const followerChange = followerComparable ? ratioChange(current.followerPerDay, baseline.followerPerDay) : undefined;
+  const viewsChange = viewsComparable ? ratioChange(current.viewsMedianPerPost, baseline.viewsMedianPerPost) : undefined;
+  const engagementChange = engagementComparable ? ratioChange(current.engagementMedianPerPost, baseline.engagementMedianPerPost) : undefined;
   const comparable = [followerChange, viewsChange, engagementChange].filter((v): v is number => v != null);
-  // A strategy cannot "win" from ambient account movement alone. We need enough work that Goobi
-  // can prove was created during this bet before issuing a directional verdict.
+  // Ambient account movement cannot produce an editorial recommendation without recorded execution.
+  // This gate proves only that work happened during the bet, never that the bet caused an outcome.
   const executionReady = taggedPosts >= 2 || taggedReplies >= 8 || (taggedPosts >= 1 && taggedReplies >= 3);
-  const ready = elapsedDays >= 7 && comparable.length > 0 && executionReady;
+  const ready = windowComplete && comparable.length > 0 && executionReady;
   const reasons: string[] = [];
-  if (followerChange != null) reasons.push(`${followerChange >= 0 ? "+" : ""}${Math.round(followerChange * 100)}% follower pace vs the prior window`);
-  if (viewsChange != null) reasons.push(`${viewsChange >= 0 ? "+" : ""}${Math.round(viewsChange * 100)}% views per measured post`);
-  if (engagementChange != null) reasons.push(`${engagementChange >= 0 ? "+" : ""}${Math.round(engagementChange * 100)}% engagement per post`);
+  const followerReason = followerComparable ? observedReason("followers/day", current.followerPerDay, baseline.followerPerDay, followerChange, `${current.followerSpanDays!.toFixed(0)}d vs ${baseline.followerSpanDays!.toFixed(0)}d observed`) : undefined;
+  const viewsReason = viewsComparable ? observedReason("median views/measured post", current.viewsMedianPerPost, baseline.viewsMedianPerPost, viewsChange, `n=${current.measuredPosts} vs ${baseline.measuredPosts}`) : undefined;
+  const engagementReason = engagementComparable ? observedReason("median engagement/post", current.engagementMedianPerPost, baseline.engagementMedianPerPost, engagementChange, `n=${current.posts} vs ${baseline.posts}`) : undefined;
+  reasons.push(...[followerReason, viewsReason, engagementReason].filter((r): r is string => !!r));
   if (!ready) {
     if (!executionReady) reasons.unshift(`Execution recorded: ${taggedPosts} on-strategy post${taggedPosts === 1 ? "" : "s"} · ${taggedReplies} confirmed repl${taggedReplies === 1 ? "y" : "ies"}. Need 2 posts, 8 replies, or 1 post + 3 replies.`);
-    const headline = elapsedDays < 7
-      ? "Keep collecting — the window is still young"
+    const endedEarly = experiment.endedAt != null && experiment.endedAt < experiment.endsAt;
+    const headline = !windowComplete
+      ? endedEarly ? "No editorial read — this window ended early" : "Keep collecting — wait for the full editorial window"
       : !executionReady
-        ? "Do enough on-strategy work before judging the bet"
-        : "Not enough comparable data yet";
-    return { ready: false, executionReady, decision: "collect", headline, reasons: reasons.length ? reasons : ["Open Goobi across several days so follower and post snapshots can settle."], current, baseline, nextStrategyId: experiment.strategyId, taggedPosts, taggedReplies };
+        ? "Record enough on-strategy work before reading the window"
+        : "Not enough stable comparison data for an editorial read";
+    const fallback = !windowComplete
+      ? `Goobi waits for the full ${Math.round(plannedDays)}-day window before offering any directional editorial read.`
+      : `This observational read needs either follower snapshots spanning ${Math.round(minFollowerSpan)}+ days on both sides or ${GROWTH_MIN_POSTS_PER_WINDOW}+ posts in both windows.`;
+    return { ready: false, executionReady, decision: "collect", headline, reasons: reasons.length ? reasons : [fallback], current, baseline, nextStrategyId: experiment.strategyId, taggedPosts, taggedReplies };
   }
-  let votes = 0;
-  for (const v of comparable) { if (v >= 0.2) votes++; else if (v <= -0.2) votes--; }
-  let decision: GrowthDecision;
-  if (votes >= 2 || (votes >= 1 && (followerChange ?? 0) > 0)) decision = "double-down";
-  else if (votes <= -1 || (comparable.every((v) => Math.abs(v) < 0.1) && endAt >= experiment.endsAt)) decision = "switch";
-  else decision = "tighten";
+  const followerSignal = direction(followerChange);
+  const postSignal = postDirection([viewsChange, engagementChange]);
+  // Decisive reads require agreement across the follower and post families. One metric, flat data,
+  // or disagreement can still guide a small editorial adjustment, but cannot crown or reject a bet.
+  const decision: GrowthDecision = followerSignal === 1 && postSignal === 1
+    ? "double-down"
+    : followerSignal === -1 && postSignal === -1
+      ? "switch"
+      : "tighten";
   const nextStrategyId = decision === "switch" ? nextUntried(store, experiment.strategyId) : experiment.strategyId;
-  const headline = decision === "double-down" ? "This bet is promising — run it again" : decision === "switch" ? "Shake it up — test a different reason to follow" : "Mixed signal — keep the strategy, change one execution lever";
+  const headline = decision === "double-down"
+    ? "The observed windows moved together — consider another editorial run"
+    : decision === "switch"
+      ? "The observed window weakened — consider a different editorial bet"
+      : "The observational read is mixed or limited — adjust one editorial lever";
   return { ready, executionReady, decision, headline, reasons: reasons.slice(0, 3), current, baseline, nextStrategyId, taggedPosts, taggedReplies };
 }
 

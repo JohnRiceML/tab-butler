@@ -2,7 +2,7 @@ import { CONFIG } from "../lib/config";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
-import { reputationStatus, REPLY_HARD_PER_HOUR, REPLY_SOFT_PER_HOUR, type RepLevel } from "../lib/reply-hygiene";
+import { replyPaceStatus, REPLY_PACE_CAUTION, REPLY_PACE_EASEOFF, type RepLevel, type ReplyPaceLane } from "../lib/reply-hygiene";
 import { mountGoobi, type GoobiHandle } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import { DEFAULT_DAILY_GOALS, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
@@ -131,9 +131,12 @@ interface ViewData {
   twttrKey: string;
   xMyHandle: string;
   xPremium: string;
-  twttrMeter: { requests: number; bytes: number } | null;
+  twttrMeter: {
+    requests: number; bytes: number;
+    providerRequestLimit?: number; providerRequestsRemaining?: number; providerObservedAt?: number;
+  } | null;
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
-  safety: { level: RepLevel; label: string; repliesThisHour: number; accountsToday: number };
+  safety: { level: RepLevel; label: string; repliesThisHour: number; countedReplies: number; pressure: number; warmReplies: number; resetAt?: number; accountsToday: number };
   todaySent: string[]; // snippets of today's sent replies — the playground treats
   signals: { measureDay: string; settled: number; fitN: number; backs: number; inboundN: number; inboundAgeD: number | null; ownAgeH: number | null; profileAgeD: number | null; reachN: number; heavyN: number } | null;
   growthOwner: string; // normalized handle whose growth store the popup reads ("" = not configured)
@@ -185,7 +188,7 @@ const MOCK: ViewData = {
   twttrKey: "",
   xMyHandle: "",
   xPremium: "",
-  twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024 },
+  twttrMeter: { requests: 1240, bytes: 142 * 1024 * 1024, providerRequestLimit: 10_000, providerRequestsRemaining: 8_760, providerObservedAt: Date.now() },
   signals: null,
   growthOwner: "",
   growthStore: null,
@@ -196,7 +199,7 @@ const MOCK: ViewData = {
     { label: "Fr", count: 6, today: false }, { label: "Sa", count: 2, today: false },
     { label: "Su", count: 7, today: true },
   ] },
-  safety: { level: "healthy", label: "healthy pace", repliesThisHour: 6, accountsToday: 5 },
+  safety: { level: "healthy", label: "healthy pace", repliesThisHour: 6, countedReplies: 6, pressure: 5.4, warmReplies: 2, accountsToday: 5 },
   todaySent: ["Retention beats acquisition — the cost is already sunk", "Ship daily, measure weekly", "WhatsApp groups are underrated for GTM"],
 };
 
@@ -237,22 +240,23 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.X_REPLY_INSERT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.X_REPLY_INSERT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_PACE_RESET_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_LEARN_LOOP_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; outcome?: { likes?: number; replies?: number; authorReplied?: boolean } }[] } | undefined;
+  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; lane?: ReplyPaceLane; outcome?: { likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean } }[] } | undefined;
   const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
   const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
-  const repliesThisHour = (log?.times || []).filter((t) => now - t < 3_600_000).length;
+  const laneByAt = new Map((log?.sent || []).filter((record) => record.lane).map((record) => [record.at, record.lane]));
+  const pace = replyPaceStatus((log?.times || []).map((at) => ({ at, lane: laneByAt.get(at) })), now, Number(store[CONFIG.X_PACE_RESET_KEY]) || undefined);
   const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
   const sentToday = (log?.sent || []).filter((s) => s.at >= midnight.getTime());
   const accountsToday = new Set(sentToday.filter((s) => s.author).map((s) => s.author)).size;
   const todaySent = sentToday.filter((s) => s.snippet).map((s) => s.snippet as string).slice(-30);
-  const safety = { ...reputationStatus(repliesThisHour), repliesThisHour, accountsToday };
+  const safety = { ...pace, accountsToday };
 
-  let twttrMeter: { requests: number; bytes: number } | null = null;
+  let twttrMeter: ViewData["twttrMeter"] = null;
   if (store[CONFIG.TWTTR_KEY_KEY]) {
-    try { twttrMeter = await send<{ requests: number; bytes: number }>({ type: "GET_TWTTR_METER" }); } catch { twttrMeter = null; }
+    try { twttrMeter = await send<NonNullable<ViewData["twttrMeter"]>>({ type: "GET_TWTTR_METER" }); } catch { twttrMeter = null; }
   }
 
   // Profile-change experiment: read the dock-collected growth store for the configured handle.
@@ -299,13 +303,13 @@ async function getData(): Promise<ViewData> {
     growthStore,
     // Stored sent-records are full SentRecords; the narrow inline type above only names the
     // fields THIS file touches directly — the dashboard lib reads the rest structurally.
-    outcomes: buildOutcomeDashboard((log?.sent ?? []) as LearnReply[], now),
+    outcomes: buildOutcomeDashboard((log?.sent ?? []) as LearnReply[], now, store[CONFIG.X_LEARN_LOOP_KEY] === true),
     signals: (() => {
       // Signal health: the honest gates make panels legitimately QUIET — this makes the silence
       // inspectable (how much data each learner has, how fresh each harvest is) so "quiet" and
       // "broken" stop looking identical.
       const sent = log?.sent ?? [];
-      const measured = sent.filter((r) => r.outcome && (r.outcome.likes != null || r.outcome.replies != null));
+      const settled = sent.filter((r) => r.outcome?.frozen === true && (r.outcome.likes != null || r.outcome.replies != null));
       const learnS = store[CONFIG.X_LEARN_STATS_KEY] as { measureDay?: string } | undefined;
       const inboundArr = (store[CONFIG.X_SUPPORTERS_KEY] as { at: number }[] | undefined) ?? [];
       const prof = store[CONFIG.X_PROFILE_KEY] as { at?: number } | undefined;
@@ -316,8 +320,8 @@ async function getData(): Promise<ViewData> {
       const lastInbound = inboundArr.length ? Math.max(...inboundArr.map((e) => e.at)) : null;
       return {
         measureDay: learnS?.measureDay || "never",
-        settled: measured.length,
-        fitN: measured.filter((r) => r.score != null).length,
+        settled: settled.length,
+        fitN: settled.filter((r) => r.score != null).length,
         backs: sent.filter((r) => r.outcome?.authorReplied).length,
         inboundN: inboundArr.length,
         inboundAgeD: lastInbound ? Math.round((now - lastInbound) / DAY) : null,
@@ -366,7 +370,7 @@ function signalHealthHTML(g: ViewData["signals"]): string {
   return `<div class="li" style="display:block">
     <div class="name" style="margin-bottom:4px">Signal health <span class="dim" style="font-weight:400">— why quiet panels are quiet</span></div>
     ${row("Outcome measure pass", g.measureDay === today ? "ran today ✓" : g.measureDay === "never" ? "never" : g.measureDay, g.measureDay === "never" ? "(needs the RapidAPI key + a dock open)" : "")}
-    ${row("Measured reply outcomes", String(g.settled), `(fit-validity check unlocks at 12 — ${Math.min(g.fitN, 12)}/12)`)}
+    ${row("Settled reply outcomes", String(g.settled), `(fit-alignment check unlocks at 12 — ${Math.min(g.fitN, 12)}/12)`)}
     ${row("↩ Engaged-back credits", String(g.backs), g.inboundN ? "" : "(visit /notifications to feed this)")}
     ${row("Notifications harvest", g.inboundN ? `${g.inboundN} events` : "empty", g.inboundAgeD != null ? `(last ${g.inboundAgeD === 0 ? "today" : `${g.inboundAgeD}d ago`})` : "(visit your notifications page)")}
     ${row("Own-posts cache", g.ownAgeH != null ? `${g.ownAgeH}h old` : "empty", g.ownAgeH == null ? "(open the dock on x.com)" : "")}
@@ -433,6 +437,8 @@ function profileExperimentHTML(d: ViewData): string {
  *  names exactly what's missing instead of guessing. */
 function measuredOutcomesHTML(vm: ViewData["outcomes"]): string {
   const angleLabel = (id: string) => REPLY_ANGLES.find((a) => a.id === id)?.label ?? id;
+  const sourceLabel = (id: string) => ({ feed: "Timeline", search: "Niche search", target: "Saved targets", "fresh-reach": "Fresh Reach" } as Record<string, string>)[id] ?? id;
+  const laneLabel = (id: string) => ({ inbound: "Warm inbound", continue: "Keep it going", community: "Build community", discovery: "Earn reach" } as Record<string, string>)[id] ?? id;
   const signed = (p: number) => `${p >= 0 ? "+" : ""}${p}%`;
   const row = (left: string, right: string, title = "") =>
     `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:2px 0"${title ? ` title="${esc(title)}"` : ""}><span class="dim">${left}</span><span style="color:var(--t1);text-align:right">${right}</span></div>`;
@@ -451,12 +457,28 @@ function measuredOutcomesHTML(vm: ViewData["outcomes"]): string {
   const fit = vm.fit;
   if (fit.kind === "measured") {
     parts.push(head("Fit check"));
-    parts.push(`<div style="font-size:11px;color:var(--t1)">Your reply-fit scores ${fit.rho >= 0.2 ? "predicted" : "did not reliably predict"} outcomes: ρ=${fit.rho.toFixed(2)} over ${fit.n} settled replies ✓</div>`);
-    parts.push(`<div class="dim" style="font-size:10px;margin-top:2px">${fit.tilting ? `Measured account results now gently tilt opportunity ranking (clamped ±${Math.round((LEARN_MULT_MAX - 1) * 100)}%).` : "Ranking stays untouched — the tilt only turns on when fit provably predicts outcomes."}</div>`);
+    parts.push(`<div style="font-size:11px;color:var(--t1)">Baseline priority ↔ reach-normalized engagement ${fit.rho >= 0.2 ? "aligned" : "did not reliably align"}: ρ=${fit.rho.toFixed(2)} over ${fit.n} settled replies ✓</div>`);
+    if (fit.viewRho != null) parts.push(`<div style="font-size:11px;color:var(--t1);margin-top:3px">Baseline priority ↔ X-reported reply views ${fit.viewRho >= 0.2 ? "aligned" : "did not reliably align"}: ρ=${fit.viewRho.toFixed(2)} over ${fit.viewN} settled replies ✓</div>`);
+    const tiltCopy = fit.tilting
+      ? `Measured account results now gently tilt opportunity ranking (clamped ±${Math.round((LEARN_MULT_MAX - 1) * 100)}%).`
+      : !fit.learningEnabled
+        ? fit.tiltEligible
+          ? "Ranking stays untouched — the measured tilt gate is met, but the experimental learning switch remains off pending the real-data backtest."
+          : "Ranking stays untouched — the experimental learning switch is off, and the measured tilt gate is not met yet."
+        : "Ranking stays untouched — learning is enabled, but the measured fit gate is not met.";
+    parts.push(`<div class="dim" style="font-size:10px;margin-top:2px">${tiltCopy}</div>`);
   }
   if (vm.angles.length) {
     parts.push(head("By angle"));
     for (const a of vm.angles) parts.push(row(`${esc(angleLabel(a.angle))}${a.best ? " ★" : ""}`, `${signed(a.relPct)} vs your mean · n=${a.n} ✓`, a.best ? "Clearly above your average, post-shrinkage — the measured-best angle" : "Reach-normalized engagement vs your own measured mean"));
+  }
+  if (vm.sources.length) {
+    parts.push(head("By discovery source"));
+    for (const c of vm.sources) parts.push(row(esc(sourceLabel(c.key)), `${signed(c.relPct)} vs your mean · n=${c.n} ✓`, "Settled, reach-normalized reply engagement. Diagnostic only; this does not change ranking."));
+  }
+  if (vm.lanes.length) {
+    parts.push(head("By recommendation lane"));
+    for (const c of vm.lanes) parts.push(row(esc(laneLabel(c.key)), `${signed(c.relPct)} vs your mean · n=${c.n} ✓`, "Settled, reach-normalized reply engagement. Diagnostic only; this does not change ranking."));
   }
   if (vm.accountsTop.length) {
     parts.push(head("By account"));
@@ -483,13 +505,14 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
   const HEX: Record<RepLevel, string> = { healthy: "#4fae6a", caution: "#e89a3c", easeoff: "#d6604a" };
   const CAP: Record<RepLevel, string> = { healthy: "Healthy", caution: "Caution", easeoff: "Ease off" };
   const SUB: Record<RepLevel, string> = {
-    healthy: "Keep replies specific, varied, and relevant to real conversations.",
-    caution: "Goobi's conservative pace guard is approaching — slow down and favor warm conversations.",
-    easeoff: "Goobi's hourly guard is reached — take a real break before replying more.",
+    healthy: "Adaptive pressure is clear. Warm conversations count less and older activity fades gradually.",
+    caution: "Adaptive pace pressure is building — slow down and favor warm conversations.",
+    easeoff: "Adaptive pace pressure is high — it will decay with time; take a break or reset Goobi's local baseline.",
   };
   const c = HEX[s.level];
-  const pacePct = Math.min(100, Math.round((s.repliesThisHour / REPLY_HARD_PER_HOUR) * 100));
-  const cautionPct = Math.round((REPLY_SOFT_PER_HOUR / REPLY_HARD_PER_HOUR) * 100);
+  const pacePct = Math.min(100, Math.round((s.pressure / REPLY_PACE_EASEOFF) * 100));
+  const cautionPct = Math.round((REPLY_PACE_CAUTION / REPLY_PACE_EASEOFF) * 100);
+  const resetAge = s.resetAt ? Math.max(0, Math.floor((Date.now() - s.resetAt) / 60_000)) : undefined;
   // Emoji glyphs (no icon font is bundled, so Tabler <i class="ti …"> rendered as tofu).
   const row = (icon: string, color: string, title: string, detail: string, extra = "") =>
     `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:.5px solid var(--line)">
@@ -498,14 +521,15 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
     </div>`;
   const bar = `<div style="height:5px;border-radius:3px;background:var(--row);margin-top:6px;position:relative;overflow:hidden">
     <div style="height:100%;width:${pacePct}%;background:${c};border-radius:3px"></div>
-    <div style="position:absolute;top:-2px;bottom:-2px;left:${cautionPct}%;width:1.5px;background:var(--t3)" title="Goobi's caution line (${REPLY_SOFT_PER_HOUR}/hr)"></div></div>`;
+    <div style="position:absolute;top:-2px;bottom:-2px;left:${cautionPct}%;width:1.5px;background:var(--t3)" title="Goobi's local caution line (${REPLY_PACE_CAUTION} pressure)"></div></div>`;
   return `<div class="li" style="display:block">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px">
       <div class="name">Account safety</div>
-      <span style="font-size:10.5px;font-weight:500;color:${c};background:${c}24;padding:3px 9px;border-radius:999px">● ${CAP[s.level]}</span>
+      <div style="display:flex;align-items:center;gap:6px">${s.repliesThisHour || s.resetAt ? `<button class="act" data-action="reset-pace" title="Reset only Goobi's local adaptive pressure. Reply history, duplicate checks, daily progress, and X limits stay unchanged.">↺ Reset meter</button>` : ""}<span style="font-size:10.5px;font-weight:500;color:${c};background:${c}24;padding:3px 9px;border-radius:999px">● ${CAP[s.level]}</span></div>
     </div>
     <div style="font-size:10.5px;color:var(--t3);line-height:1.4">${SUB[s.level]}</div>
-    ${row("⏱️", c, "Reply pace", `${s.repliesThisHour} in the last hour · Goobi pauses at ${REPLY_HARD_PER_HOUR}/hr; X publishes no guaranteed safe rate`, bar)}
+    ${row("⏱️", c, "Adaptive reply pace", `${s.pressure.toFixed(1)}/${REPLY_PACE_EASEOFF} pressure from ${s.countedReplies} counted · ${s.repliesThisHour} recorded in the last hour${s.warmReplies ? ` · ${s.warmReplies} warm` : ""}. Full weight for 15m, then gradual decay.`, bar)}
+    ${s.resetAt ? row("↺", "#c68a4e", "Local baseline reset", `${resetAge}m ago · earlier replies remain in history but no longer drive Goobi's meter. This does not reset X activity, limits, or enforcement.`) : ""}
     ${row("👥", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
     ${row("✅", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
     ${row("🖐️", "#c68a4e", "You stay in control", "Goobi opens X's official reply composer for review and never auto-submits. Legacy Like + insert is optional and never used for Fresh reach.")}
@@ -596,6 +620,10 @@ function render(d: ViewData): string {
     ? `<button class="btn" data-action="${expanded ? "collapse" : "expand"}" style="width:100%;margin-top:8px">${expanded ? "Collapse" : `Expand · view all ${all.length} groups`}</button>`
     : "";
   const setupReady = d.hasKey && d.xConsent && !!d.xNiche.trim();
+  const providerObservedAge = d.twttrMeter?.providerObservedAt != null ? Math.max(0, Date.now() - d.twttrMeter.providerObservedAt) : undefined;
+  const providerObservedLabel = providerObservedAge == null ? "" : providerObservedAge < 60 * 60_000
+    ? `${Math.max(1, Math.round(providerObservedAge / 60_000))}m ago`
+    : `${Math.round(providerObservedAge / (60 * 60_000))}h ago`;
   return `
   <header class="row-flex between">
     <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Replies scored against X's real ranking code — never posted for you.</div></div></div>
@@ -644,8 +672,8 @@ function render(d: ViewData): string {
   <div class="sec"><h2>X reply copilot</h2><label class="switch" title="${d.xConsent ? "Turn the X copilot on or off" : "Review and accept the data disclosure first"}"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""} ${d.xConsent ? "" : "disabled"}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="setup">
     <div class="setup-title">${setupReady ? "You're ready to find a good conversation" : "Set up your reply copilot"}</div>
-    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself. Scoring is grounded in X's open-sourced ranking code (not 2023 folklore), and Goobi never cheers you past a safe pace." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
-    ${setupReady ? `<ul class="dim" style="font-size:10.5px;margin:6px 0 2px;padding-left:16px;line-height:1.5"><li>Scored against X's open-sourced ranking code — not recycled 2023 weight tables.</li><li>Measures whether its advice worked on YOUR account: ✓ measured vs ✦ prior, always labeled.</li><li>Drafts in your voice; you always review and post. Never auto-posts.</li></ul>` : ""}
+    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself. Scoring separates content fit from observed timing and relationship signals; public X ranking code informs directional priors, not claimed live weights." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
+    ${setupReady ? `<ul class="dim" style="font-size:10.5px;margin:6px 0 2px;padding-left:16px;line-height:1.5"><li>Uses public X ranking signals as directional context; live weights remain private.</li><li>Measures whether its advice worked on YOUR account: ✓ settled measurement vs ✦ prior, always labeled.</li><li>Drafts in your voice; you always review and post. Never auto-posts.</li></ul>` : ""}
     ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. Activity, drafts, DM notes, goals, SOUL.md, and growth history stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
     ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Anthropic key stored</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Anthropic API key</label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Save key</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
     <div class="setup-steps">
@@ -718,7 +746,10 @@ function render(d: ViewData): string {
       <input class="control" id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value=""/>
       ${d.twttrKey ? `<div class="dim" style="font-size:10.5px;margin-top:4px;color:var(--green)">✓ Key stored. The field stays blank for safety — leave it blank to keep the saved key.</div>` : ""}
       <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (twitter241 on RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
-      ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">This month: <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> / 10 GB · ${d.twttrMeter.requests.toLocaleString()} / 100k requests</div>` : ""}
+      ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">Local safety meter (UTC month): <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> transferred · ${d.twttrMeter.requests.toLocaleString()} network calls.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:3px">${d.twttrMeter.providerRequestLimit != null && d.twttrMeter.providerRequestsRemaining != null
+        ? `Provider plan last observed${providerObservedLabel ? ` ${providerObservedLabel}` : ""}: <b style="color:var(--t1)">${d.twttrMeter.providerRequestsRemaining.toLocaleString()}</b> / ${d.twttrMeter.providerRequestLimit.toLocaleString()} requests remaining.`
+        : "Provider quota headers have not been observed yet."} RapidAPI's dashboard and your billing cycle are authoritative; the platform includes 10 GB per billing cycle before bandwidth fees.</div>` : ""}
     </div>
     <div class="li" style="display:block">
       <label class="field" for="xmyhandle">Your X handle <span class="field-hint">— for reach ranking &amp; voice learning</span></label>
@@ -752,7 +783,7 @@ function render(d: ViewData): string {
   </details>
 
   <details class="fold">
-    <summary>Measured outcomes <span class="field-hint">${d.outcomes.state !== "ready" ? "still learning · min-N gated" : d.outcomes.settled > 0 ? `angles · accounts · timing, from ${d.outcomes.settled} measured ${d.outcomes.settled === 1 ? "reply" : "replies"}` : "replies mapped · measured outcomes pending"}</span></summary>
+    <summary>Measured outcomes <span class="field-hint">${d.outcomes.state !== "ready" ? "still learning · min-N gated" : d.outcomes.settled > 0 ? `angles · sources · lanes · accounts · timing, from ${d.outcomes.settled} settled ${d.outcomes.settled === 1 ? "reply" : "replies"}` : "replies mapped · settled outcomes pending"}</span></summary>
     <div class="list">${measuredOutcomesHTML(d.outcomes)}</div>
   </details>
 
@@ -996,6 +1027,12 @@ async function dispatch(el: HTMLElement) {
         toast("Key removed — reload X to stop the copilot on open pages.");
         break;
       }
+      case "reset-pace": {
+        await chrome.storage.local.set({ [CONFIG.X_PACE_RESET_KEY]: Date.now() });
+        await refresh();
+        toast("Goobi's local pace meter reset. Reply history and X's own limits were not reset.");
+        break;
+      }
       case "open-url": {
         const url = el.dataset.url;
         if (!url) return;
@@ -1112,7 +1149,7 @@ async function dispatch(el: HTMLElement) {
         try {
           const ures = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user", query: { username: handle }, intent: true });
           if (ures?.error === "no-twttr-config") { toast("No RapidAPI key saved yet — paste it above, then try again."); return; }
-          if (ures?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — voice-learning is paused. It resets on the 1st."); return; }
+          if (ures?.error?.startsWith("budget-")) { toast("The local/provider X-data safety budget is nearly used — voice-learning is paused. Check RapidAPI for the billing-cycle reset."); return; }
           if (!ures?.ok) { toast(`Couldn't reach the X API${ures?.status ? ` (HTTP ${ures.status})` : ""}. ${ures?.status === 401 || ures?.status === 403 ? "Key invalid or not subscribed to twitter241." : "Check your RapidAPI key."}${ures?.error ? ` — ${ures.error}` : ""}`); return; }
           const user = parseUser(ures.data);
           if (!user?.id) {
@@ -1125,7 +1162,7 @@ async function dispatch(el: HTMLElement) {
           const hEl = document.getElementById("xmyhandle") as HTMLInputElement | null;
           if (hEl) hEl.value = user.handle; // reflect the canonical handle so a later Save persists it (not the raw typed value)
           const rres = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: user.id, count: "40" }, intent: true });
-          if (rres?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — voice-learning is paused. It resets on the 1st."); return; }
+          if (rres?.error?.startsWith("budget-")) { toast("The local/provider X-data safety budget is nearly used — voice-learning is paused. Check RapidAPI for the billing-cycle reset."); return; }
           if (!rres?.ok) { toast(`Found @${user.handle} but couldn't read replies${rres?.status ? ` (HTTP ${rres.status})` : ""}.`); return; }
           const samples = pickVoiceSamples(rres.data, user.id, 12);
           if (!samples.length) { toast(`@${user.handle} (${user.followers.toLocaleString()} followers): no recent replies to learn from. Reply to a few posts, then retry.`); return; }
@@ -1265,7 +1302,7 @@ app.addEventListener("keydown", onKeydown);
 if (IS_EXT) {
   let replyRefreshTimer: number | undefined;
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes[CONFIG.X_REPLY_LOG_KEY]) return;
+    if (area !== "local" || (!changes[CONFIG.X_REPLY_LOG_KEY] && !changes[CONFIG.X_PACE_RESET_KEY])) return;
     if (replyRefreshTimer) clearTimeout(replyRefreshTimer);
     replyRefreshTimer = window.setTimeout(() => { replyRefreshTimer = undefined; void refresh(); }, 60);
   });

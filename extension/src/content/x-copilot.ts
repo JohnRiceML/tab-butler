@@ -4,23 +4,23 @@ import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithSt
 import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
 import { profileCheck, analyzeBio, type ProfileState } from "../lib/profile-check";
-import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, accountRankMultipliers, fillAuthorReplied, isConfirmedReply, replyVerificationSummary, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
+import { aggregateAccounts, rankAccounts, concentration, cadenceTrend, foldOwnDelta, matchOutcomes, accountTrend, learnFeatures, accountRankMultipliers, fillAuthorReplied, isConfirmedReply, replyVerificationSummary, mergeReplyOutcomes, GLOBAL_THIN, type PostMetrics, type DailyDelta, type FetchedReply } from "../lib/learn-stats";
 import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence, reciprocalConcentration, GLOBAL_THIN as SUP_GLOBAL_THIN, type EngagedRecord, type EngagedKind, type Rel } from "../lib/supporters";
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { reconcileIdeaPublications, type IdeaPublication } from "../lib/idea-outcomes";
 import { nextShipSlots, reminderState, formatSlot, reminderToastLine } from "../lib/schedule";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, TARGET_POLL_TTL_MS, MEGA_CAP, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, TARGET_POLL_TTL_MS, type TargetStore } from "../lib/targets";
 import { rankThreads, TEND_WINDOW_MS, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
-import { isDuplicateReply, normalizeReply, pickReplyNudge, reputationStatus, replyQualityWarning, REPLY_HARD_PER_HOUR } from "../lib/reply-hygiene";
+import { isDuplicateReply, normalizeReply, pickReplyNudge, replyPaceStatus, replyQualityWarning, REPLY_PACE_EASEOFF, type ReplyPaceEvent, type ReplyPaceStatus } from "../lib/reply-hygiene";
 import { humanDelayMs, jitterGap } from "../lib/human-pacing";
 import { mountGoobi, type GoobiMood, type GoobiHandle } from "../lib/goobi";
 import { builderTier } from "../lib/community";
 import { freshOpportunityMetricStore, observeMany, momentumFor, applyMomentum, adjustedTargetTime, mergeOpportunityMetricStores, pruneStore as pruneOpportunityMetrics, type OpportunityMetricStore } from "../lib/opportunity-momentum";
 import { connectionEvidence, foldCompletedExchanges, freshRelationshipMemory, mergeRelationshipMemory, pruneRelationshipMemory, type RelationshipMemoryStore } from "../lib/relationship-memory";
 import { recommendReply, repeatAuthorWarning, replyFreshness, type ReplyRecommendation } from "../lib/reply-recommendation";
-import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_MAX_AGE_MS, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount } from "../lib/fresh-reach";
+import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_MAX_AGE_MS, FRESH_REACH_WATCHLIST_MAX, decayFreshReachEvidence, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, freshReachPostSignals, freshReachShortlist, isMassiveFreshReachAccount, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount, type FreshReachOpportunityKind, type FreshReachShortlistAccount } from "../lib/fresh-reach";
 import { handoffMatchesPath, isReplyBubblePath, statusIdFromPath, validReplyHandoff, type ReplyHandoff } from "../lib/reply-handoff";
 import { GROWTH_STRATEGIES, GROWTH_WINDOW_DAYS, activeGrowthExperiment, captureGrowthSnapshot, evaluateGrowthExperiment, finishGrowthExperiment, freshGrowthStore, growthStrategy, mergeGrowthStores, recommendedGrowthStrategy, seedFollowerSnapshot, settleGrowthExperiments, startGrowthExperiment, summarizeGrowthWindow, type GrowthExperiment, type GrowthStore, type GrowthStrategyId, type TaggedGrowthAction } from "../lib/growth-loop";
 import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDraftDm, canMarkDmSend, canMoveDmReady, dmPacingStatus, dueFollowUps, findDmDuplicate, followUpCount, freshDmStore, markDmReplied, markDmSent, mergeDmStores, pruneDmStore, rankDmSuggestions, redactDmTouch, removeDmCandidate, removeDmContext, sortDmCandidates, updateDmCandidate, type DmCandidate, type DmContextKind, type DmIntent, type DmPhase, type DmStore, type DmSuggestionInput } from "../lib/dm-workspace";
@@ -58,7 +58,7 @@ let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
 let xReplyInsertOn = false; // default off: exact-post X handoff + manual review; true preserves an explicit legacy opt-in
-let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until the backtest proves the signal predicts; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
+let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until a real-data backtest validates the signal; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
 let debugOn = false;      // dev-only: exposes window.__goobiExport() for backtesting. No product effect.
 
 /** Twttr (X-data API) enrichment, all read-only + best-effort. */
@@ -138,23 +138,36 @@ interface ScoredPost { i: number; score: number; reason: string; category?: stri
 interface FreshReachEvidence {
   runId: string; discoveredAt: number; observedAt: number; expiresAt: number;
   repliesObserved: number; sizeMultiple: number;
-  accountSource: "tracked" | "heavy-hitter" | "latest";
+  accountSource: "watchlist" | "tracked" | "heavy-hitter" | "latest";
   accountPriority: number; observedOpportunity: number; contentFit: number;
+  kind: FreshReachOpportunityKind;
+  viewsObserved?: number; engagementsObserved?: number;
+  viewsPerMinute?: number; engagementsPerMinute?: number;
+  distributionScore: number;
   openingScore?: number;
 }
 interface HeavyHitterEntry {
   followers: number; engRate: number; n: number; at?: number;
+  distributionScore?: number; viewRate?: number;
+  peakViews?: number; peakEngagements?: number;
   discoveredAt?: number; lastSeenAt?: number; lastCheckedAt?: number;
   checks?: number; strongOpenings?: number; latestPostId?: string;
+  openingPostIds?: string[];
+  shortlisted?: boolean; replyViewOutcomes?: number; replyViewScore?: number; bestReplyViews?: number; shortlistAt?: number;
   source?: "top" | "latest";
 }
 interface HeavyHitterStore { niche?: string; entries?: Record<string, HeavyHitterEntry>; }
+interface FreshReachWatchEntry {
+  handle: string; followers: number; addedAt: number;
+  lastCheckedAt?: number; checks?: number; strongOpenings?: number; openingPostIds?: string[];
+}
+interface FreshReachWatchStore { ownerHandle: string; entries: FreshReachWatchEntry[]; }
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
 const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; isReplyToOwnPost?: boolean }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
-interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search" | "fresh-reach"; freshReach?: FreshReachEvidence; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
+interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; quotes?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search" | "target" | "fresh-reach"; freshReach?: FreshReachEvidence; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
 const opps = new Map<string, Opp>();
 let opportunityMetrics: OpportunityMetricStore = freshOpportunityMetricStore();
 function observeOpportunityTweets(posts: Array<{ id: string; postedAt?: number; likes?: number; replies?: number; reposts?: number; views?: number }>): void {
@@ -167,7 +180,7 @@ let dockOpen = false;
 let dockFilter = "";
 const expandedReplyCards = new Set<string>(); // one reply card at a time exposes evidence + secondary actions
 
-interface Queued { id: string; author: string; text: string; el: HTMLElement; isReplyToOwnPost: boolean; }
+interface Queued { id: string; author: string; text: string; context?: string; el: HTMLElement; isReplyToOwnPost: boolean; }
 const queue: Queued[] = [];
 /** Posts sent to Claude and awaiting a score — guards against re-queueing the
  *  same post during the request window (e.g. a Rescan mid-flight). */
@@ -204,6 +217,7 @@ let invalidated = false;
 let bodyObs: MutationObserver | null = null;
 let urlPoll: ReturnType<typeof setInterval> | undefined;
 let remindPoll: ReturnType<typeof setInterval> | undefined; // draft-and-remind due-watcher (30s, no network)
+let pacePoll: ReturnType<typeof setInterval> | undefined; // local adaptive pace decay; no network
 function contextOK(): boolean { try { return !!chrome.runtime?.id; } catch { return false; } }
 function teardown(): void {
   if (invalidated) return;
@@ -211,6 +225,7 @@ function teardown(): void {
   try { bodyObs?.disconnect(); } catch { /* ignore */ }
   if (urlPoll) clearInterval(urlPoll);
   if (remindPoll) clearInterval(remindPoll);
+  if (pacePoll) clearInterval(pacePoll);
   if (flushTimer) clearTimeout(flushTimer);
   try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
   try { stopIdeasGoobi(); } catch { /* ignore */ }
@@ -472,7 +487,7 @@ function scan() {
   // no Haiku spend) — surfacing more reply spots while the user should be cooling down is the
   // opposite of the honest mirror. Manual actions still work: ⟳ Rescan opens a short window,
   // and Find spots doesn't route through here at all. The pace chip/momentum strip show why.
-  if (reputationStatus(repliesLastHour()).level === "easeoff" && Date.now() > manualScanUntil) return;
+  if (currentReplyPace().level === "easeoff" && Date.now() > manualScanUntil) return;
   if (scoreCalls >= MAX_SCORE_CALLS) {
     if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
     return;
@@ -514,7 +529,14 @@ function scan() {
     const text = outerText(el);
     if (!text) return; // media-only / not painted yet — re-evaluated next pass
     el.dataset.tbx = "q";
-    queue.push({ id: info.id, author: info.author, text: text.slice(0, 400), el, isReplyToOwnPost: isReplyToOwnPost(el) });
+    queue.push({
+      id: info.id,
+      author: info.author,
+      text: text.slice(0, 400),
+      context: quotedText(el)?.slice(0, 320),
+      el,
+      isReplyToOwnPost: isReplyToOwnPost(el),
+    });
   });
   scheduleFlush();
 }
@@ -533,7 +555,7 @@ async function flush() {
   scoreCalls++;
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined, verified: b.el.isConnected ? isVerified(b.el) : undefined }));
   const posts = batch.map((b, i) => ({
-    i, author: b.author, text: b.text,
+    i, author: b.author, text: b.text, context: b.context,
     // This observed relationship belongs in content-fit scoring: it distinguishes warm inbound
     // conversation from a cold reply spot. Timing + reach still remain live local signals.
     meta: b.isReplyToOwnPost ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined,
@@ -570,7 +592,7 @@ async function flush() {
       if (opps.delete(b.id)) changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
     } else if (s.score >= (b.isReplyToOwnPost ? 0.4 : THRESHOLD)) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, context: b.el.isConnected ? quotedText(b.el) : undefined, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
+      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, context: b.context, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, source: "feed", isReplyToOwnPost: b.isReplyToOwnPost || undefined });
       changed = true;
       if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
     } else {
@@ -632,31 +654,67 @@ type FindSpotsMode = "niche" | "fresh-reach";
 const freshReachCheckedAt = new Map<string, number>();
 const freshReachFailedAt = new Map<string, number>();
 const FRESH_REACH_FAILURE_BACKOFF_MS = 10 * 60_000;
+let freshReachWatchStore: FreshReachWatchStore = { ownerHandle: "", entries: [] };
+let freshReachWatchAdding = false;
+let freshReachWatchMsg = "";
+const normalizeWatchHandle = (value: string): string => value.replace(/^@+/, "").trim().toLowerCase();
+function normalizeFreshReachWatchStore(value: unknown, ownerHandle: string): FreshReachWatchStore {
+  const owner = normalizeWatchHandle(ownerHandle);
+  const raw = value && typeof value === "object" ? value as Partial<FreshReachWatchStore> : {};
+  if (!owner || (raw.ownerHandle && normalizeWatchHandle(raw.ownerHandle) !== owner)) return { ownerHandle: owner, entries: [] };
+  const byHandle = new Map<string, FreshReachWatchEntry>();
+  for (const item of Array.isArray(raw.entries) ? raw.entries : []) {
+    const handle = normalizeWatchHandle(item?.handle || "");
+    if (!/^[a-z0-9_]{1,15}$/.test(handle) || !Number.isFinite(item?.followers) || item.followers <= 0) continue;
+    const clean: FreshReachWatchEntry = {
+      handle, followers: Math.round(item.followers), addedAt: Number.isFinite(item.addedAt) && item.addedAt > 0 ? item.addedAt : Date.now(),
+      lastCheckedAt: Number.isFinite(item.lastCheckedAt) && (item.lastCheckedAt ?? 0) > 0 ? item.lastCheckedAt : undefined,
+      checks: Number.isFinite(item.checks) && (item.checks ?? 0) > 0 ? Math.floor(item.checks!) : undefined,
+      strongOpenings: Number.isFinite(item.strongOpenings) && (item.strongOpenings ?? 0) > 0 ? Math.floor(item.strongOpenings!) : undefined,
+      openingPostIds: Array.isArray(item.openingPostIds) ? [...new Set(item.openingPostIds.filter((id) => typeof id === "string" && /^\d{5,30}$/.test(id)))].slice(-20) : undefined,
+    };
+    const previous = byHandle.get(handle);
+    if (!previous || clean.addedAt > previous.addedAt) byHandle.set(handle, clean);
+  }
+  return { ownerHandle: owner, entries: [...byHandle.values()].sort((a, b) => a.addedAt - b.addedAt).slice(0, FRESH_REACH_WATCHLIST_MAX) };
+}
+function persistFreshReachWatchlist(): void { safeSet({ [CONFIG.X_FRESH_REACH_WATCHLIST_KEY]: freshReachWatchStore }); }
+function watchEntry(handle: string): FreshReachWatchEntry | undefined {
+  const key = normalizeWatchHandle(handle);
+  return freshReachWatchStore.entries.find((entry) => entry.handle === key);
+}
 interface FreshReachRunReceipt {
   id: string; at: number; state: "searching" | "complete" | "failed";
   accountsChecked: number; originals: number; eligible: number; added: number;
+  breakoutCandidates: number; majorCandidates: number;
+  addedBreakouts: number; addedMajor: number;
   budgetLimited: boolean; bestOpening?: number; accountsDiscovered: number;
-  radarSize: number; massiveSaved: number; note?: string;
+  radarSize: number; massiveSaved: number; shortlistSize: number;
+  massiveChecked: number; shortlistChecked: number; watchlistChecked: number; note?: string;
 }
 let lastFreshReachRun: FreshReachRunReceipt | undefined;
 const freshReachRunId = (): string => `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
 let freshReachExploreIndex = 0;
 
-function isMassiveFreshAccount(followers?: number): boolean {
-  if (!followers || !myFollowers) return false;
-  return followers > MEGA_CAP || followers / myFollowers > bandHiFor(myFollowers);
-}
-
 function nextFreshReachExploreQuery(niche: string): string {
-  const choices = freshReachExplorationQueries(niche);
+  const focused = nicheSearchQuery(niche);
+  // The focused Top query is already fetched on every hunt. Skip it in the rotating exploration
+  // lane so the very first click also expands into a distinct broad/focused account pool.
+  const choices = freshReachExplorationQueries(niche).filter((query) => query !== focused);
   if (!choices.length) return nicheSearchQuery(niche);
   const query = choices[freshReachExploreIndex % choices.length];
   freshReachExploreIndex++;
   return query;
 }
 
+/** The compact user-specific massive-account keep-list, derived from settled reply views. */
+function currentFreshReachShortlist(): FreshReachShortlistAccount[] {
+  return freshReachShortlist(replyLog.sent, myFollowers);
+}
+
 function freshAccountSource(handle: string): FreshReachEvidence["accountSource"] {
   const key = handle.replace(/^@+/, "").toLowerCase();
+  if (watchEntry(key)) return "watchlist";
   if (targetStore.targets.some((target) => target.handle.toLowerCase() === key)) return "tracked";
   if (heavyHitters.has(key)) return "heavy-hitter";
   return "latest";
@@ -667,6 +725,7 @@ function freshAccountSource(handle: string): FreshReachEvidence["accountSource"]
 function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount[] {
   const now = Date.now();
   const measuredAccounts = aggregateAccounts(replyLog.sent, now);
+  const shortlist = syncFreshReachShortlistIntoRadar(); // also expires old winner flags before selection
   for (const [handle, heavy] of heavyHitters) {
     if (!heavy.at || now - heavy.at >= HEAVY_HITTER_TTL_MS) heavyHitters.delete(handle);
   }
@@ -679,16 +738,34 @@ function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount
       handle,
       followers: account.followers ?? previous?.followers,
       engagementRate: account.engagementRate ?? previous?.engagementRate,
+      distributionScore: Math.max(account.distributionScore ?? 0, previous?.distributionScore ?? 0) || undefined,
+      peakViews: Math.max(account.peakViews ?? 0, previous?.peakViews ?? 0) || undefined,
+      peakEngagements: Math.max(account.peakEngagements ?? 0, previous?.peakEngagements ?? 0) || undefined,
       tracked: Boolean(account.tracked || previous?.tracked),
+      watchlisted: Boolean(account.watchlisted || previous?.watchlisted),
       activeInLatest: Boolean(account.activeInLatest || previous?.activeInLatest),
       lastReplyAt: Math.max(account.lastReplyAt ?? 0, previous?.lastReplyAt ?? 0) || undefined,
       lastCheckedAt: Math.max(account.lastCheckedAt ?? 0, previous?.lastCheckedAt ?? 0) || undefined,
       checks: Math.max(account.checks ?? 0, previous?.checks ?? 0) || undefined,
       strongOpenings: Math.max(account.strongOpenings ?? 0, previous?.strongOpenings ?? 0) || undefined,
+      shortlisted: Boolean(account.shortlisted || previous?.shortlisted),
+      replyViewOutcomes: Math.max(account.replyViewOutcomes ?? 0, previous?.replyViewOutcomes ?? 0) || undefined,
+      replyViewScore: Math.max(account.replyViewScore ?? 0, previous?.replyViewScore ?? 0) || undefined,
+      bestReplyViews: Math.max(account.bestReplyViews ?? 0, previous?.bestReplyViews ?? 0) || undefined,
       discoveredAt: account.discoveredAt && previous?.discoveredAt ? Math.min(account.discoveredAt, previous.discoveredAt) : (account.discoveredAt ?? previous?.discoveredAt),
       measuredValue: account.measuredValue ?? previous?.measuredValue,
     });
   };
+  for (const entry of freshReachWatchStore.entries) merge({
+    handle: entry.handle,
+    followers: entry.followers,
+    watchlisted: true,
+    lastReplyAt: replyLog.authors[entry.handle],
+    lastCheckedAt: Math.max(entry.lastCheckedAt ?? 0, freshReachCheckedAt.get(entry.handle) ?? 0) || undefined,
+    checks: entry.checks,
+    strongOpenings: entry.strongOpenings,
+    measuredValue: learnedMultForHandle(entry.handle, measuredAccounts),
+  });
   for (const target of targetStore.targets) merge({
     handle: target.handle,
     followers: target.followers,
@@ -697,39 +774,62 @@ function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount
     lastCheckedAt: Math.max(target.lastPolledAt ?? 0, freshReachCheckedAt.get(target.handle.toLowerCase()) ?? 0) || undefined,
     measuredValue: learnedMultForHandle(target.handle, measuredAccounts),
   });
+  for (const winner of shortlist) merge({
+    handle: winner.handle,
+    followers: winner.followers,
+    shortlisted: true,
+    replyViewOutcomes: winner.outcomes,
+    replyViewScore: winner.replyViewScore,
+    bestReplyViews: winner.bestReplyViews,
+    lastReplyAt: replyLog.authors[winner.handle],
+    lastCheckedAt: Math.max(heavyHitters.get(winner.handle)?.lastCheckedAt ?? 0, freshReachCheckedAt.get(winner.handle) ?? 0) || undefined,
+  });
   for (const [handle, heavy] of heavyHitters) merge({
     handle,
     followers: heavy.followers,
     engagementRate: heavy.engRate,
+    distributionScore: decayFreshReachEvidence(heavy.distributionScore, heavy.lastSeenAt ?? heavy.discoveredAt, now),
+    peakViews: heavy.peakViews,
+    peakEngagements: heavy.peakEngagements,
     lastReplyAt: replyLog.authors[handle],
     lastCheckedAt: Math.max(heavy.lastCheckedAt ?? 0, freshReachCheckedAt.get(handle) ?? 0) || undefined,
     checks: heavy.checks,
     strongOpenings: heavy.strongOpenings,
+    shortlisted: heavy.shortlisted,
+    replyViewOutcomes: heavy.replyViewOutcomes,
+    replyViewScore: heavy.replyViewScore,
+    bestReplyViews: heavy.bestReplyViews,
     discoveredAt: heavy.discoveredAt,
     measuredValue: learnedMultForHandle(handle, measuredAccounts),
   });
-  for (const post of latest) merge({
-    handle: post.author,
-    followers: post.followers,
-    activeInLatest: true,
-    lastReplyAt: replyLog.authors[post.author.toLowerCase()],
-    lastCheckedAt: freshReachCheckedAt.get(post.author.toLowerCase()),
-    measuredValue: learnedMultForHandle(post.author, measuredAccounts),
-  });
+  for (const post of latest) {
+    const signals = freshReachPostSignals(post, now);
+    merge({
+      handle: post.author,
+      followers: post.followers,
+      activeInLatest: true,
+      distributionScore: signals.distributionScore,
+      peakViews: post.views,
+      peakEngagements: signals.engagements,
+      lastReplyAt: replyLog.authors[post.author.toLowerCase()],
+      lastCheckedAt: freshReachCheckedAt.get(post.author.toLowerCase()),
+      measuredValue: learnedMultForHandle(post.author, measuredAccounts),
+    });
+  }
   return [...pool.values()].filter((account) => {
     const failedAt = freshReachFailedAt.get(account.handle.toLowerCase());
     return !failedAt || now - failedAt >= FRESH_REACH_FAILURE_BACKOFF_MS;
   });
 }
 
-interface FreshReachAuthorHunt { posts: TwttrTweet[]; checked: number; budgetLimited: boolean; }
+interface FreshReachAuthorHunt { posts: TwttrTweet[]; checked: number; massiveChecked: number; shortlistChecked: number; watchlistChecked: number; budgetLimited: boolean; }
 
 /** Check a bounded account set directly. The provider does not honor a batched OR-from query, so
  * this uses small per-handle searches with limited concurrency; the governor caches each query for
- * 12 minutes and enforces the global monthly budget. Tracked-account results also refresh Targets. */
+ * 12 minutes and enforces local plus provider-reported budget limits. Tracked-account results also refresh Targets. */
 async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]): Promise<FreshReachAuthorHunt> {
   const posts: TwttrTweet[] = [];
-  let checked = 0, budgetLimited = false, targetsChanged = false;
+  let checked = 0, massiveChecked = 0, shortlistChecked = 0, watchlistChecked = 0, budgetLimited = false, targetsChanged = false;
   for (let i = 0; i < accounts.length; i += 3) {
     const batch = accounts.slice(i, i + 3);
     const results = await Promise.all(batch.map(async (account) => {
@@ -758,9 +858,19 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
       if (result.budget) budgetLimited = true;
       if (!result.ok) continue;
       checked++;
+      if (isMassiveFreshReachAccount(result.account.followers, myFollowers)) massiveChecked++;
+      if (result.account.shortlisted) shortlistChecked++;
+      if (result.account.watchlisted) watchlistChecked++;
       const checkedAt = Date.now();
       freshReachCheckedAt.set(result.handle, checkedAt);
       posts.push(...result.tweets);
+      const watched = watchEntry(result.handle);
+      if (watched && !result.fromCache) {
+        watched.lastCheckedAt = checkedAt;
+        watched.checks = (watched.checks ?? 0) + 1;
+        watched.followers = result.tweets[0]?.followers ?? watched.followers;
+        persistFreshReachWatchlist();
+      }
       const radar = heavyHitters.get(result.handle);
       if (radar && !result.fromCache) {
         radar.lastCheckedAt = checkedAt;
@@ -775,14 +885,14 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
         if (newest?.id) result.tracked.lastFreshPostId = newest.id;
         targetPosts.set(result.tracked.handle, newest ? {
           id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author,
-          replies: newest.replies, likes: newest.likes, reposts: newest.reposts, views: newest.views,
+          replies: newest.replies, likes: newest.likes, reposts: newest.reposts, quotes: newest.quotes, views: newest.views,
         } : { id: "", text: "", author: result.tracked.handle });
         targetsChanged = true;
       }
     }
   }
   if (targetsChanged) persistTargets();
-  return { posts, checked, budgetLimited };
+  return { posts, checked, massiveChecked, shortlistChecked, watchlistChecked, budgetLimited };
 }
 /** Search X (via the Twttr API) for fresh posts in the user's niche, score them
  *  with the same Claude scorer the feed uses, and drop the worthwhile ones into
@@ -801,20 +911,23 @@ async function findSpots(mode: FindSpotsMode = "niche") {
   if (mode === "fresh-reach") lastFreshReachRun = {
     id: runId, at: Date.now(), state: "searching", accountsChecked: 0,
     originals: 0, eligible: 0, added: 0, budgetLimited: false,
+    breakoutCandidates: 0, majorCandidates: 0, addedBreakouts: 0, addedMajor: 0,
     accountsDiscovered: 0, radarSize: heavyHitters.size,
-    massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshAccount(entry.followers)).length,
+    massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length,
+    shortlistSize: currentFreshReachShortlist().length, massiveChecked: 0, shortlistChecked: 0, watchlistChecked: 0,
   };
   findingSpots = true;
   renderDock();
   toast(mode === "fresh-reach"
-    ? "Expanding the larger-account radar and scanning for just-posted, uncrowded conversations…"
+    ? "Hunting proven breakout distribution and unusually early openings on major accounts…"
     : "Searching X for fresh posts in your niche…");
   try {
     // Every explicit Fresh click expands the saved account radar with one rotating, operator-free
     // Top query while Latest searches current posts. The governor/cache still bound network cost.
     const radarBefore = heavyHitters.size;
+    const explorationQuery = mode === "fresh-reach" ? nextFreshReachExploreQuery(q) : "";
     const heavyRefresh = mode === "fresh-reach"
-      ? findHeavyHitters(true, nextFreshReachExploreQuery(q))
+      ? findHeavyHitters(true, [nicheSearchQuery(q), explorationQuery])
       : Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
     const [search, radarRefresh] = await Promise.all([
       send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
@@ -823,17 +936,31 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       heavyRefresh,
     ]);
     if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Goobi panel to find spots."); return; }
-    if (search?.error?.startsWith("budget-")) { toast("Monthly X-data budget nearly used — Find spots is paused. It resets on the 1st."); return; }
+    if (search?.error?.startsWith("budget-")) { toast("The local/provider X-data safety budget is nearly used — Find spots is paused. Check RapidAPI for the billing-cycle reset."); return; }
+    let latestUnavailable = false;
     if (!search?.ok) {
       const s = search?.status;
-      const why = s === 401 || s === 403 ? "Key invalid or not subscribed to twitter241 on RapidAPI." : "Check your RapidAPI key in the popup.";
-      toast(`X search failed${s ? ` (HTTP ${s})` : ""}. ${why}${search?.error ? ` — provider says: ${search.error}` : ""}`);
-      return;
+      const querySpecificFailure = s != null && s >= 400 && s < 500 && ![401, 402, 403, 429].includes(s);
+      const hasSavedAccounts = mode === "fresh-reach"
+        && (freshReachWatchStore.entries.length > 0 || targetStore.targets.length > 0 || heavyHitters.size > 0 || currentFreshReachShortlist().length > 0);
+      if (querySpecificFailure && hasSavedAccounts) {
+        latestUnavailable = true;
+        if (lastFreshReachRun?.id === runId) lastFreshReachRun.note = `Latest unavailable${s ? ` (HTTP ${s})` : ""}; checked saved accounts only.`;
+        toast(`Latest search failed${s ? ` (HTTP ${s})` : ""}; checking your saved Fresh Reach accounts directly instead.`);
+      } else {
+        const why = s === 401 || s === 402 || s === 403
+          ? "Key invalid or not subscribed to twitter241 on RapidAPI."
+          : s === 429 ? "RapidAPI rate limit reached; wait for the provider reset."
+            : "Check your RapidAPI key and provider status in the popup.";
+        toast(`X search failed${s ? ` (HTTP ${s})` : ""}. ${why}${search?.error ? ` — provider says: ${search.error}` : ""}`);
+        return;
+      }
     }
     if (!selfHandle) selfHandle = getSelf();
-    let originals = pickDiscoveryTweets(search.data, mode === "fresh-reach" ? 50 : 18)
+    let originals = pickDiscoveryTweets(latestUnavailable ? undefined : search?.data, mode === "fresh-reach" ? 50 : 18)
       .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle);
-    let freshHunt: FreshReachAuthorHunt = { posts: [], checked: 0, budgetLimited: false };
+    let freshHunt: FreshReachAuthorHunt = { posts: [], checked: 0, massiveChecked: 0, shortlistChecked: 0, watchlistChecked: 0, budgetLimited: false };
+    const directlyCheckedAuthors = new Set<string>();
     const accountPriorityByHandle = new Map<string, number>();
     if (mode === "fresh-reach") {
       captureFreshRadarTweets(originals, "latest");
@@ -841,7 +968,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       const rankedAccounts = pickFreshReachAccounts(pool, myFollowers, Date.now(), pool.length);
       for (const candidate of rankedAccounts) accountPriorityByHandle.set(candidate.account.handle.toLowerCase(), candidate.priority);
       // A broad Latest result that already gives us an eligible original is useful now. Do not pay
-      // for an author-specific duplicate check; spend the five slots on accounts Latest missed.
+      // for an author-specific duplicate check; spend the twelve slots on accounts Latest missed.
       const covered = new Set(pickFreshReachCandidates(
         originals, myFollowers, Date.now(), replyLog.authors, originals.length,
       ).map((candidate) => candidate.post.author.toLowerCase()));
@@ -850,14 +977,18 @@ async function findSpots(mode: FindSpotsMode = "niche") {
         .slice(0, FRESH_REACH_ACCOUNT_CHECKS)
         .map((candidate) => candidate.account);
       freshHunt = await fetchFreshReachAuthorPosts(accounts);
+      for (const post of freshHunt.posts) directlyCheckedAuthors.add(post.author.toLowerCase());
       const byId = new Map<string, TwttrTweet>();
       for (const post of [...originals, ...freshHunt.posts]) {
         if (!selfHandle || post.author.toLowerCase() !== selfHandle) byId.set(post.id, post);
       }
       originals = [...byId.values()];
     }
+    // Keep a wider, two-post-per-author set until Claude judges actual contribution quality. The
+    // old opportunity-only top-12 could let twelve generic celebrity posts hide a relevant #13,
+    // and a generic newest post could hide a better older post by the same author.
     const freshCandidates = mode === "fresh-reach"
-      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, 12)
+      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, 24, 2)
       : [];
     const discovered = mode === "fresh-reach" ? freshCandidates.map((candidate) => candidate.post) : originals;
     const evidenceById = new Map<string, FreshReachEvidence>();
@@ -868,14 +999,26 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       repliesObserved: candidate.post.replies!, sizeMultiple: candidate.sizeMultiple,
       accountSource: freshAccountSource(candidate.post.author),
       accountPriority: accountPriorityByHandle.get(candidate.post.author.toLowerCase()) ?? 0,
-      observedOpportunity: candidate.opportunity, contentFit: 0,
+      observedOpportunity: candidate.opportunity, contentFit: 0, kind: candidate.kind,
+      viewsObserved: candidate.post.views,
+      engagementsObserved: candidate.signals.engagements,
+      viewsPerMinute: candidate.signals.viewsPerMinute,
+      engagementsPerMinute: candidate.signals.engagementsPerMinute,
+      distributionScore: candidate.signals.distributionScore,
     });
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) Object.assign(lastFreshReachRun, {
       state: "complete", accountsChecked: freshHunt.checked, originals: originals.length,
       eligible: freshCandidates.length, budgetLimited: freshHunt.budgetLimited || radarRefresh.budgetLimited,
+      breakoutCandidates: freshCandidates.filter((candidate) => candidate.kind === "breakout").length,
+      majorCandidates: freshCandidates.filter((candidate) => candidate.kind === "major-early").length,
       accountsDiscovered: Math.max(radarRefresh.discovered, heavyHitters.size - radarBefore),
       radarSize: heavyHitters.size,
-      massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshAccount(entry.followers)).length,
+      massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length,
+      shortlistSize: currentFreshReachShortlist().length,
+      massiveChecked: freshHunt.massiveChecked,
+      shortlistChecked: freshHunt.shortlistChecked,
+      watchlistChecked: freshHunt.watchlistChecked,
+      note: latestUnavailable ? lastFreshReachRun.note : undefined,
     });
     // Refresh every returned original before applying the strict Fresh screen. A post that crossed
     // the age/reply boundary must lose its live Fresh claim instead of keeping stale metrics merely
@@ -889,11 +1032,11 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       const nextMetrics = {
         postedAt: t.postedAt ?? existing.postedAt, likes: t.likes ?? existing.likes,
         replies: t.replies ?? existing.replies, reposts: t.reposts ?? existing.reposts,
-        views: t.views ?? existing.views, followers: t.followers ?? existing.followers,
+        quotes: t.quotes ?? existing.quotes, views: t.views ?? existing.views, followers: t.followers ?? existing.followers,
       };
       if (nextMetrics.postedAt !== existing.postedAt || nextMetrics.likes !== existing.likes
         || nextMetrics.replies !== existing.replies || nextMetrics.reposts !== existing.reposts
-        || nextMetrics.views !== existing.views || nextMetrics.followers !== existing.followers) refreshed++;
+        || nextMetrics.quotes !== existing.quotes || nextMetrics.views !== existing.views || nextMetrics.followers !== existing.followers) refreshed++;
       Object.assign(existing, nextMetrics);
       if (mode === "fresh-reach" && freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()])) {
         existing.source = "fresh-reach"; // provenance remains manual-only; live eligibility is rechecked at display/draft time
@@ -903,7 +1046,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
     }
     if (!discovered.length) {
       toast(mode === "fresh-reach"
-        ? `Radar ${heavyHitters.size}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. ${freshHunt.checked ? `Scanned ${freshHunt.checked} ${freshHunt.checked === 1 ? "account" : "accounts"} plus Latest. ` : ""}No just-posted, uncrowded eligible opening right now${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
+        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. ${freshHunt.checked ? `Scanned ${freshHunt.checked} ${freshHunt.checked === 1 ? "account" : "accounts"}${freshHunt.massiveChecked ? ` (${freshHunt.massiveChecked} massive${freshHunt.watchlistChecked ? `, ${freshHunt.watchlistChecked} pinned` : ""})` : ""}${latestUnavailable ? " from the saved radar" : " plus Latest"}. ` : ""}No just-posted, uncrowded eligible opening right now${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
         : "X returned no usable posts for this niche right now.");
       return;
     }
@@ -916,12 +1059,34 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       return;
     }
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
-    const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts });
-    if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
-    if (!resp || resp.error) { toast("Couldn't score the posts — try again."); return; }
-    let added = 0;
+    // Two bounded model calls preserve response completeness at the 24-post deep-scan ceiling; one
+    // 1,536-token JSON response can truncate before returning every row. Indices stay global.
+    const scoreBatches = Array.from({ length: Math.ceil(posts.length / 12) }, (_, i) => posts.slice(i * 12, i * 12 + 12));
+    const scoreResponses = await Promise.all(scoreBatches.map((batch) =>
+      send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: batch })));
+    if (scoreResponses.some((response) => response?.error === "no-key")) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
+    if (scoreResponses.some((response) => !response || response.error)) { toast("Couldn't score the posts — try again."); return; }
+    const scores = scoreResponses.flatMap((response) => response?.scores ?? []);
+    // Fresh Reach keeps only the best CONTENT × observed-opening result per author after scoring.
+    // This preserves API recall without letting one prolific account crowd the final queue.
+    const freshChosenIds = new Set<string>();
+    if (mode === "fresh-reach") {
+      const bestByAuthor = new Map<string, { id: string; opening: number }>();
+      for (const s of scores) {
+        const t = found[s.i];
+        const evidence = t ? evidenceById.get(t.id) : undefined;
+        if (!t || !evidence || !freshReachContentEligible(s)
+          || !freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()])) continue;
+        const opening = freshReachOpeningScore({ contentFit: s.score, observedOpportunity: evidence.observedOpportunity, momentum: opportunityMomentum(t.id)?.score });
+        const handle = t.author.toLowerCase();
+        const previous = bestByAuthor.get(handle);
+        if (!previous || opening > previous.opening) bestByAuthor.set(handle, { id: t.id, opening });
+      }
+      for (const row of bestByAuthor.values()) freshChosenIds.add(row.id);
+    }
+    let added = 0, addedBreakouts = 0, addedMajor = 0;
     let bestOpening = 0;
-    for (const s of resp.scores ?? []) {
+    for (const s of scores) {
       const t = found[s.i];
       if (!t) continue;
       const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
@@ -933,7 +1098,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       const stillEligible = mode !== "fresh-reach"
         || !!freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()]);
       const contentEligible = mode === "fresh-reach" ? freshReachContentEligible(s) : s.score >= THRESHOLD;
-      if (contentEligible && stillEligible) {
+      if (contentEligible && stillEligible && (mode !== "fresh-reach" || freshChosenIds.has(t.id))) {
         const evidence = evidenceById.get(t.id);
         if (evidence) {
           evidence.contentFit = s.score;
@@ -945,14 +1110,26 @@ async function findSpots(mode: FindSpotsMode = "niche") {
           bestOpening = Math.max(bestOpening, evidence.openingScore);
         }
         if (mode === "fresh-reach") {
-          const radar = heavyHitters.get(t.author.toLowerCase());
-          if (radar) {
-            radar.strongOpenings = (radar.strongOpenings ?? 0) + 1;
-            radar.at = Date.now();
-            schedulePersistReach();
+          if (evidence?.kind === "breakout") addedBreakouts++;
+          if (evidence?.kind === "major-early") addedMajor++;
+          const handle = t.author.toLowerCase();
+          if (directlyCheckedAuthors.has(handle)) {
+            const radar = heavyHitters.get(handle);
+            if (radar && !radar.openingPostIds?.includes(t.id)) {
+              radar.openingPostIds = [...(radar.openingPostIds ?? []), t.id].slice(-20);
+              radar.strongOpenings = radar.openingPostIds.length;
+              radar.at = Date.now();
+              schedulePersistReach();
+            }
+            const watched = watchEntry(handle);
+            if (watched && !watched.openingPostIds?.includes(t.id)) {
+              watched.openingPostIds = [...(watched.openingPostIds ?? []), t.id].slice(-20);
+              watched.strongOpenings = watched.openingPostIds.length;
+              persistFreshReachWatchlist();
+            }
           }
         }
-        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: mode === "fresh-reach" ? "fresh-reach" : "search", freshReach: evidence });
+        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, quotes: t.quotes, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: mode === "fresh-reach" ? "fresh-reach" : "search", freshReach: evidence });
         if (t.author && t.followers != null) {
           const key = t.author.toLowerCase();
           authorReach.set(key, { ...authorReach.get(key), followers: t.followers, at: Date.now(), failed: false });
@@ -963,14 +1140,16 @@ async function findSpots(mode: FindSpotsMode = "niche") {
     }
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) {
       lastFreshReachRun.added = added;
+      lastFreshReachRun.addedBreakouts = addedBreakouts;
+      lastFreshReachRun.addedMajor = addedMajor;
       lastFreshReachRun.bestOpening = bestOpening || undefined;
     }
     toast(added
       ? mode === "fresh-reach"
-        ? `Radar ${heavyHitters.size} · found ${added} strong ${added === 1 ? "opening" : "openings"}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"}` : ""}. The best observed reach opening is pinned first.`
+        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length} · found ${added} strong ${added === 1 ? "opening" : "openings"}${addedBreakouts ? ` · ${addedBreakouts} breakout` : ""}${addedMajor ? ` · ${addedMajor} major + early` : ""}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"}` : ""}. The best observed opening is pinned first.`
         : `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.`
       : mode === "fresh-reach"
-        ? `Radar ${heavyHitters.size}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. Scored ${discovered.length} live candidates; none had a strong enough specific contribution this time.`
+        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. Scored ${discovered.length} live candidates; none had a strong enough specific contribution this time.`
         : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
   } finally {
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId && lastFreshReachRun.state === "searching") {
@@ -1089,7 +1268,7 @@ function postOverlayLabel(model: PostOverlayModel): string {
   if (model.done) return "✓ Replied";
   if (model.isReplyToOwnPost) return model.kind === "passed"
     ? "↩ Your post · passed"
-    : `↩ Comment on your post · ${shortStrength(model.recommendation)}`;
+    : `↩ They replied to your post · ${shortStrength(model.recommendation)}`;
   if (model.kind === "passed") return "Goobi passed";
   if (model.recommendation?.authorRepeat) return `↻ Replied ${model.recommendation.authorRepeat.label} · ${shortStrength(model.recommendation)}`;
   return model.recommendation
@@ -1135,7 +1314,7 @@ function renderPostOverlayDetails(el: HTMLElement, host: HTMLElement, model: Pos
   Object.assign(header.style, { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" });
   const heading = document.createElement("div");
   const title = document.createElement("div");
-  title.textContent = model.done ? "Reply recorded" : model.isReplyToOwnPost ? `Comment on your post · ${model.recommendation?.strength || (model.kind === "passed" ? "passed" : "recommended")}` : model.kind === "passed" ? "Not in your reply queue" : model.recommendation?.authorRepeat ? `Spread your replies · ${model.recommendation.strength}` : `${model.recommendation?.laneLabel || catLabel(model.category)} · ${model.recommendation?.strength || "recommended"}`;
+  title.textContent = model.done ? "Reply recorded" : model.isReplyToOwnPost ? `They replied to your post · ${model.recommendation?.strength || (model.kind === "passed" ? "passed" : "recommended")}` : model.kind === "passed" ? "Not in your reply queue" : model.recommendation?.authorRepeat ? `Spread your replies · ${model.recommendation.strength}` : `${model.recommendation?.laneLabel || catLabel(model.category)} · ${model.recommendation?.strength || "recommended"}`;
   Object.assign(title.style, { color: "#f7efe2", fontSize: "13px", fontWeight: "700", lineHeight: "1.3" });
   const sub = postOverlayText(`@${model.author} · ${catLabel(model.category)}`, "#8c7d68", "11px");
   sub.style.marginTop = "2px"; heading.append(title, sub);
@@ -1308,8 +1487,9 @@ async function addManual(el: HTMLElement) {
     id: info.id, author: info.author, text: text.slice(0, 400), manual: true,
     score: cached?.score ?? 0.5, reason: cached?.reason || "Added by you", category: cached?.category,
     anchor: cached?.anchor, replyMove: cached?.replyMove, replyBrief: cached?.replyBrief, risk: cached?.risk,
-    context: quotedText(el), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
+    context: quotedText(el)?.slice(0, 320), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
     avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el), isReplyToOwnPost: ownReply || undefined,
+    source: "feed",
   };
   opps.set(info.id, opp);
   seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category, anchor: opp.anchor, replyMove: opp.replyMove, replyBrief: opp.replyBrief, risk: opp.risk, isReplyToOwnPost: opp.isReplyToOwnPost });
@@ -1317,7 +1497,7 @@ async function addManual(el: HTMLElement) {
   dockOpen = true; renderDock();
   toast("Added to your reply list — scoring it…");
   // Score it for real (one call, bypasses the per-session cap) to fill in the tag/angle.
-  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
+  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, context: opp.context, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
   const s = resp?.scores?.[0];
   const cur = opps.get(info.id);
   if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
@@ -1440,6 +1620,7 @@ interface SentRecord {
   category?: string;     // opportunity category (promote/value/ask/…)
   angle?: string;        // the drafting angle used
   source?: Opp["source"];// discovery provenance; lets measured cohorts compare Fresh reach honestly
+  lane?: ReplyRecommendation["lane"]; // recommendation policy lane at handoff time
   freshReach?: FreshReachEvidence; // observed opening evidence at selection time (optional for old/non-Fresh records)
   growthExperimentId?: string; // top-level strategy active when this reply was handed off
   growthStrategyId?: GrowthStrategyId;
@@ -1453,6 +1634,7 @@ interface SentRecord {
 }
 interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
 let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
+let paceResetAt = 0; // reset only changes Goobi's local pressure baseline; the reply ledger stays intact
 let sentSeq = 0; // bump per reply so two in the same millisecond still get distinct ids
 const commentedIds = new Set<string>(); // post ids you've replied to — drives the "✓ commented" badge in the feed
 const SENT_MAX = 500; // cap the feature log
@@ -1472,7 +1654,7 @@ function mergeReplyLog(a: ReplyLog, b: Partial<ReplyLog>): ReplyLog {
     const confirmedAt = Math.max(ex.confirmedAt ?? 0, r.confirmedAt ?? 0) || undefined;
     const confirmation = ex.confirmation === "rapidapi" || r.confirmation === "rapidapi"
       ? "rapidapi" : ex.confirmation ?? r.confirmation;
-    const outcome = ex.outcome || r.outcome ? { ...(ex.outcome ?? {}), ...(r.outcome ?? {}), authorReplied: !!(ex.outcome?.authorReplied || r.outcome?.authorReplied) || undefined } as SentRecord["outcome"] : undefined;
+    const outcome = mergeReplyOutcomes(ex.outcome, r.outcome);
     byId.set(k, { ...ex, ...r, confirmedAt, confirmation, outcome });
   };
   for (const r of a.sent) put(r);
@@ -1528,8 +1710,8 @@ function closeMenu(): void {
 
 /** Follow the OUTER post's author via its "•••" menu (the only reliable in-DOM
  *  path on a timeline post). The menu shows "Follow @x" ONLY when not already
- *  following — so this can only follow, never unfollow. User-initiated + paced
- *  (min-gap + hourly cap) so it never produces a rapid-follow velocity flag. */
+ *  following — so this can only follow, never unfollow. User initiation plus a local
+ *  min-gap/hourly cap reduces rapid repeated actions; it is not an X safety guarantee. */
 async function followAuthor(el: HTMLElement | null): Promise<"followed" | "already" | "failed" | "paced"> {
   if (!el?.isConnected) return "failed";
   const now = Date.now();
@@ -1909,7 +2091,7 @@ chrome.runtime.onMessage.addListener((msg: Message) => {
 });
 
 /** Record a confirmed reply in the persisted reputation log and return the single
- *  most important nudge (duplicate-reply > hourly volume > repeat-author), or null.
+ *  most important nudge (duplicate-reply > adaptive pace > repeat-author), or null.
  *  Pattern-aware + cross-session, because X's penalties attach to the account. */
 /** Bump today's "replies sent" tally + the all-time total; trim old days. */
 function bumpDaily(now: number): void {
@@ -1926,17 +2108,19 @@ function bumpDaily(now: number): void {
  *  learnLoopOn) accountRankMultipliers + learnedBestAngle feed it back into ranking + drafting. */
 function logSentReply(now: number, text: string, opp?: Opp, angle?: string, confirmation?: "rapidapi" | "manual"): void {
   const gx = activeGrowthExperiment(growthStore);
+  const recommendation = opp ? recommendationFor(opp, now) : undefined;
   const rec: SentRecord = {
     id: `${now}.${sentSeq++}`,
     at: now,
     postId: opp?.id ?? draftOppId ?? undefined,
     author: (opp?.author ?? draftOppAuthor) || undefined,
-    score: opp ? effectiveScore(opp) : undefined,
+    score: recommendation?.priority,
     followers: opp ? knownFollowers(opp) : undefined,
     ageMs: opp?.postedAt ? Math.max(0, now - opp.postedAt) : undefined,
     category: opp?.category,
     angle: angle || opp?.category,
     source: opp?.source,
+    lane: recommendation?.lane,
     freshReach: opp?.freshReach ? { ...opp.freshReach, contentFit: opp.score } : undefined,
     growthExperimentId: gx?.id,
     growthStrategyId: gx?.strategyId,
@@ -1957,7 +2141,7 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string, conf
  *  persist, and refresh the UI. */
 function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now(), confirmation?: "rapidapi" | "manual"): void {
   replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
-  replyLog.times.push(now); // every confirmed reply counts toward the hourly pace
+  replyLog.times.push(now); // every confirmed reply enters the adaptive rolling pace ledger
   const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
   logSentReply(now, text, opp, angle, confirmation);
@@ -1969,13 +2153,13 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
   // Goobi beams when you reply — but NEVER when you're past the line (honest mirror:
   // he refuses to celebrate going too fast; at ease-off he stays woozy instead).
   // The first reply of a day that extends a streak earns a bigger 'cheer' (tada).
-  if (repliesLastHour() < REPLY_HARD_PER_HOUR) {
+  if (currentReplyPace(now).level !== "easeoff") {
     const streak = replyStreak();
     if (firstToday && streak >= 2) goobiReactLove(`${streak}-day streak!`, "love that you keep showing up", 3800);
     else goobiReactLove("Love it!", "that's the good stuff", 3200);
   }
   safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
-  if (!confirmation && text.trim()) scheduleReplyVerification(); // RapidAPI confirms the actual X reply after its timeline has had time to update
+  if (text.trim()) scheduleReplyVerification(); // manual confirms posting; RapidAPI still verifies the tweet + measures its outcome after the timeline updates
   renderDock(); // update "N replies sent today" immediately
   requestScan(); // flip this post's in-feed badge to the green "✓ Commented" call-out
 }
@@ -1992,8 +2176,9 @@ function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, replyAutho
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  recordSentReply(text, opp, angle, now, confirmation); // pushes this reply onto replyLog.times (the hourly pace counter)
-  return pickReplyNudge({ duplicate, repliesThisHour: replyLog.times.length, repeatAuthor: repeat ? displayAuthor : null });
+  recordSentReply(text, opp, angle, now, confirmation); // pushes this reply onto the adaptive pace ledger
+  const pace = currentReplyPace(now);
+  return pickReplyNudge({ duplicate, repliesThisHour: pace.repliesThisHour, pacePressure: pace.pressure, repeatAuthor: repeat ? displayAuthor : null });
 }
 
 async function startCopyOpenHandoff(text: string, opp?: Opp, angle?: string): Promise<void> {
@@ -2137,7 +2322,7 @@ async function draftFor(req: DraftReq) {
   const liveFresh = dOpp ? currentFreshReach(dOpp) : null;
   const opportunityLine = dOpp?.source === "fresh-reach"
     ? liveFresh
-      ? `Goobi currently observes this as ${liveFresh.ageMinutes} minutes old with ${dOpp.replies} replies from an account ${liveFresh.sizeMultiple.toFixed(1)} times the user's audience. These are product heuristics, not an X ranking guarantee. Write one self contained contribution for surrounding readers, not flattery for the author. Never mention targeting, timing, account size, Premium, a blue check, reach, or impressions in the reply.`
+      ? `Goobi currently classifies this as ${freshReachKindLabel(liveFresh.kind)} from these public observations: ${freshReachMetricFacts(dOpp, liveFresh).join(", ")}. These are product heuristics, not an X ranking guarantee. Write one self contained contribution for surrounding readers, not flattery for the author. Never mention targeting, timing, account size, Premium, a blue check, reach, views, engagement, or impressions in the reply.`
       : "This post was found by Fresh reach but has since left Goobi's strict timing, competition, or audience window. Do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution that remains worthwhile for surrounding readers."
     : undefined;
   const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, anchor: dOpp?.anchor, replyBrief: dOpp?.replyBrief, authorLine, threadLine, opportunityLine });
@@ -2675,6 +2860,10 @@ const DOCK_CSS = `
 .reply-card:hover { background:rgba(214,154,92,.035); }
 .reply-card.open { background:#1b1712; border-color:rgba(214,154,92,.18); box-shadow:0 8px 24px rgba(0,0,0,.18); }
 .reply-card.fresh-hero { margin-bottom:7px; border-color:rgba(214,154,92,.36); background:linear-gradient(145deg,rgba(214,154,92,.12),rgba(27,23,18,.82) 62%); box-shadow:0 10px 28px rgba(0,0,0,.22); }
+.reply-card.inbound-own-post { margin-bottom:5px; border-color:rgba(111,207,127,.34); background:linear-gradient(145deg,rgba(111,207,127,.085),rgba(27,23,18,.72) 68%); box-shadow:inset 3px 0 0 rgba(111,207,127,.72); }
+.reply-inbound-banner { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:7px 10px 0; padding:7px 9px; border:1px solid rgba(111,207,127,.25); border-radius:9px; background:rgba(111,207,127,.09); }
+.reply-inbound-kicker { color:#9be5aa; font-size:10.5px; font-weight:850; letter-spacing:.35px; text-transform:uppercase; }
+.reply-inbound-explain { color:#b9cfb9; font-size:10px; line-height:1.3; text-align:right; }
 .fresh-hero-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px 0; }
 .fresh-hero-title { color:#f0b56f; font-size:11.5px; font-weight:800; letter-spacing:.01em; }
 .fresh-hero-sub { margin-top:2px; color:#b6a892; font-size:10px; line-height:1.35; }
@@ -2964,8 +3153,26 @@ function currentFreshReach(o: Opp, now = Date.now()) {
   const handle = o.author.replace(/^@+/, "").toLowerCase();
   return freshReachCandidate({
     id: o.id, author: o.author, text: o.text, postedAt: o.postedAt,
-    followers: knownFollowers(o), replies: o.replies, isReply: false,
+    followers: knownFollowers(o), likes: o.likes, replies: o.replies, reposts: o.reposts,
+    quotes: o.quotes, views: o.views, isReply: false,
   }, myFollowers, now, replyLog.authors[handle]);
+}
+
+function freshReachKindLabel(kind: FreshReachOpportunityKind): string {
+  if (kind === "breakout") return "Breakout pace";
+  if (kind === "major-early") return "Major account · early";
+  return "Early + open";
+}
+
+function freshReachMetricFacts(o: Opp, live: NonNullable<ReturnType<typeof currentFreshReach>>): string[] {
+  const facts = [
+    `${live.ageMinutes}m old`,
+    `${o.replies} ${o.replies === 1 ? "reply" : "replies"}`,
+  ];
+  if (o.views != null) facts.push(`${fmtCount(o.views)} views${live.signals.viewsPerMinute != null ? ` · ~${fmtCount(Math.round(live.signals.viewsPerMinute))}/min avg` : ""}`);
+  if (live.signals.engagements != null) facts.push(`${fmtCount(live.signals.engagements)} likes + reposts + quotes`);
+  facts.push(`${live.sizeMultiple.toFixed(1)}× your audience`);
+  return facts;
 }
 
 /** Live Fresh-specific ordering. This answers comparative opportunity, not predicted impressions. */
@@ -3078,7 +3285,7 @@ function recommendationFor(o: Opp, now = Date.now()): ReplyRecommendation {
 function effectiveScore(o: Opp): number { return recommendationFor(o).priority; }
 
 // The optional closed-loop tilt stays separate from the baseline recommendation logged in
-// SentRecord.score. That lets fitCorr test whether the explainable policy predicts outcomes before
+// SentRecord.score. That lets fitCorr test whether the explainable policy aligns with outcomes before
 // per-account payoff can reorder it. Off by default and neutral until the measured-data gates pass.
 let _multMemo: { key: string; mult: Record<string, number> } = { key: "", mult: {} };
 function invalidateLearnedMults(): void { _multMemo = { key: "", mult: {} }; _authorSignalMemo = { key: "", accounts: {} }; }
@@ -3319,7 +3526,24 @@ let goobiDrafting = false;                        // a reply is being drafted (C
 let goobiDockHandle: GoobiHandle | null = null;   // the live dock/pill Goobi, for in-place mood updates
 const DAY_MS = 24 * HOUR_MS;
 
-function repliesLastHour(): number { return replyLog.times.filter((t) => Date.now() - t < HOUR_MS).length; }
+function replyPaceEvents(): ReplyPaceEvent[] {
+  const laneByAt = new Map(replyLog.sent.filter((record) => record.lane).map((record) => [record.at, record.lane]));
+  return replyLog.times.map((at) => ({ at, lane: laneByAt.get(at) }));
+}
+
+/** One shared adaptive status for scanning, Targets, the dock chip, Goobi, and nudges. */
+function currentReplyPace(now = Date.now()): ReplyPaceStatus {
+  return replyPaceStatus(replyPaceEvents(), now, paceResetAt || undefined);
+}
+
+function resetReplyPace(): void {
+  paceResetAt = Date.now();
+  safeSet({ [CONFIG.X_PACE_RESET_KEY]: paceResetAt });
+  manualScanUntil = paceResetAt + 2 * 60_000;
+  toast("Goobi's local pace meter reset. Reply history, duplicate checks, daily progress, and X's own limits were not reset.");
+  renderDock();
+  requestScan();
+}
 
 /** Consecutive days (ending today, or yesterday if today's still empty) with >=1 reply. */
 function replyStreak(): number {
@@ -3361,7 +3585,7 @@ function goobiMood(): GoobiMood {
   if (findingSpots) return "searching";                           // hunting for new posts (API search)
   if (inFlight.size > 0) return "thinking";                       // analyzing posts (Claude scoring)
   if (now < goobiSearchUntil) return "searching";                 // just hit rescan
-  if (repliesLastHour() >= REPLY_HARD_PER_HOUR) return "worn";    // ease-off — honest mirror
+  if (currentReplyPace(now).level === "easeoff") return "worn";  // adaptive ease-off — honest mirror
   return opps.size > 0 ? "idle" : "sleeping";                     // posts waiting vs all quiet
 }
 
@@ -3482,19 +3706,29 @@ function renderList(list: HTMLElement) {
     const liveFresh = currentFreshReach(o);
     const open = expandedReplyCards.has(o.id);
     const isFreshHero = hero?.opp.id === o.id;
-    const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "") + (isFreshHero ? " fresh-hero" : "");
+    const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "") + (isFreshHero ? " fresh-hero" : "") + (o.isReplyToOwnPost ? " inbound-own-post" : "");
     const toggle = () => { const wasOpen = expandedReplyCards.has(o.id); expandedReplyCards.clear(); if (!wasOpen) expandedReplyCards.add(o.id); renderDock(); };
     const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
     const laneColor = rec.lane === "inbound" || rec.lane === "continue" ? "#6fcf7f" : rec.lane === "community" ? "#5dcaa5" : ACCENT;
     const age = fmtAge(o.postedAt);
     const strength = rec.strength === "best next" ? "Best next" : rec.strength === "good option" ? "Good" : "Later";
 
+    if (o.isReplyToOwnPost) {
+      const inboundHead = document.createElement("div"); inboundHead.className = "reply-inbound-banner";
+      inboundHead.setAttribute("role", "note"); inboundHead.setAttribute("aria-label", `@${o.author} replied to one of your posts`);
+      const inboundTitle = document.createElement("span"); inboundTitle.className = "reply-inbound-kicker"; inboundTitle.textContent = "↩ They replied to your post";
+      const inboundExplain = document.createElement("span"); inboundExplain.className = "reply-inbound-explain"; inboundExplain.textContent = "Reply back in your thread";
+      inboundHead.append(inboundTitle, inboundExplain); card.append(inboundHead);
+    }
     if (isFreshHero && liveFresh) {
       const heroHead = document.createElement("div"); heroHead.className = "fresh-hero-head";
       const heroCopy = document.createElement("div");
-      const heroTitle = document.createElement("div"); heroTitle.className = "fresh-hero-title"; heroTitle.textContent = "⚡ Best observed reach opening now";
+      const heroTitle = document.createElement("div"); heroTitle.className = "fresh-hero-title";
+      heroTitle.textContent = liveFresh.kind === "breakout" ? "🚀 Best measured breakout opening now"
+        : liveFresh.kind === "major-early" ? "⚡ Best major-account opening now"
+          : "⚡ Best observed reach opening now";
       const heroSub = document.createElement("div"); heroSub.className = "fresh-hero-sub";
-      heroSub.textContent = `${liveFresh.ageMinutes}m old · ${o.replies} ${o.replies === 1 ? "reply" : "replies"} · ${liveFresh.sizeMultiple.toFixed(1)}× your audience · ${Math.round(o.score * 100)} content fit`;
+      heroSub.textContent = `${freshReachKindLabel(liveFresh.kind)} · ${freshReachMetricFacts(o, liveFresh).join(" · ")} · ${Math.round(o.score * 100)} content fit`;
       const band = document.createElement("span"); band.className = "fresh-hero-band"; band.textContent = `${freshReachOpeningBand(hero.score)} opening`;
       band.title = "Comparative Goobi opportunity index from content fit, timing, thread room, audience fit, author spread, and bounded measured momentum. Not an impression forecast.";
       heroCopy.append(heroTitle, heroSub); heroHead.append(heroCopy, band); card.append(heroHead);
@@ -3521,7 +3755,7 @@ function renderList(list: HTMLElement) {
     if (age) { const ageEl = document.createElement("span"); ageEl.className = "reply-age"; ageEl.textContent = `· ${age}`; compactMeta.append(ageEl); }
     if (o.source === "fresh-reach") {
       const hunted = document.createElement("span"); hunted.className = "reply-age"; hunted.style.color = liveFresh ? "#e0a45c" : "#8c7d68"; hunted.textContent = liveFresh ? "· ⚡ fresh reach" : "· ⚡ hunt · cooled"; hunted.title = liveFresh
-        ? `Observed now: ${liveFresh.ageMinutes}m old, ${o.replies} replies, ${liveFresh.sizeMultiple.toFixed(1)}× your audience. Goobi thresholds are tunable heuristics, not X guarantees.`
+        ? `${freshReachKindLabel(liveFresh.kind)}. Observed now: ${freshReachMetricFacts(o, liveFresh).join(" · ")}. Goobi thresholds are tunable heuristics, not X guarantees.`
         : "Found by Fresh reach, but it is no longer inside Goobi's strict live window. The card stays available without an urgency claim.";
       compactMeta.append(hunted);
     }
@@ -3532,17 +3766,17 @@ function renderList(list: HTMLElement) {
     copy.append(compactMeta, excerpt); summaryToggle.append(copy);
 
     const quick = document.createElement("div"); quick.className = "reply-summary-actions";
-    const draft = document.createElement("button"); draft.className = "reply-draft-quick"; draft.textContent = "Draft"; draft.title = `Draft a ${catLabel(o.category).toLowerCase()} reply in your voice`; draft.onclick = draftNow;
+    const draft = document.createElement("button"); draft.className = "reply-draft-quick"; draft.textContent = o.isReplyToOwnPost ? "Reply back" : "Draft"; draft.title = o.isReplyToOwnPost ? `Draft a reply to @${o.author}'s comment on your post` : `Draft a ${catLabel(o.category).toLowerCase()} reply in your voice`; draft.onclick = draftNow;
     const disclose = document.createElement("button"); disclose.className = "reply-disclose"; disclose.textContent = open ? "▴" : "▾"; disclose.setAttribute("aria-label", open ? "Collapse reply details" : "Expand reply details"); disclose.setAttribute("aria-expanded", String(open)); disclose.onclick = toggle;
     quick.append(draft, disclose); summary.append(summaryToggle, quick); card.append(summary);
 
     if (open) {
       const detail = document.createElement("div"); detail.className = "reply-detail";
       const meta = document.createElement("div"); meta.className = "meta"; meta.style.marginTop = "0";
-      if (o.isReplyToOwnPost) { const own = document.createElement("span"); own.className = "chip"; own.style.background = "rgba(111,207,127,.14)"; own.style.color = "#8bd397"; own.textContent = "↩ Comment on your post"; own.title = "X shows this post as replying directly to your account. Goobi prioritizes it as warm inbound conversation."; meta.append(own); }
+      if (o.isReplyToOwnPost) { const own = document.createElement("span"); own.className = "chip"; own.style.background = "rgba(111,207,127,.14)"; own.style.color = "#8bd397"; own.textContent = "↩ They replied to your post"; own.title = "X shows this post as replying directly to your account. Goobi prioritizes it as warm inbound conversation."; meta.append(own); }
       if (o.source === "fresh-reach") {
-        const s = document.createElement("span"); s.className = "srch"; s.textContent = liveFresh ? "⚡ Fresh reach · live" : "⚡ Fresh reach · cooled"; s.title = liveFresh
-          ? "Observed eligibility under Goobi's current heuristics: relevant niche result, larger but reachable account, under two hours old, and fewer than 30 known replies. It is not a reach prediction."
+        const s = document.createElement("span"); s.className = "srch"; s.textContent = liveFresh ? `${liveFresh.kind === "breakout" ? "🚀" : "⚡"} ${freshReachKindLabel(liveFresh.kind)}` : "⚡ Fresh reach · cooled"; s.title = liveFresh
+          ? "Observed eligibility under Goobi's current heuristics: relevant content, a larger account, live public distribution/timing evidence, and bounded reply competition. It is not a reach prediction."
           : "This came from the Fresh reach hunt but no longer passes its live timing/competition screen."; meta.append(s);
       } else if (o.source === "search") { const s = document.createElement("span"); s.className = "srch"; s.textContent = "🔎 Found by niche search"; s.title = "This post is not currently rendered on your X page."; meta.append(s); }
       if (o.category) { const cc = catColor(o.category); const ct = document.createElement("span"); ct.className = "chip"; ct.style.background = cc.bg; ct.style.color = cc.fg; ct.textContent = `${catLabel(o.category)} angle`; meta.append(ct); }
@@ -3581,7 +3815,7 @@ function renderList(list: HTMLElement) {
         detail.append(coach);
         if (liveFresh) {
           const observed = document.createElement("div"); observed.className = "reply-evidence";
-          observed.textContent = `Observed opening · ${liveFresh.ageMinutes}m old · ${o.replies} ${o.replies === 1 ? "reply" : "replies"} · ${liveFresh.sizeMultiple.toFixed(1)}× your audience. Rechecked when this card renders.`;
+          observed.textContent = `${freshReachKindLabel(liveFresh.kind)} · ${freshReachMetricFacts(o, liveFresh).join(" · ")} · distribution evidence ${Math.round(liveFresh.signals.distributionScore * 100)}/100. Rechecked when this card renders; pace is an average since posting, not a forecast.`;
           detail.append(observed);
         }
       }
@@ -3978,17 +4212,22 @@ let learn: LearnStore = freshLearn("");
 let learnBusy = false;
 let verifyTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** A pending record becomes eligible after six minutes. A new pending reply can bypass an
- * older daily measurement, but repeated no-match checks wait 30 minutes and only happen when
- * the dock opens again. One scheduled check per page keeps the RapidAPI timeline spend bounded. */
+/** A text-bearing record gets an early API proof pass even when the user manually confirmed it.
+ * Proven provisional outcomes become due once more at settlement age. This closes the old gap
+ * where Fresh Reach's manual handoff waited until the daily pass and could roll out of the recent
+ * reply window before it ever acquired its reply tweet id. */
 function pendingVerification(now: number): SentRecord | undefined {
-  return [...replyLog.sent].reverse().find((r) => !isConfirmedReply(r) && !!(r.norm || r.snippet)
-    && now - r.at >= VERIFY_MIN_AGE_MS && now - r.at <= VERIFY_WINDOW_MS);
+  return [...replyLog.sent].reverse().find((r) => {
+    const age = now - r.at;
+    if (!(r.norm || r.snippet) || age < VERIFY_MIN_AGE_MS || age > VERIFY_WINDOW_MS || r.outcome?.frozen) return false;
+    return !r.outcome?.tweetId || age >= SETTLE_DAYS * 24 * HOUR_MS;
+  });
 }
 function verificationDue(now: number): boolean {
   const pending = pendingVerification(now);
   if (!pending) return false;
-  return !learn.measureAt || learn.measureAt < pending.at || now - learn.measureAt >= VERIFY_RETRY_MS;
+  const retry = pending.outcome?.tweetId ? 12 * HOUR_MS : VERIFY_RETRY_MS;
+  return !learn.measureAt || learn.measureAt < pending.at || now - learn.measureAt >= retry;
 }
 function scheduleReplyVerification(): void {
   if (verifyTimer != null) return;
@@ -4020,7 +4259,7 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
     if (!u?.id) return; // couldn't resolve rest_id — retry next day, don't burn the gate
     restId = u.id;
   }
-  const rres = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: restId, count: "40" }, intent: true });
+  const rres = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "user-replies-v2", query: { user: restId, count: "80" }, intent: true });
   if (rres?.error === "no-twttr-config") { twttrUnconfigured = true; return; }
   if (!rres?.ok) return; // budget/HTTP error — retry next day
   const now = Date.now();
@@ -4036,7 +4275,15 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
   for (const mt of matchOutcomes(fetched, replyLog.sent)) {
     const rec = replyLog.sent[mt.index];
     if (!rec || rec.outcome?.frozen) continue; // frozen = settled, never re-touch
-    rec.outcome = { ...rec.outcome, at: now, likes: mt.likes, replies: mt.replies, views: mt.views ?? rec.outcome?.views, reposts: mt.reposts ?? rec.outcome?.reposts, tweetId: mt.replyId ?? rec.outcome?.tweetId, frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS }; // spread keeps authorReplied; ?? keeps yesterday's measured views when a payload shape omits them
+    rec.outcome = mergeReplyOutcomes(rec.outcome, {
+      at: now,
+      likes: mt.likes,
+      replies: mt.replies,
+      views: mt.views,
+      reposts: mt.reposts,
+      tweetId: mt.replyId,
+      frozen: now - rec.at >= SETTLE_DAYS * 24 * HOUR_MS,
+    });
     rec.confirmedAt ??= now;
     rec.confirmation = "rapidapi";
     wrote++;
@@ -4044,7 +4291,11 @@ async function runMeasurePass(handle: string, today: string): Promise<void> {
   if (fetched.length) learn.restId = restId; // cache the resolved id ONLY when it proved it works (returned replies) — a bad/transient resolve re-resolves next day instead of freezing
   learn.measureDay = today;
   learn.measureAt = now;
-  if (wrote) { invalidateLearnedMults(); safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog }); }
+  if (wrote) {
+    invalidateLearnedMults();
+    syncFreshReachShortlistIntoRadar();
+    safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+  }
   safeSet({ [CONFIG.X_LEARN_STATS_KEY]: learn });
 }
 /** The once-daily learning pass, dayKey-gated + idempotent. Fired on dock open. */
@@ -4219,7 +4470,7 @@ function renderThreadsPanel(d: HTMLElement, opts: { topLevel?: boolean } = {}): 
       if (r.fresh === "live") { age.style.color = "#6fcf7f"; age.title = "still in the thread's live window — answering now compounds most"; }
       top.append(age);
       const relationship = document.createElement("span"); relationship.className = "ins-thin";
-      relationship.textContent = r.kind === "reply" ? "↩ Comment on your post" : "@ Mentioned you";
+      relationship.textContent = r.kind === "reply" ? "↩ Replied to your post" : "@ Mentioned you";
       relationship.style.color = r.kind === "reply" ? "#8bd397" : "#d6b07c";
       relationship.title = r.kind === "reply"
         ? "This person replied directly to one of your posts. Goobi ranks it as warm inbound conversation."
@@ -4242,7 +4493,7 @@ function renderThreadsPanel(d: HTMLElement, opts: { topLevel?: boolean } = {}): 
       doneBtn.disabled = !r.postId;
       doneBtn.onclick = () => { if (r.postId) { threadsDone.add(r.postId); persistThreadsDone(); toast(`Marked @${r.handle} done.`); renderDock(); } };
       const act = document.createElement("button");
-      act.textContent = r.kind === "reply" ? "Reply on your post →" : "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
+      act.textContent = r.kind === "reply" ? "Reply back →" : "Reply →"; act.setAttribute("aria-label", `Open @${r.handle}'s reply to respond`);
       act.title = "Open their reply on X so you can respond in-thread (Goobi never posts for you).";
       act.style.cssText = "font:600 11px -apple-system,system-ui,sans-serif;color:#e89a3c;background:rgba(232,154,60,.12);border:1px solid rgba(232,154,60,.35);border-radius:6px;padding:3px 8px;cursor:pointer";
       act.onclick = () => { if (r.postId) window.open(`https://x.com/${r.handle}/status/${r.postId}`, "_blank", "noopener"); };
@@ -4343,7 +4594,7 @@ function renderInsightPanel(d: HTMLElement): void {
       }
       for (const [txt, why] of bits) {
         const li = document.createElement("div"); li.className = "ins-fact"; li.textContent = txt;
-        li.title = why + (fl.fitCorr != null ? ` (fit\u2194outcome \u03C1=${fl.fitCorr.toFixed(2)}, n=${fl.nOut})` : "");
+        li.title = why + (fl.fitCorr != null ? ` (baseline priority\u2194outcome \u03C1=${fl.fitCorr.toFixed(2)}, n=${fl.nOut})` : "");
         body.append(li);
       }
     }
@@ -4536,7 +4787,7 @@ async function generateIdeas() {
     });
     const search = await runSearch(nicheSearchQuery(niche, "lang:en -filter:replies -filter:nativeretweets -filter:retweets -giveaway"));
     if (search?.error === "no-twttr-config") { ideasError = "Add your RapidAPI key in the Goobi panel to gather niche posts."; return; }
-    if (search?.error?.startsWith("budget-")) { ideasError = "Monthly X-data budget nearly used — ideas are paused. It resets on the 1st."; return; }
+    if (search?.error?.startsWith("budget-")) { ideasError = "The local/provider X-data safety budget is nearly used — ideas are paused. Check RapidAPI for the billing-cycle reset."; return; }
     if (!search?.ok) { ideasError = `Couldn't pull niche posts${search?.status ? ` (HTTP ${search.status})` : ""}. Try again.`; return; }
     const parsed = parseTimelineTweets(search.data);
     setRateTable(calibrateRates(parsed)); // tune the size-tiered baseline to THIS niche from the posts just fetched (free — no new API call; sparse tiers keep the published default)
@@ -4932,7 +5183,7 @@ function mountIdeasGoobi(): void {
 
 /* ---------- Target accounts: comment early on big in-reach niche accounts ---------- */
 let targetStore: TargetStore = freshStore("");
-const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number; reposts?: number; views?: number }>(); // fetched latest post per handle; all provider metrics feed measured momentum
+const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number; reposts?: number; quotes?: number; views?: number }>(); // fetched latest post per handle; all provider metrics feed measured momentum
 const targetDrafts = new Map<string, string>(); // generated reply draft per handle (session)
 const targetBusy = new Set<string>();           // handles currently fetching/drafting
 let targetAdding = false;
@@ -5168,6 +5419,62 @@ async function addTargetByHandle(raw: string): Promise<void> {
     persistTargets(); targetAddMsg = "";
   } finally { targetAdding = false; renderDock(); }
 }
+
+/** Pin a truly massive account for direct Fresh Reach checks. This is deliberately separate from
+ * practical Targets: it accepts accounts beyond the reach band, remains owner-scoped, and never
+ * bypasses the post-level freshness, competition, risk, or contribution-quality gates. */
+async function addFreshReachWatch(raw: string): Promise<void> {
+  if (freshReachWatchAdding) return;
+  const requested = normalizeWatchHandle(raw);
+  if (!/^[a-z0-9_]{1,15}$/.test(requested)) { freshReachWatchMsg = "Enter a valid X @handle."; renderDock(); return; }
+  if (!myFollowers) { freshReachWatchMsg = "Set your follower count in the Goobi panel first."; renderDock(); return; }
+  const owner = normalizeWatchHandle(await myHandle()) || normalizeWatchHandle(getSelf());
+  if (!owner) { freshReachWatchMsg = "Set your own X handle in the Goobi panel first."; renderDock(); return; }
+  if (freshReachWatchStore.ownerHandle !== owner) freshReachWatchStore = { ownerHandle: owner, entries: [] };
+  if (freshReachWatchStore.entries.some((entry) => entry.handle === requested)) { freshReachWatchMsg = `@${requested} is already pinned.`; renderDock(); return; }
+  if (freshReachWatchStore.entries.length >= FRESH_REACH_WATCHLIST_MAX) { freshReachWatchMsg = `The Massive watchlist is capped at ${FRESH_REACH_WATCHLIST_MAX}; remove one first.`; renderDock(); return; }
+  freshReachWatchAdding = true; freshReachWatchMsg = `Checking @${requested}…`; renderDock();
+  try {
+    const res = await send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "user", query: { username: requested }, intent: true,
+    });
+    if (res?.error === "no-twttr-config") { freshReachWatchMsg = "Add your RapidAPI key in the Goobi panel."; return; }
+    if (res?.error?.startsWith("budget-")) { freshReachWatchMsg = "The monthly X-data budget is nearly used; try again after it resets."; return; }
+    if (!res?.ok) {
+      freshReachWatchMsg = res?.status === 401 || res?.status === 403
+        ? "This RapidAPI key is invalid or is not subscribed to twitter241. Fix the subscription, then try again."
+        : res?.status === 429 ? "The provider is rate-limiting requests. Wait a moment, then try again."
+          : `Couldn't look up @${requested}${res?.status ? ` (HTTP ${res.status})` : ""}.`;
+      return;
+    }
+    const user = parseUser(res.data);
+    const handle = normalizeWatchHandle(user?.handle || requested);
+    if (!user || !/^[a-z0-9_]{1,15}$/.test(handle) || !user.followers) { freshReachWatchMsg = `Couldn't find @${requested}.`; return; }
+    if (handle === owner) { freshReachWatchMsg = "Your own account cannot be added to the Massive watchlist."; return; }
+    if (!isMassiveFreshReachAccount(user.followers, myFollowers)) {
+      freshReachWatchMsg = `@${handle} (${fmtCount(user.followers)}) fits the practical range; add it under Targets instead.`;
+      return;
+    }
+    freshReachWatchStore.entries.push({ handle, followers: user.followers, addedAt: Date.now() });
+    freshReachWatchStore = normalizeFreshReachWatchStore(freshReachWatchStore, owner);
+    authorReach.set(handle, { followers: user.followers, following: user.following, bio: user.bio, at: Date.now() });
+    freshReachFailedAt.delete(handle);
+    persistFreshReachWatchlist(); schedulePersistReach(); freshReachWatchMsg = "";
+  } finally { freshReachWatchAdding = false; renderDock(); }
+}
+
+function removeFreshReachWatch(handle: string): void {
+  const key = normalizeWatchHandle(handle);
+  freshReachWatchStore = { ...freshReachWatchStore, entries: freshReachWatchStore.entries.filter((entry) => entry.handle !== key) };
+  persistFreshReachWatchlist(); freshReachWatchMsg = `Removed @${key} from direct scans.`; renderDock();
+}
+async function ensureFreshReachWatchOwner(): Promise<void> {
+  const owner = normalizeWatchHandle(await myHandle()) || normalizeWatchHandle(getSelf());
+  const stored = await getLocal(CONFIG.X_FRESH_REACH_WATCHLIST_KEY);
+  freshReachWatchStore = normalizeFreshReachWatchStore(stored, owner);
+  freshReachWatchMsg = "";
+  if (dockView === "targets") renderDock();
+}
 /** Reset the target list if the signed-in account changed mid-session (mirrors the learn store). */
 async function ensureTargetOwner(): Promise<void> {
   if (invalidated) return;
@@ -5184,18 +5491,19 @@ async function findTargetPost(handle: string, ambient = false): Promise<void> {
     // degrade ladder is the budget guard); an explicit user click stays intent:true.
     const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: !ambient });
     if (res?.ok) {
+      freshReachFailedAt.delete(handle.toLowerCase());
       const originals = parseTimelineTweets(res.data)
         .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0));
       observeOpportunityTweets(originals); // snapshot every returned original; newest may change between polls
       const newest = originals[0];
-      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes, reposts: newest.reposts, views: newest.views } : { id: "", text: "", author: handle });
+      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes, reposts: newest.reposts, quotes: newest.quotes, views: newest.views } : { id: "", text: "", author: handle });
       if (!ambient) targetDrafts.delete(handle); // an explicit refresh invalidates the old draft; an ambient poll never touches the user's draft
       // TTL bookkeeping on the PERSISTED target — this is what makes remounts/second tabs free
       // (selectPollBatch skips anything polled within TARGET_POLL_TTL_MS).
       const tg = targetStore.targets.find((t) => t.handle.toLowerCase() === handle.toLowerCase());
       if (tg) { tg.lastPolledAt = Date.now(); if (newest?.id) tg.lastFreshPostId = newest.id; persistTargets(); }
-    }
+    } else freshReachFailedAt.set(handle.toLowerCase(), Date.now());
   } finally { targetBusy.delete(handle); renderDock(); }
 }
 
@@ -5207,11 +5515,13 @@ async function findTargetPost(handle: string, ambient = false): Promise<void> {
 let pollKickAt = 0;
 async function pollTargets(): Promise<void> {
   if (paused || twttrUnconfigured || !targetStore.targets.length) return;
-  if (reputationStatus(repliesLastHour()).level === "easeoff") return; // cooling down — don't dangle fresh targets
+  if (currentReplyPace().level === "easeoff") return; // cooling down — don't dangle fresh targets
   if (Date.now() - pollKickAt < 60_000) return; // render-loop guard; the real gate is the per-target TTL
   pollKickAt = Date.now();
   for (const tg of selectPollBatch(targetStore.targets, Date.now())) {
     if (invalidated) return;
+    const failedAt = freshReachFailedAt.get(tg.handle.toLowerCase());
+    if (failedAt && Date.now() - failedAt < FRESH_REACH_FAILURE_BACKOFF_MS) continue;
     await findTargetPost(tg.handle, true); // sequential — the governor's token bucket stays smooth
   }
 }
@@ -5247,15 +5557,19 @@ async function draftTargetReply(handle: string): Promise<void> {
         expiresAt: (post.postedAt ?? Date.now()) + FRESH_REACH_MAX_AGE_MS,
         repliesObserved: post.replies!, sizeMultiple: freshCandidate.sizeMultiple,
         accountSource: "tracked", accountPriority: 1,
-        observedOpportunity: freshCandidate.opportunity, contentFit: s.score,
+        observedOpportunity: freshCandidate.opportunity, contentFit: s.score, kind: freshCandidate.kind,
+        viewsObserved: post.views, engagementsObserved: freshCandidate.signals.engagements,
+        viewsPerMinute: freshCandidate.signals.viewsPerMinute,
+        engagementsPerMinute: freshCandidate.signals.engagementsPerMinute,
+        distributionScore: freshCandidate.signals.distributionScore,
         openingScore: freshReachOpeningScore({ contentFit: s.score, observedOpportunity: freshCandidate.opportunity }),
       } : undefined;
       opp = {
         id: post.id, author: post.author, text: post.text.slice(0, 400), score: s.score,
         reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk,
         postedAt: post.postedAt, likes: post.likes, replies: post.replies,
-        reposts: post.reposts, views: post.views, followers: target?.followers,
-        source: isFreshReach ? "fresh-reach" : "search", freshReach: targetFreshEvidence,
+        reposts: post.reposts, quotes: post.quotes, views: post.views, followers: target?.followers,
+        source: isFreshReach ? "fresh-reach" : "target", freshReach: targetFreshEvidence,
       };
       opps.set(post.id, opp);
       seen.set(post.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
@@ -5290,6 +5604,35 @@ async function draftTargetReply(handle: string): Promise<void> {
  *  the user's niche QUERY, so it's stamped with the niche and flushed when the niche changes. */
 const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 200;
 type ReachEntry = { followers?: number; following?: number; bio?: string; at: number };
+function mergeHeavyHitterEntry(stored: HeavyHitterEntry | undefined, live: HeavyHitterEntry): HeavyHitterEntry {
+  if (!stored) return live;
+  const ids = [...new Set([...(stored.openingPostIds ?? []), ...(live.openingPostIds ?? [])])].slice(-20);
+  const liveIsNewer = (live.lastSeenAt ?? live.at ?? 0) >= (stored.lastSeenAt ?? stored.at ?? 0);
+  const shortlist = (live.shortlistAt ?? 0) >= (stored.shortlistAt ?? 0) ? live : stored;
+  return {
+    ...stored, ...live,
+    followers: liveIsNewer ? live.followers : stored.followers,
+    engRate: liveIsNewer ? live.engRate : stored.engRate,
+    n: Math.max(stored.n, live.n),
+    at: Math.max(stored.at ?? 0, live.at ?? 0) || undefined,
+    discoveredAt: Math.min(stored.discoveredAt ?? Infinity, live.discoveredAt ?? Infinity) === Infinity ? undefined : Math.min(stored.discoveredAt ?? Infinity, live.discoveredAt ?? Infinity),
+    lastSeenAt: Math.max(stored.lastSeenAt ?? 0, live.lastSeenAt ?? 0) || undefined,
+    lastCheckedAt: Math.max(stored.lastCheckedAt ?? 0, live.lastCheckedAt ?? 0) || undefined,
+    checks: Math.max(stored.checks ?? 0, live.checks ?? 0) || undefined,
+    openingPostIds: ids.length ? ids : undefined,
+    strongOpenings: Math.max(ids.length, stored.strongOpenings ?? 0, live.strongOpenings ?? 0) || undefined,
+    distributionScore: Math.max(stored.distributionScore ?? 0, live.distributionScore ?? 0) || undefined,
+    viewRate: Math.max(stored.viewRate ?? 0, live.viewRate ?? 0) || undefined,
+    peakViews: Math.max(stored.peakViews ?? 0, live.peakViews ?? 0) || undefined,
+    peakEngagements: Math.max(stored.peakEngagements ?? 0, live.peakEngagements ?? 0) || undefined,
+    source: stored.source === "top" || live.source === "top" ? "top" : (live.source ?? stored.source),
+    shortlisted: shortlist.shortlisted,
+    replyViewOutcomes: shortlist.replyViewOutcomes,
+    replyViewScore: shortlist.replyViewScore,
+    bestReplyViews: shortlist.bestReplyViews,
+    shortlistAt: shortlist.shortlistAt,
+  };
+}
 async function persistReachCaches(): Promise<void> {
   // Two-tab note: this read-modify-write can drop the OTHER tab's increments (both merge from the
   // same stored snapshot; last writer wins). Accepted — every entry is a TTL'd, refetchable cache.
@@ -5308,7 +5651,7 @@ async function persistReachCaches(): Promise<void> {
     const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as HeavyHitterStore | undefined;
     const mergedH: Record<string, HeavyHitterEntry> = {};
     if (storedH?.niche === niche) for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
-    for (const [k, v] of heavyHitters) if (v.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
+    for (const [k, v] of heavyHitters) if (v.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = mergeHeavyHitterEntry(mergedH[k], v);
     const hKeys = Object.keys(mergedH);
     if (hKeys.length > HEAVY_PERSIST_MAX) for (const k of hKeys.sort((a, b) => (mergedH[a].at ?? 0) - (mergedH[b].at ?? 0)).slice(0, hKeys.length - HEAVY_PERSIST_MAX)) delete mergedH[k];
     safeSet({ [CONFIG.X_HEAVY_HITTERS_KEY]: { niche, entries: mergedH } });
@@ -5323,33 +5666,107 @@ function schedulePersistReach(): void {
 let heavyHitters = new Map<string, HeavyHitterEntry>(); // persistent Fresh Reach radar: size, observed engagement, checks, and strong openings
 let heavyLoading = false;
 let showAllFreshRadar = false;
-interface HeavyRefreshResult { discovered: number; total: number; budgetLimited: boolean; }
-let heavyFlight: Promise<HeavyRefreshResult> | undefined;
+interface HeavyRefreshResult { discovered: number; total: number; budgetLimited: boolean; status?: number; error?: string; }
+const heavyFlights = new Map<string, Promise<HeavyRefreshResult>>();
 let heavyTried = false; // auto-discover once per session on entering Targets
+
+/** Fold the max-10 settled reply-view keep-list into the durable radar. The reply ledger remains
+ * the source of truth; these copied fields only keep API rotation/check timestamps useful. */
+function syncFreshReachShortlistIntoRadar(): FreshReachShortlistAccount[] {
+  const shortlist = currentFreshReachShortlist();
+  const desired = new Map(shortlist.map((winner) => [winner.handle, winner]));
+  let changed = false;
+  for (const [handle, entry] of heavyHitters) {
+    const winner = desired.get(handle);
+    if (!winner) {
+      if (entry.shortlisted || entry.replyViewOutcomes != null || entry.replyViewScore != null || entry.bestReplyViews != null || entry.shortlistAt != null) {
+        changed = true;
+        delete entry.shortlisted;
+        delete entry.replyViewOutcomes;
+        delete entry.replyViewScore;
+        delete entry.bestReplyViews;
+        delete entry.shortlistAt;
+      }
+      continue;
+    }
+    desired.delete(handle);
+    if (!entry.shortlisted || entry.followers !== winner.followers || entry.replyViewOutcomes !== winner.outcomes
+      || entry.replyViewScore !== winner.replyViewScore || entry.bestReplyViews !== winner.bestReplyViews || entry.shortlistAt !== winner.lastOutcomeAt) changed = true;
+    heavyHitters.set(handle, {
+      ...entry,
+      followers: winner.followers,
+      at: Math.max(entry.at ?? 0, winner.lastOutcomeAt),
+      discoveredAt: entry.discoveredAt ?? winner.lastOutcomeAt,
+      shortlisted: true,
+      replyViewOutcomes: winner.outcomes,
+      replyViewScore: winner.replyViewScore,
+      bestReplyViews: winner.bestReplyViews,
+      shortlistAt: winner.lastOutcomeAt,
+    });
+    authorReach.set(winner.handle, { ...(authorReach.get(winner.handle) ?? { at: winner.lastOutcomeAt }), followers: winner.followers, at: Date.now() });
+  }
+  for (const winner of desired.values()) {
+    if (!winner.followers) continue;
+    changed = true;
+    heavyHitters.set(winner.handle, {
+      followers: winner.followers,
+      engRate: 0,
+      n: 0,
+      at: winner.lastOutcomeAt,
+      discoveredAt: winner.lastOutcomeAt,
+      shortlisted: true,
+      replyViewOutcomes: winner.outcomes,
+      replyViewScore: winner.replyViewScore,
+      bestReplyViews: winner.bestReplyViews,
+      shortlistAt: winner.lastOutcomeAt,
+    });
+    authorReach.set(winner.handle, { followers: winner.followers, at: Date.now() });
+  }
+  if (changed) schedulePersistReach();
+  return shortlist;
+}
 
 /** Fold niche-search authors into the persistent radar. Top and Latest are discovery evidence only;
  * every individual post still has to pass the strict live/content gates before it becomes a reply. */
 function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | "latest"): number {
   const now = Date.now();
   const before = heavyHitters.size;
-  const grouped = new Map<string, { followers: number; rates: number[] }>();
+  const grouped = new Map<string, { followers: number; rates: number[]; viewRates: number[]; distribution: number[]; views: number[]; engagements: number[] }>();
   for (const tweet of tweets) {
     if (tweet.isReply || !tweet.author || !tweet.followers || tweet.followers < Math.max(2, myFollowers * 2)) continue;
     if (!tweet.text || looksLikeRT(tweet.text) || !isEnglish(tweet.text, tweet.lang) || isBait(tweet.text)) continue;
     const handle = tweet.author.toLowerCase();
     if (!/^[a-z0-9_]{1,15}$/.test(handle) || handle === selfHandle) continue;
-    const group = grouped.get(handle) ?? { followers: tweet.followers, rates: [] };
+    const signals = freshReachPostSignals(tweet, now);
+    const engagementRate = signals.engagementRate ?? 0;
+    const group = grouped.get(handle) ?? { followers: tweet.followers, rates: [], viewRates: [], distribution: [], views: [], engagements: [] };
     group.followers = tweet.followers;
-    group.rates.push(((tweet.likes ?? 0) + (tweet.reposts ?? 0)) / tweet.followers);
+    group.rates.push(engagementRate);
+    if (signals.viewRate != null) group.viewRates.push(signals.viewRate);
+    group.distribution.push(signals.distributionScore);
+    if (tweet.views != null) group.views.push(tweet.views);
+    if (signals.engagements != null) group.engagements.push(signals.engagements);
     grouped.set(handle, group);
   }
+  const robust = (values: number[]): number => {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const median = sorted[Math.floor((sorted.length - 1) / 2)];
+    return 0.65 * sorted[sorted.length - 1] + 0.35 * median;
+  };
   for (const [handle, group] of grouped) {
     const previous = heavyHitters.get(handle);
-    const observedRate = group.rates.reduce((sum, rate) => sum + rate, 0) / Math.max(1, group.rates.length);
+    const observedRate = robust(group.rates);
+    const observedDistribution = robust(group.distribution);
+    const observedViewRate = robust(group.viewRates);
     heavyHitters.set(handle, {
       ...previous,
       followers: group.followers,
       engRate: source === "top" ? observedRate : (previous?.engRate ?? observedRate),
+      distributionScore: Math.max(previous?.distributionScore ?? 0, observedDistribution),
+      viewRate: Math.max(previous?.viewRate ?? 0, observedViewRate),
+      peakViews: Math.max(previous?.peakViews ?? 0, ...group.views),
+      peakEngagements: Math.max(previous?.peakEngagements ?? 0, ...group.engagements),
       n: source === "top" ? group.rates.length : (previous?.n ?? group.rates.length),
       at: now,
       discoveredAt: previous?.discoveredAt ?? now,
@@ -5361,67 +5778,59 @@ function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | 
   if (grouped.size) schedulePersistReach();
   return heavyHitters.size - before;
 }
-/** Top search supplies account-discovery evidence and normalized observed engagement. It expands
- * the radar; every individual post still has to pass the separate freshness, room, and content gates. */
-function findHeavyHitters(silent = false, queryOverride?: string): Promise<HeavyRefreshResult> {
+/** Top search supplies account-discovery evidence and normalized observed distribution. A manual
+ * Fresh hunt uses both the focused niche query and one rotating exploration query; the governor
+ * still owns caching and monthly-budget enforcement for every request. */
+function findHeavyHitters(silent = false, queryOverride?: string | readonly string[]): Promise<HeavyRefreshResult> {
   const niche = xNiche.trim();
   if (!niche) return Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
-  if (heavyFlight) return heavyFlight;
+  const requested = Array.isArray(queryOverride) ? queryOverride : [queryOverride || nicheSearchQuery(niche)];
+  const queries = [...new Set(requested.map((query) => query.trim()).filter(Boolean))].slice(0, 2);
+  const flightKey = queries.join("\n");
+  const existing = heavyFlights.get(flightKey);
+  if (existing) return existing;
   heavyLoading = true; if (!silent) renderDock();
-  const flight = (async () => { try {
+  let flight!: Promise<HeavyRefreshResult>;
+  flight = (async () => { try {
     // LIVE-VERIFIED 2026-07: the provider's Top tab REJECTS search operators (-filter:/lang: →
     // zero results) while honoring the OR-topic form — so the query is operator-FREE and the
     // quality filtering happens entirely in the client-side screen below (isBait/RT/lang), which
     // was already in place. (The operator suffix added in the "hardening" pass silently killed
     // this feature: 0 parsed → empty pool, no error.)
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query: queryOverride || nicheSearchQuery(niche) }, intent: true });
-    if (!res?.ok) {
+    const results = await Promise.all(queries.map((query) => send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query }, intent: true,
+    })));
+    const successful = results.filter((result) => result?.ok);
+    const firstFailure = results.find((result) => !result?.ok);
+    const firstError = firstFailure?.error;
+    if (!successful.length) {
       if (!silent) {
-        if (res?.error === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to expand the Fresh Reach radar.");
-        else if (res?.error?.startsWith("budget-")) toast("Monthly X-data budget nearly used — Fresh Reach discovery is paused.");
+        if (firstError === "no-twttr-config") toast("Add your RapidAPI key in the Goobi panel to expand the Fresh Reach radar.");
+        else if (firstError?.startsWith("budget-")) toast("Local/provider X-data safety budget nearly used — check RapidAPI for the billing-cycle reset.");
+        else if ([401, 402, 403].includes(firstFailure?.status ?? 0)) toast(`Fresh Reach radar blocked (HTTP ${firstFailure?.status}) — the key is invalid or not subscribed to twitter241.`);
+        else if (firstFailure?.status === 429 || firstError?.startsWith("provider-backoff")) toast("Fresh Reach radar is waiting for the provider rate-limit/backoff window to reset.");
         else toast("Couldn't expand the Fresh Reach radar — try again.");
       }
-      return { discovered: 0, total: heavyHitters.size, budgetLimited: !!res?.error?.startsWith("budget-") };
+      return {
+        discovered: 0, total: heavyHitters.size,
+        budgetLimited: !!firstError?.startsWith("budget-"),
+        status: firstFailure?.status, error: firstError,
+      };
     }
     const now = Date.now();
-    const grouped = new Map<string, { followers: number; rates: number[] }>();
-    for (const t of parseTimelineTweets(res.data)) {
-      if (t.isReply || !t.author || t.followers == null || t.followers < Math.max(2, myFollowers * 2)) continue;
-      // Same poison-exemplar screen as pickBest: a giveaway/RT/non-English "Top" post must not crown
-      // an engagement FARMER as a heavy hitter (their audience is other farmers — worthless follows).
-      // Skipping entirely (no authorReach enrichment either) keeps farmer accounts out of the pool.
-      if (!t.text || looksLikeRT(t.text) || !isEnglish(t.text, t.lang) || isBait(t.text)) continue;
-      const rate = ((t.likes ?? 0) + (t.reposts ?? 0)) / t.followers; // a post that landed, normalized for size
-      const k = t.author.toLowerCase();
-      if (!/^[a-z0-9_]{1,15}$/.test(k) || k === selfHandle) continue;
-      const group = grouped.get(k) ?? { followers: t.followers, rates: [] };
-      group.followers = t.followers; group.rates.push(rate); grouped.set(k, group);
-      authorReach.set(k, { ...(authorReach.get(k) ?? { at: now }), followers: t.followers, at: now }); // enrich the reach cache so they enter the candidate pool
-    }
-    // Replace each author's current snapshot instead of folding the same cached Top posts into the
-    // mean repeatedly. Old authors remain only while their 30-day radar TTL is live.
-    const next = new Map([...heavyHitters].filter(([, value]) => value.at && now - value.at < HEAVY_HITTER_TTL_MS));
-    const before = next.size;
-    for (const [handle, group] of grouped) {
-      const previous = next.get(handle);
-      next.set(handle, {
-        ...previous,
-        followers: group.followers,
-        engRate: group.rates.reduce((sum, rate) => sum + rate, 0) / group.rates.length,
-        n: group.rates.length,
-        at: now,
-        discoveredAt: previous?.discoveredAt ?? now,
-        lastSeenAt: now,
-        source: "top",
-      });
-    }
-    heavyHitters = next;
-    schedulePersistReach();
-    return { discovered: Math.max(0, next.size - before), total: next.size, budgetLimited: false };
-  } finally { heavyLoading = false; if (!silent) renderDock(); } })();
-  heavyFlight = flight;
-  const clear = () => { if (heavyFlight === flight) heavyFlight = undefined; };
-  void flight.then(clear, clear);
+    for (const [handle, value] of heavyHitters) if (!value.at || now - value.at >= HEAVY_HITTER_TTL_MS) heavyHitters.delete(handle);
+    const before = heavyHitters.size;
+    captureFreshRadarTweets(results.flatMap((result) => result?.ok ? parseTimelineTweets(result.data) : []), "top");
+    return {
+      discovered: Math.max(0, heavyHitters.size - before), total: heavyHitters.size,
+      budgetLimited: results.some((result) => result?.error?.startsWith("budget-")),
+    };
+  } finally {
+    if (heavyFlights.get(flightKey) === flight) heavyFlights.delete(flightKey);
+    heavyLoading = heavyFlights.size > 0;
+    if (!silent) renderDock();
+  } })();
+  heavyFlights.set(flightKey, flight);
   return flight;
 }
 
@@ -5435,9 +5844,39 @@ function buildTargets(): HTMLElement {
     gate.append(t, p); head.append(gate); wrap.append(head);
     return wrap;
   }
+  const locked = currentReplyPace().level === "easeoff"; // same adaptive pace source as the dock chip
+  const shortlist = syncFreshReachShortlistIntoRadar(); // idempotent; also drops expired 30-day winners
   const sub = document.createElement("div"); sub.className = "ideasub";
-  sub.textContent = "Fresh Reach keeps a saved radar of larger accounts discovered through focused and broad searches—including massive accounts outside your niche. Each hunt expands the radar, rescans a diverse five-account slice, and only surfaces posts where you can add something specific.";
+  sub.textContent = "Fresh Reach uses Latest plus two Top discovery lenses, then checks up to twelve due accounts for genuinely early originals. Four rotating lanes go to massive accounts you pin; measured winners and new evidence-backed accounts keep separate coverage. Every post still needs a specific contribution.";
   head.append(sub);
+  const watchHead = document.createElement("div"); watchHead.className = "tg-radar-head";
+  const watchCopy = document.createElement("div");
+  const watchTitle = document.createElement("div"); watchTitle.className = "tg-sughead"; watchTitle.textContent = `Massive watchlist · ${freshReachWatchStore.entries.length}/${FRESH_REACH_WATCHLIST_MAX}`;
+  const watchMeta = document.createElement("div"); watchMeta.className = "tg-foot"; watchMeta.textContent = "Private pins · up to four due accounts checked per hunt · relevance still required";
+  watchCopy.append(watchTitle, watchMeta);
+  const scanWatch = document.createElement("button"); scanWatch.className = "scanb tg-track"; scanWatch.textContent = findingSpots ? "Scanning…" : "Scan pinned";
+  scanWatch.disabled = findingSpots || locked || !freshReachWatchStore.entries.length; scanWatch.onclick = () => void findSpots("fresh-reach");
+  watchHead.append(watchCopy, scanWatch); head.append(watchHead);
+  const watchAdd = document.createElement("div"); watchAdd.className = "tg-add";
+  const watchInput = document.createElement("input"); watchInput.className = "idea-steerin"; watchInput.placeholder = "@massive account to scan directly";
+  const watchButton = document.createElement("button"); watchButton.className = "scanb"; watchButton.textContent = freshReachWatchAdding ? "…" : "Pin"; watchButton.disabled = freshReachWatchAdding;
+  const doWatchAdd = () => { const value = watchInput.value; watchInput.value = ""; void addFreshReachWatch(value); };
+  watchButton.onclick = doWatchAdd; watchInput.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); doWatchAdd(); } };
+  watchAdd.append(watchInput, watchButton); head.append(watchAdd);
+  if (freshReachWatchMsg) { const message = document.createElement("div"); message.className = "ideasub"; message.textContent = freshReachWatchMsg; head.append(message); }
+  for (const entry of freshReachWatchStore.entries) {
+    const row = document.createElement("div"); row.className = "tg-sug tg-radar-row";
+    row.append(avatarChip(entry.handle, lastSeenFor(entry.handle)));
+    const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
+    const link = document.createElement("a") as HTMLAnchorElement; link.className = "ins-h"; link.textContent = `@${entry.handle}`; link.href = `https://x.com/${entry.handle}`; link.target = "_blank"; link.rel = "noopener"; link.style.textDecoration = "none";
+    const meta = document.createElement("div"); meta.className = "ins-meta";
+    const facts = [`${fmtCount(entry.followers)} followers`, entry.lastCheckedAt ? `checked ${fmtAge(entry.lastCheckedAt)}` : "waiting for first scan"];
+    if (entry.strongOpenings) facts.push(`${entry.strongOpenings} strong ${entry.strongOpenings === 1 ? "opening" : "openings"}`);
+    meta.textContent = facts.join(" · "); mid.append(link, meta);
+    const remove = document.createElement("button"); remove.className = "lk"; remove.textContent = "Remove"; remove.title = `Stop direct scans for @${entry.handle}`; remove.onclick = () => removeFreshReachWatch(entry.handle);
+    row.append(mid, remove); head.append(row);
+  }
+  const targetLabel = document.createElement("div"); targetLabel.className = "tg-sughead"; targetLabel.textContent = "Practical Targets"; head.append(targetLabel);
   const addRow = document.createElement("div"); addRow.className = "tg-add";
   const inp = document.createElement("input"); inp.className = "idea-steerin"; inp.placeholder = "@handle to track";
   const addB = document.createElement("button"); addB.className = "scanb"; addB.textContent = targetAdding ? "…" : "Track"; addB.disabled = targetAdding;
@@ -5450,21 +5889,55 @@ function buildTargets(): HTMLElement {
   hhB.textContent = heavyLoading ? "⚡ Expanding radar…" : heavyHitters.size ? "⚡ Find more accounts" : "⚡ Build Fresh Reach radar";
   hhB.onclick = () => void findHeavyHitters(false, nextFreshReachExploreQuery(xNiche));
   head.append(hhB);
-  if (xNiche.trim() && !heavyHitters.size && !heavyLoading && !heavyTried) { heavyTried = true; void findHeavyHitters(); }
+  const hasDiscoveredRadar = [...heavyHitters.values()].some((entry) => entry.source === "top" || entry.source === "latest");
+  if (xNiche.trim() && !hasDiscoveredRadar && !heavyLoading && !heavyTried) { heavyTried = true; void findHeavyHitters(); }
   wrap.append(head);
 
-  const locked = reputationStatus(repliesLastHour()).level === "easeoff"; // pace keystone (last-hour count, agrees with the pace chip)
   const now = Date.now();
   const agg = aggregateAccounts(replyLog.sent, now); // one pass → reused for suggestions + every target's standing
   const body = document.createElement("div"); body.className = "dl";
-  if (locked) { const l = document.createElement("div"); l.className = "tg-warn"; l.style.margin = "0 0 4px"; l.textContent = "Past your pace line for this hour — targeting is paused for a few minutes so you don't read as automated."; body.append(l); }
+  if (locked) { const l = document.createElement("div"); l.className = "tg-warn"; l.style.margin = "0 0 4px"; l.textContent = "Adaptive pace pressure is high — targeting pauses while it decays. Use Reset local pace if Goobi's session baseline no longer reflects what you're doing; it does not reset X."; body.append(l); }
+
+  const freshMeasured = replyLog.sent.filter((record) => record.source === "fresh-reach");
+  const apiMatchedRecords = freshMeasured.filter((record) => record.confirmation === "rapidapi" || record.outcome?.tweetId);
+  const viewMatchedRecords = apiMatchedRecords.filter((record) => record.outcome?.views != null);
+  const settledViewRecords = viewMatchedRecords.filter((record) => record.outcome?.frozen === true);
+  const measurement = document.createElement("div"); measurement.className = "tg-foot"; measurement.style.margin = "4px 0 10px";
+  measurement.textContent = `Fresh measurement · ${freshMeasured.length} logged → ${apiMatchedRecords.length} API matched → ${viewMatchedRecords.length} with views → ${settledViewRecords.length} settled → ${shortlist.length} accounts kept`;
+  measurement.title = "The keep-list uses only settled Fresh Reach replies that RapidAPI matched to an actual reply tweet and for which X reported views. A reply recorded after its opening expired cannot teach the winner lane.";
+  body.append(measurement);
+
+  if (shortlist.length) {
+    const keepHead = document.createElement("div"); keepHead.className = "tg-radar-head";
+    const keepCopy = document.createElement("div");
+    const keepTitle = document.createElement("div"); keepTitle.className = "tg-sughead"; keepTitle.textContent = `Massive account keep-list · ${shortlist.length}/10`;
+    const keepMeta = document.createElement("div"); keepMeta.className = "tg-foot"; keepMeta.textContent = "Settled X-reported views on your actual Fresh Reach replies · winner lane checked first";
+    keepCopy.append(keepTitle, keepMeta);
+    const scanKeep = document.createElement("button"); scanKeep.className = "scanb tg-track"; scanKeep.textContent = findingSpots ? "Scanning…" : "Scan winners";
+    scanKeep.disabled = findingSpots || locked; scanKeep.onclick = () => void findSpots("fresh-reach");
+    keepHead.append(keepCopy, scanKeep); body.append(keepHead);
+    for (const winner of shortlist) {
+      const row = document.createElement("div"); row.className = "tg-sug tg-radar-row";
+      row.append(avatarChip(winner.handle, lastSeenFor(winner.handle)));
+      const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
+      const link = document.createElement("a") as HTMLAnchorElement; link.className = "ins-h"; link.textContent = `@${winner.handle}`; link.href = `https://x.com/${winner.handle}`; link.target = "_blank"; link.rel = "noopener"; link.style.textDecoration = "none"; mid.append(link);
+      const meta = document.createElement("div"); meta.className = "ins-meta";
+      meta.textContent = `${fmtCount(winner.followers)} followers · ~${fmtCount(winner.averageReplyViews)} reply views avg · best ${fmtCount(winner.bestReplyViews)} · ${winner.outcomes} settled · ${winner.confidence}`;
+      meta.title = "Views are measured on your reply tweet through RapidAPI after the outcome settles. This is correlation with the account/thread, not proof that the account caused those views.";
+      mid.append(meta); row.append(mid); body.append(row);
+    }
+  }
 
   const radarAccounts = [...heavyHitters.entries()]
-    .filter(([, entry]) => entry.at && now - entry.at < HEAVY_HITTER_TTL_MS)
+    .filter(([, entry]) => !entry.shortlisted && entry.at && now - entry.at < HEAVY_HITTER_TTL_MS)
     .sort((a, b) => {
+      const as = a[1].shortlisted ? 1 : 0, bs = b[1].shortlisted ? 1 : 0;
       const ay = (a[1].strongOpenings ?? 0) / Math.max(1, a[1].checks ?? 0);
       const by = (b[1].strongOpenings ?? 0) / Math.max(1, b[1].checks ?? 0);
-      return by - ay || (b[1].strongOpenings ?? 0) - (a[1].strongOpenings ?? 0)
+      return bs - as || (b[1].replyViewScore ?? 0) - (a[1].replyViewScore ?? 0)
+        || by - ay || (b[1].strongOpenings ?? 0) - (a[1].strongOpenings ?? 0)
+        || (decayFreshReachEvidence(b[1].distributionScore, b[1].lastSeenAt ?? b[1].discoveredAt, now) ?? 0)
+          - (decayFreshReachEvidence(a[1].distributionScore, a[1].lastSeenAt ?? a[1].discoveredAt, now) ?? 0)
         || b[1].engRate - a[1].engRate || b[1].followers - a[1].followers;
     });
   if (radarAccounts.length) {
@@ -5472,8 +5945,8 @@ function buildTargets(): HTMLElement {
     const radarCopy = document.createElement("div");
     const radarTitle = document.createElement("div"); radarTitle.className = "tg-sughead"; radarTitle.textContent = `Fresh Reach radar · ${radarAccounts.length} saved`;
     const radarMeta = document.createElement("div"); radarMeta.className = "tg-foot";
-    const massiveN = radarAccounts.filter(([, entry]) => isMassiveFreshAccount(entry.followers)).length;
-    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · strong-opening history influences which five get checked`;
+    const massiveN = radarAccounts.filter(([, entry]) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length;
+    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · measured winners plus new exploration choose the next twelve checks`;
     radarCopy.append(radarTitle, radarMeta);
     const scanRadar = document.createElement("button"); scanRadar.className = "scanb tg-track"; scanRadar.textContent = findingSpots ? "Scanning…" : "Scan + expand";
     scanRadar.disabled = findingSpots || locked; scanRadar.onclick = () => void findSpots("fresh-reach");
@@ -5484,7 +5957,9 @@ function buildTargets(): HTMLElement {
       const mid = document.createElement("div"); mid.style.flex = "1"; mid.style.minWidth = "0";
       const link = document.createElement("a") as HTMLAnchorElement; link.className = "ins-h"; link.textContent = `@${handle}`; link.href = `https://x.com/${handle}`; link.target = "_blank"; link.rel = "noopener"; link.style.textDecoration = "none"; mid.append(link);
       const meta = document.createElement("div"); meta.className = "ins-meta";
-      const facts = [`${fmtCount(entry.followers)} followers`, isMassiveFreshAccount(entry.followers) ? "massive exploration" : "practical reach"];
+      const facts = [`${fmtCount(entry.followers)} followers`, isMassiveFreshReachAccount(entry.followers, myFollowers) ? "massive exploration" : "practical reach"];
+      if ((decayFreshReachEvidence(entry.distributionScore, entry.lastSeenAt ?? entry.discoveredAt, now) ?? 0) >= 0.58) facts.push("recent breakout distribution");
+      if (entry.peakViews != null) facts.push(`peak observed ${fmtCount(entry.peakViews)} views`);
       if (entry.strongOpenings) facts.push(`${entry.strongOpenings} strong ${entry.strongOpenings === 1 ? "opening" : "openings"}`);
       if (entry.lastCheckedAt) facts.push(`checked ${fmtAge(entry.lastCheckedAt)}`);
       meta.textContent = facts.join(" · "); mid.append(meta); row.append(mid); body.append(row);
@@ -6149,9 +6624,9 @@ function renderDock() {
     sb.title = paused ? "Paused — resume to search" : findingSpots ? "Searching…" : "Find spots — search X for fresh posts in your niche";
     sb.onclick = (e) => { e.stopPropagation(); void findSpots(); };
     const rb = document.createElement("button"); rb.className = "lbtn"; rb.textContent = "⚡";
-    rb.setAttribute("aria-label", "Find fresh posts from larger reachable accounts");
+    rb.setAttribute("aria-label", "Find measured breakout and major-account early reply openings");
     rb.disabled = paused || findingSpots || !myFollowers;
-    rb.title = paused ? "Paused — resume to search" : !myFollowers ? "Set your X handle first" : findingSpots ? "Searching…" : "Fresh Reach — expand the saved account radar and scan practical plus massive accounts for open new posts";
+    rb.title = paused ? "Paused — resume to search" : !myFollowers ? "Set your X handle first" : findingSpots ? "Searching…" : "Fresh Reach — find proven breakout distribution and unusually early openings on practical or massive accounts";
     rb.onclick = (e) => { e.stopPropagation(); void findSpots("fresh-reach"); };
     ctl.append(pb, sb, rb); l.append(ctl);
     root.appendChild(l);
@@ -6178,12 +6653,15 @@ function renderDock() {
     : "0 today";
   cnt.title = `${verifiedToday.confirmed} actual ${verifiedToday.confirmed === 1 ? "reply" : "replies"} matched through RapidAPI or manually confirmed today; ${verifiedToday.pending} successful Like + insert ${verifiedToday.pending === 1 ? "attempt is" : "attempts are"} awaiting a match. Copy/open drafts do not count until manually confirmed.`;
   // Live pace chip — surfaces the account-safety status in the moment you're replying.
-  const rhh = replyLog.times.filter((tm) => Date.now() - tm < HOUR_MS).length;
-  const stt = reputationStatus(rhh);
+  const stt = currentReplyPace(now);
+  const rhh = stt.repliesThisHour;
   const PACE_COLOR: Record<string, string> = { healthy: "#6fcf7f", caution: "#e89a3c", easeoff: "#d6604a" };
   const chip = document.createElement("span"); chip.className = "pace";
   if (paused) { chip.textContent = "Paused"; chip.style.color = "#8c7d68"; chip.title = "The copilot is paused — no scanning, surfacing, or API calls."; }
-  else { chip.style.color = PACE_COLOR[stt.level]; chip.textContent = stt.label; chip.title = `${rhh} reply ${rhh === 1 ? "attempt" : "attempts"} recorded through Goobi this hour. Goobi uses a conservative ${REPLY_HARD_PER_HOUR}/hr pause; X publishes no guaranteed safe hourly rate, so pace native replies too.`; }
+  else {
+    chip.style.color = PACE_COLOR[stt.level]; chip.textContent = stt.label;
+    chip.title = `${rhh} ${rhh === 1 ? "reply" : "replies"} recorded this hour · ${stt.pressure.toFixed(1)}/${REPLY_PACE_EASEOFF} adaptive pressure. Warm inbound/ongoing conversations count less, and activity fades after 15 minutes. This is Goobi's local heuristic—not an X limit.${stt.resetAt ? " The local baseline was manually reset; X activity and limits were not." : ""}`;
+  }
   if (dockView === "dms") {
     const dmPace = dmPacingStatus(dmStore, now);
     chip.style.color = dmPace.level === "pause" ? "#d6604a" : dmPace.level === "caution" ? "#e89a3c" : "#6fcf7f";
@@ -6218,7 +6696,7 @@ function renderDock() {
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
-  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, find spots, clear"; kb.setAttribute("aria-label", "More actions");
+  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, rescan, reset local pace, clear"; kb.setAttribute("aria-label", "More actions");
   kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
   acts.append(kb);
   const x = document.createElement("button"); x.className = "iconb"; x.textContent = "–"; x.title = "Minimize"; x.setAttribute("aria-label", "Minimize the dock"); // collapses to the launcher pill — it minimizes, it doesn't close
@@ -6234,7 +6712,7 @@ function renderDock() {
     find.disabled = findingSpots || !xNiche.trim();
     find.onclick = () => void findSpots();
     const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = findingSpots ? "Searching…" : "⚡ Fresh reach";
-    reach.title = !myFollowers ? "Set your X handle first so Goobi can compare account size" : "Expand your saved account radar, then scan practical and massive accounts for unusually open new posts";
+    reach.title = !myFollowers ? "Set your X handle first so Goobi can compare account size" : "Use focused and broad Top results to find proven distribution, then scan practical and massive accounts for breakout or unusually early openings";
     reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
     reach.onclick = () => void findSpots("fresh-reach");
     discovery.append(find, reach);
@@ -6246,7 +6724,7 @@ function renderDock() {
         ? " · building the account pool and checking fresh originals"
         : lastFreshReachRun.state === "failed"
           ? ` · ${lastFreshReachRun.note || "the search did not complete"}`
-          : ` · discovered ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.massiveSaved ? ` (${lastFreshReachRun.massiveSaved} massive)` : ""} · scanned ${lastFreshReachRun.accountsChecked} · ${lastFreshReachRun.originals} originals · ${lastFreshReachRun.eligible} timing/room matches · ${lastFreshReachRun.added} strong ${lastFreshReachRun.added === 1 ? "opening" : "openings"}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}`;
+          : ` · discovered ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.massiveSaved ? ` (${lastFreshReachRun.massiveSaved} massive)` : ""} · keep-list ${lastFreshReachRun.shortlistSize} · scanned ${lastFreshReachRun.accountsChecked}${lastFreshReachRun.massiveChecked ? ` (${lastFreshReachRun.massiveChecked} massive${lastFreshReachRun.watchlistChecked ? `, ${lastFreshReachRun.watchlistChecked} pinned` : ""}${lastFreshReachRun.shortlistChecked ? `, ${lastFreshReachRun.shortlistChecked} winner` : ""})` : ""} · ${lastFreshReachRun.originals} originals · ${lastFreshReachRun.breakoutCandidates} breakout pace · ${lastFreshReachRun.majorCandidates} major + early · ${lastFreshReachRun.eligible} live matches · ${lastFreshReachRun.added} strong ${lastFreshReachRun.added === 1 ? "opening" : "openings"}${lastFreshReachRun.addedBreakouts ? ` (${lastFreshReachRun.addedBreakouts} breakout)` : ""}${lastFreshReachRun.addedMajor ? ` (${lastFreshReachRun.addedMajor} major)` : ""}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}`;
       receipt.append(lead, detail); discovery.append(receipt);
     }
     d.append(discovery);
@@ -6384,6 +6862,7 @@ function renderDock() {
     };
     item(paused ? "▶ Resume" : "⏸ Pause", () => setPaused(!paused));
     if (!paused && dockView === "replies") item("↻ Rescan this page", () => rescan());
+    if (dockView === "replies" && (stt.repliesThisHour > 0 || stt.resetAt)) item("↺ Reset local pace meter", resetReplyPace);
     if (n) item("🗑 Clear all", () => { opps.clear(); toast("Cleared all reply spots."); renderDock(); });
     d.append(back, menu);
   }
@@ -6499,7 +6978,7 @@ function renderDock() {
     find.onclick = () => void findSpots();
     const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = "⚡ Fresh reach";
     reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
-    reach.title = !myFollowers ? "Set your X handle first" : "Expand the saved radar and scan practical plus massive accounts for just-posted, uncrowded conversations";
+    reach.title = !myFollowers ? "Set your X handle first" : "Measure proven breakout distribution and scan practical plus massive accounts for unusually early openings";
     reach.onclick = () => void findSpots("fresh-reach");
     foot.append(f1, f2, find, reach); d.append(foot);
   }
@@ -6559,7 +7038,7 @@ async function boot() {
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
   xReplyInsertOn = (await getLocal(CONFIG.X_REPLY_INSERT_KEY)) === true; // absent = safe manual handoff; true preserves explicit legacy opt-in
-  learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — flips on only once the backtest proves the learned signal predicts
+  learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — enable only after the real-data backtest validates the learned signal
   debugOn = (await getLocal(CONFIG.X_DEBUG_KEY)) === true;
   installDebugHook(); // dev-only window.__goobiExport() when debugOn (no-op otherwise)
   xNiche = ((await getLocal(CONFIG.X_NICHE_KEY)) as string) || "";
@@ -6567,6 +7046,7 @@ async function boot() {
   premiumTier = ((await getLocal(CONFIG.X_PREMIUM_KEY)) as string) || "";
   profileState = (await getLocal(CONFIG.X_PROFILE_KEY)) as ProfileState | undefined;
   myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
+  paceResetAt = Number(await getLocal(CONFIG.X_PACE_RESET_KEY)) || 0;
   const storedLog = await getLocal(CONFIG.X_REPLY_LOG_KEY);
   if (storedLog && typeof storedLog === "object") {
     const l = storedLog as Partial<ReplyLog>;
@@ -6610,8 +7090,10 @@ async function boot() {
     if (storedH?.niche && storedH.niche === xNiche.trim()) {
       for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS && !heavyHitters.has(k)) heavyHitters.set(k, v);
     }
+    syncFreshReachShortlistIntoRadar();
   }
   const ownHandle = await myHandle();
+  freshReachWatchStore = normalizeFreshReachWatchStore(await getLocal(CONFIG.X_FRESH_REACH_WATCHLIST_KEY), ownHandle || getSelf());
   const storedTargets = await getLocal(CONFIG.X_TARGETS_KEY) as TargetStore | undefined; // big-account target list
   if (storedTargets && Array.isArray(storedTargets.targets) && (!storedTargets.handle || !ownHandle || storedTargets.handle === ownHandle)) targetStore = { ...storedTargets, handle: ownHandle || storedTargets.handle };
   else if (ownHandle) targetStore = freshStore(ownHandle); // a different account's list — don't bleed it across users
@@ -6637,12 +7119,13 @@ async function boot() {
     if (changes[CONFIG.X_NICHE_KEY]) {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
       heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false; // the radar is tied to the active scoring context; re-discover when that context changes
+      syncFreshReachShortlistIntoRadar(); // measured winners survive a niche change; every new post is still content-gated against the new niche
     }
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
-    if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; captureGrowthData(); renderDock(); }
+    if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; syncFreshReachShortlistIntoRadar(); captureGrowthData(); renderDock(); }
     if (changes[CONFIG.X_MY_HANDLE_KEY]) {
       selfHandle = ""; ownStats = undefined; growthOwnerProblem = "";
-      void ensureTargetOwner(); void ensureDmOwner(); void ensureGrowthOwner().then(() => renderDock());
+      void ensureTargetOwner(); void ensureFreshReachWatchOwner(); void ensureDmOwner(); void ensureGrowthOwner().then(() => renderDock());
     }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; foldRelationshipMemory(); renderDock(); } } // synced from another tab's daily scan
     if (changes[CONFIG.X_IDEAS_KEY]) {
@@ -6659,7 +7142,11 @@ async function boot() {
       // Another tab wrote the reply ledger. MERGE (union), never adopt — a stale tab's blob must not
       // reset the rolling-hour count the ease-off safety guard reads, or defeat the daily tally.
       const nv = changes[CONFIG.X_REPLY_LOG_KEY].newValue as Partial<ReplyLog> | undefined;
-      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); invalidateLearnedMults(); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
+      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); invalidateLearnedMults(); syncFreshReachShortlistIntoRadar(); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
+    }
+    if (changes[CONFIG.X_PACE_RESET_KEY]) {
+      paceResetAt = Number(changes[CONFIG.X_PACE_RESET_KEY].newValue) || 0;
+      renderDock(); requestScan();
     }
     if (changes[CONFIG.X_SUPPORTERS_KEY]) { hydrateInbound(changes[CONFIG.X_SUPPORTERS_KEY].newValue); foldRelationshipMemory(); renderDock(); } // synced from another tab's notifications harvest (validated, not trusted raw)
     if (changes[CONFIG.X_RELATIONSHIP_MEMORY_KEY]) {
@@ -6672,6 +7159,11 @@ async function boot() {
       if (!dockInputFocused()) renderDock();
     }
     if (changes[CONFIG.X_TARGETS_KEY]) { const nv = changes[CONFIG.X_TARGETS_KEY].newValue as TargetStore | undefined; if (nv && Array.isArray(nv.targets) && (!dmStore.ownerHandle || !nv.handle || nv.handle.toLowerCase() === dmStore.ownerHandle)) { targetStore = nv; renderDock(); } } // synced only for the active owner
+    if (changes[CONFIG.X_FRESH_REACH_WATCHLIST_KEY]) {
+      const owner = freshReachWatchStore.ownerHandle || dmStore.ownerHandle || learn.handle || selfHandle;
+      freshReachWatchStore = normalizeFreshReachWatchStore(changes[CONFIG.X_FRESH_REACH_WATCHLIST_KEY].newValue, owner);
+      if (!dockInputFocused()) renderDock();
+    }
     const liveDmKey = dmStore.ownerHandle ? dmStorageKey(dmStore.ownerHandle) : "";
     if (liveDmKey && changes[liveDmKey]) {
       const incoming = pruneDmStore(changes[liveDmKey].newValue as DmStore | undefined, dmStore.ownerHandle, Date.now());
@@ -6712,6 +7204,19 @@ async function boot() {
 
   checkDueReminders(); // anything already due on load toasts once now (the SW badge is separate)
   remindPoll = setInterval(checkDueReminders, 30_000);
+
+  // Pace pressure decays continuously rather than dropping at a rigid one-hour cliff. Refresh only
+  // when the displayed tenth/level changes; leaving ease-off also resumes ambient scanning.
+  let lastPaceKey = "";
+  pacePoll = setInterval(() => {
+    const pace = currentReplyPace();
+    const nextKey = `${pace.level}:${pace.pressure.toFixed(1)}:${pace.resetAt ?? 0}`;
+    if (nextKey === lastPaceKey) return;
+    const wasEaseoff = lastPaceKey.startsWith("easeoff:");
+    lastPaceKey = nextKey;
+    if (!dockInputFocused()) renderDock();
+    if (wasEaseoff && pace.level !== "easeoff") requestScan();
+  }, 30_000);
 
   scan();
 }

@@ -6,7 +6,7 @@
   "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history", "favicon", "sidePanel"],
   "host_permissions": [
     "https://api.anthropic.com/*",
-    "https://*.p.rapidapi.com/*"
+    "https://twitter241.p.rapidapi.com/*"
   ],
   "background": {
     "service_worker": "service-worker.js",

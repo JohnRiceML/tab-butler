@@ -58,7 +58,7 @@ export type Message =
   | { type: "ARCHIVE_IDLE_NOW" }
   | { type: "UNDO_LAST" }
   | { type: "APPLY_REC"; kind: RecommendationKind; tabIds: number[] }
-  | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string }[] }
+  | { type: "SCORE_POSTS"; posts: { i: number; author: string; text: string; meta?: string; context?: string }[] }
   | { type: "DRAFT_REPLY"; author: string; text: string; context?: string; angle?: string; product?: string; steer?: string; reason?: string; category?: string; anchor?: string; replyBrief?: string; authorLine?: string; threadLine?: string; opportunityLine?: string }
   | { type: "OPEN_REPLY_HANDOFF"; handoff: ReplyHandoff }
   | { type: "CLAIM_REPLY_HANDOFF"; postId: string }

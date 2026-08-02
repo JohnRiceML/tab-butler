@@ -4,7 +4,7 @@
 
 ## Why
 
-Goobi already *measured* what works (the daily `runMeasurePass` writes real likes/replies into `SentRecord.outcome`; `learnFeatures`/`aggregateAccounts` turn that into per-angle/per-account signal), but the signal was **observational only** — `effectiveScore` (ranking) and `initialAngle` (drafting) used none of it. This work wires the measured signal into decisions, gated so it can't act until it's proven predictive.
+Goobi already *measured* what works (the daily `runMeasurePass` writes real likes/replies into `SentRecord.outcome`; `learnFeatures`/`aggregateAccounts` turn that into per-angle/per-account signal), but the signal was **observational only** — `effectiveScore` (ranking) and `initialAngle` (drafting) used none of it. This work wires the measured signal into decisions behind a default-off switch and conservative same-sample gate; it does not establish held-out predictive validity.
 
 ## Theories
 
@@ -18,7 +18,7 @@ Goobi already *measured* what works (the daily `runMeasurePass` writes real like
 ## What shipped (this pass)
 
 - **T4 — governor response cache** (`twttr-governor.ts` + pure helpers in `twttr-policy.ts`). Storage-backed, keyed on the full URL, per-class TTL (the `TWTTR_CLASS.ttl` values that already existed but weren't consumed), served **before** the budget/rate gates (a hit costs 0 bytes/0 requests, even in lockdown), self-bounding (prune-expired + oldest-eviction under a 4 MB cap). Scoped to the expensive/uncached classes — `user` is skipped (cheap + already cached upstream by `authorReach`). **Shipped ON** — no gate needed. Pure decisions covered by `scripts/test-twttr-cache.mjs`.
-- **T2 — ranking multiplier** (`accountRankMultipliers` in `learn-stats.ts` → `rankScore` in `x-copilot.ts`). A per-account measured multiplier, clamped to **[0.85, 1.20]**, precomputed once per render (never in the sort comparator), applied only to sort order in `topOpps`/`launcherAvatars`. **Gated on `fitCorr` defined AND > 0** (T3) — if your own ranking doesn't predict outcomes, it tilts nothing. Neutral 1.0 for any account without a settled measured score. Behind `learnLoopOn`, **default OFF**.
+- **T2 — ranking multiplier** (`accountRankMultipliers` in `learn-stats.ts` → `rankScore` in `x-copilot.ts`). A per-account measured multiplier, currently clamped to **[0.90, 1.10]**, precomputed once per render (never in the sort comparator), applied only to sort order in `topOpps`/`launcherAvatars`. **Gated on `fitCorr` defined AND ≥ 0.20** (T3) — if the same-sample ranking/outcome association is absent, it tilts nothing. Neutral 1.0 for any account without a settled measured score. Behind `learnLoopOn`, **default OFF**.
 - **T1 — drafter angle nudge** (`learnedBestAngle` → `initialAngle`). Your measured-best angle becomes the default draft angle *when the loop is on*, still overridable by steer chips. Reads `bestAngle`, which only exists when the top angle clears +15% over ≥2 angles. Behind `learnLoopOn`, **default OFF**.
 
 ### Correctness note (deviation from the plan)
@@ -27,7 +27,7 @@ The plan said "insert the multiplier at `effectiveScore`." We did **not** — `e
 
 ## Measured
 
-- **Synthetic self-test** (`scripts/backtest-learning.mjs`, in the gate): the replay harness correctly (a) detects planted score→fit signal, angle stability, and account stability; (b) does **not** manufacture correlation on noise; (c) reports UNDERPOWERED on thin data. `scripts/test-learn-loop.mjs`: the multiplier stays OFF when the ranking is anti-predictive or thin, tilts up/down within the clamp when proven, and omits sub-threshold accounts.
+- **Synthetic self-test** (`scripts/backtest-learning.mjs`, in the gate): the replay harness correctly (a) detects planted score→fit signal, angle stability, and account stability; (b) does **not** manufacture correlation on noise; (c) reports UNDERPOWERED on thin data. `scripts/test-learn-loop.mjs`: the multiplier stays OFF when the ranking is negatively aligned or thin, tilts up/down within the clamp when the synthetic gate is met, and omits sub-threshold accounts. This validates plumbing, not real-account efficacy.
 - **Real data:** not yet run — Goobi has only been in use a few days, so settled outcomes (`frozen`, ~2-day settle) are almost certainly < the n≥12 the honesty gates require. Expected first result: **SHELVE / keep OFF**.
 
 ## Next step to activate
