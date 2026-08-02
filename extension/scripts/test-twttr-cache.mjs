@@ -12,6 +12,7 @@ import * as esbuild from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/twttr-policy.ts"), "utf8");
+const governorSrc = readFileSync(join(here, "../src/lib/twttr-governor.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const m = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 const { cacheExpiry, cacheFresh, pruneCache, TWTTR_CLASS, TWTTR_CACHE_MAX_BYTES } = m;
@@ -20,6 +21,7 @@ let pass = 0, fail = 0;
 const ok = (c, l) => { if (c) pass++; else { fail++; console.error("  FAIL:", l); } };
 const NOW = 1_700_000_000_000;
 const entry = (at, exp, bytes) => ({ at, exp, bytes, data: { n: bytes } });
+ok(governorSrc.includes("cached: true, network: false") && governorSrc.includes("data, network: true"), "governor results distinguish zero-cost cache hits from live provider calls");
 
 // ---- cacheExpiry stamps the class TTL onto the entry ----
 ok(cacheExpiry("search", NOW) === NOW + TWTTR_CLASS.search.ttl, "cacheExpiry uses the search-class TTL");

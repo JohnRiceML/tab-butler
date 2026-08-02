@@ -1,5 +1,5 @@
 /**
- * The Twttr request governor: a durable local UTC-month safety meter, an 8/sec token
+ * The Twttr request governor: a durable local UTC-month safety meter, a 9/sec token
  * bucket, provider quota/rate-header awareness, graceful degradation (throttle expensive classes first, never starve
  * /user), and in-flight coalescing — all wrapping the single HTTP chokepoint in
  * the service worker. Lives in the worker (not the content script) so the budget
@@ -23,7 +23,11 @@ export interface TwttrMeter {
   providerRateLimit?: number; providerRateRemaining?: number; providerRateResetAt?: number;
   providerObservedAt?: number;
 }
-export interface GovResult { ok: boolean; status?: number; data?: unknown; error?: string }
+export interface GovResult {
+  ok: boolean; status?: number; data?: unknown; error?: string;
+  /** Receipt metadata: cache reads spend no provider request; network means a real fetch ran. */
+  cached?: boolean; network?: boolean;
+}
 
 interface ProviderSnapshot {
   providerRequestLimit?: number; providerRequestsRemaining?: number;
@@ -142,7 +146,7 @@ export async function governedFetch(host: string, key: string, path: string, que
   // regardless of `intent`, so the cache is keyed on the URL alone.
   if (useCache) {
     const hit = (await loadCache())[url];
-    if (cacheFresh(hit, Date.now())) return { ok: true, data: hit!.data };
+    if (cacheFresh(hit, Date.now())) return { ok: true, data: hit!.data, cached: true, network: false };
   }
 
   // Apply each caller's policy BEFORE joining a URL-identical request. In conserve mode an ambient
@@ -156,11 +160,11 @@ export async function governedFetch(host: string, key: string, path: string, que
     providerUsedFraction(gateMeter.providerRequestLimit, gateMeter.providerRequestsRemaining, gateMeter.providerObservedAt, gateNow),
   );
   const gateMode = degradeMode(gateUsedFrac);
-  if (!canFetch(tier, gateMode, intent)) return { ok: false, status: 0, error: `budget-${gateMode}` };
+  if (!canFetch(tier, gateMode, intent)) return { ok: false, status: 0, error: `budget-${gateMode}`, network: false };
 
   if (providerCircuit?.key !== key) providerCircuit = undefined;
   if (providerCircuit && gateNow < providerCircuit.until) {
-    return { ok: false, status: providerCircuit.status, error: `provider-backoff:${providerCircuit.error}` };
+    return { ok: false, status: providerCircuit.status, error: `provider-backoff:${providerCircuit.error}`, network: false };
   }
 
   const existing = inflight.get(ckey);
@@ -192,7 +196,7 @@ export async function governedFetch(host: string, key: string, path: string, que
           providerCircuit = { key, until: Date.now() + 30_000, status: res.status, error: detail || `HTTP ${res.status}` };
         }
         console.warn("[goobi] twttr", path, res.status, detail);
-        return { ok: false, status: res.status, error: detail || `twttr ${res.status}` };
+        return { ok: false, status: res.status, error: detail || `twttr ${res.status}`, network: true };
       }
       // The plan rate window can be exhausted on an otherwise successful final request.
       if (provider.providerRateRemaining === 0) {
@@ -201,12 +205,12 @@ export async function governedFetch(host: string, key: string, path: string, que
       try {
         const data = JSON.parse(text);
         if (useCache) await writeCache(url, cls, data, bytes, now); // make the fresh response visible before another narrow caller can miss it
-        return { ok: true, data };
-      } catch { return { ok: false, status: res.status, error: "bad-json" }; }
+        return { ok: true, data, network: true };
+      } catch { return { ok: false, status: res.status, error: "bad-json", network: true }; }
     } catch (e) {
       const message = (e as Error).name === "AbortError" ? "provider request timed out" : (e as Error).message;
       providerCircuit = { key, until: Date.now() + 30_000, status: 0, error: message };
-      return { ok: false, status: 0, error: message };
+      return { ok: false, status: 0, error: message, network: true };
     }
   })();
 

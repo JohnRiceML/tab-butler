@@ -9,7 +9,7 @@ import { aggregateSupporters, rankSupporters, fuseMutual, cadence as supCadence,
 import { ideaTokens, jaccard, TOO_SIMILAR, INPUT_DEDUP, COPY_LEAK, copyLeak, isEnglish, isBait, looksLikeRT, classifyShape, scoreWinner, percentile, bandFor, isBreakout, calibrateRates, setRateTable, shapePerformance, type Band, type Shape } from "../lib/idea-quality";
 import { reconcileIdeaPublications, type IdeaPublication } from "../lib/idea-outcomes";
 import { nextShipSlots, reminderState, formatSlot, reminderToastLine } from "../lib/schedule";
-import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, TARGET_POLL_TTL_MS, type TargetStore } from "../lib/targets";
+import { freshStore, addTarget, removeTarget, excludeFromTargets, inReachBand, reachMultipleLabel, freshnessLabel, earlyLabel, bandHiFor, selectPollBatch, slotOdds, TARGET_POLL_TTL_MS, type Target, type TargetStore } from "../lib/targets";
 import { rankThreads, TEND_WINDOW_MS, type InboundLite } from "../lib/threads";
 import { AUTHOR_REACH_TTL_MS, HEAVY_HITTER_TTL_MS } from "../lib/twttr-policy";
 import { rankSuggestions, suggestionReason, type SuggestionInput } from "../lib/suggest-targets";
@@ -20,7 +20,7 @@ import { builderTier } from "../lib/community";
 import { freshOpportunityMetricStore, observeMany, momentumFor, applyMomentum, adjustedTargetTime, mergeOpportunityMetricStores, pruneStore as pruneOpportunityMetrics, type OpportunityMetricStore } from "../lib/opportunity-momentum";
 import { connectionEvidence, foldCompletedExchanges, freshRelationshipMemory, mergeRelationshipMemory, pruneRelationshipMemory, type RelationshipMemoryStore } from "../lib/relationship-memory";
 import { recommendReply, repeatAuthorWarning, replyFreshness, type ReplyRecommendation } from "../lib/reply-recommendation";
-import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_MAX_AGE_MS, FRESH_REACH_WATCHLIST_MAX, decayFreshReachEvidence, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, freshReachPostSignals, freshReachShortlist, isMassiveFreshReachAccount, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount, type FreshReachOpportunityKind, type FreshReachShortlistAccount } from "../lib/fresh-reach";
+import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_ACCOUNT_CONCURRENCY, FRESH_REACH_CONTENT_CANDIDATES, FRESH_REACH_MAX_AGE_MS, FRESH_REACH_TOP_LENSES, FRESH_REACH_WATCHLIST_MAX, decayFreshReachEvidence, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, freshReachPostSignals, freshReachShortlist, isMassiveFreshReachAccount, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount, type FreshReachOpportunityKind, type FreshReachShortlistAccount } from "../lib/fresh-reach";
 import { handoffMatchesPath, isReplyBubblePath, statusIdFromPath, validReplyHandoff, type ReplyHandoff } from "../lib/reply-handoff";
 import { GROWTH_STRATEGIES, GROWTH_WINDOW_DAYS, activeGrowthExperiment, captureGrowthSnapshot, evaluateGrowthExperiment, finishGrowthExperiment, freshGrowthStore, growthStrategy, mergeGrowthStores, recommendedGrowthStrategy, seedFollowerSnapshot, settleGrowthExperiments, startGrowthExperiment, summarizeGrowthWindow, type GrowthExperiment, type GrowthStore, type GrowthStrategyId, type TaggedGrowthAction } from "../lib/growth-loop";
 import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDraftDm, canMarkDmSend, canMoveDmReady, dmPacingStatus, dueFollowUps, findDmDuplicate, followUpCount, freshDmStore, markDmReplied, markDmSent, mergeDmStores, pruneDmStore, rankDmSuggestions, redactDmTouch, removeDmCandidate, removeDmContext, sortDmCandidates, updateDmCandidate, type DmCandidate, type DmContextKind, type DmIntent, type DmPhase, type DmStore, type DmSuggestionInput } from "../lib/dm-workspace";
@@ -685,7 +685,10 @@ function watchEntry(handle: string): FreshReachWatchEntry | undefined {
 }
 interface FreshReachRunReceipt {
   id: string; at: number; state: "searching" | "complete" | "failed";
-  accountsChecked: number; originals: number; eligible: number; added: number;
+  accountsSelected: number; accountsChecked: number; accountFailures: number;
+  latestOriginals: number; directOriginals: number; originals: number;
+  eligible: number; contentScored: number; added: number;
+  providerCalls: number; cacheHits: number;
   breakoutCandidates: number; majorCandidates: number;
   addedBreakouts: number; addedMajor: number;
   budgetLimited: boolean; bestOpening?: number; accountsDiscovered: number;
@@ -693,6 +696,11 @@ interface FreshReachRunReceipt {
   massiveChecked: number; shortlistChecked: number; watchlistChecked: number; note?: string;
 }
 let lastFreshReachRun: FreshReachRunReceipt | undefined;
+function failFreshReachRun(runId: string, note: string): void {
+  if (!runId || lastFreshReachRun?.id !== runId) return;
+  lastFreshReachRun.state = "failed";
+  lastFreshReachRun.note = note;
+}
 const freshReachRunId = (): string => `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
 let freshReachExploreIndex = 0;
 
@@ -822,41 +830,86 @@ function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount
   });
 }
 
-interface FreshReachAuthorHunt { posts: TwttrTweet[]; checked: number; massiveChecked: number; shortlistChecked: number; watchlistChecked: number; budgetLimited: boolean; }
+interface FreshReachAuthorHunt {
+  posts: TwttrTweet[];
+  selected: number; attempted: number; checked: number; failed: number;
+  massiveChecked: number; shortlistChecked: number; watchlistChecked: number;
+  providerCalls: number; cacheHits: number; budgetLimited: boolean;
+  providerStatus?: number; providerError?: string;
+}
+interface TwttrGetResponse {
+  ok?: boolean; status?: number; data?: unknown; error?: string;
+  cached?: boolean; network?: boolean;
+}
+interface FreshReachAuthorResult {
+  ok: boolean; handle: string; account: FreshReachAccount;
+  tracked?: Target; fromCache: boolean; network: boolean;
+  budget: boolean; providerBlocked: boolean; status?: number; error?: string;
+  tweets: TwttrTweet[];
+}
 
 /** Check a bounded account set directly. The provider does not honor a batched OR-from query, so
  * this uses small per-handle searches with limited concurrency; the governor caches each query for
  * 12 minutes and enforces local plus provider-reported budget limits. Tracked-account results also refresh Targets. */
 async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]): Promise<FreshReachAuthorHunt> {
   const posts: TwttrTweet[] = [];
-  let checked = 0, massiveChecked = 0, shortlistChecked = 0, watchlistChecked = 0, budgetLimited = false, targetsChanged = false;
-  for (let i = 0; i < accounts.length; i += 3) {
-    const batch = accounts.slice(i, i + 3);
-    const results = await Promise.all(batch.map(async (account) => {
+  let attempted = 0, checked = 0, failed = 0, providerCalls = 0, cacheHits = 0;
+  let massiveChecked = 0, shortlistChecked = 0, watchlistChecked = 0, budgetLimited = false, targetsChanged = false;
+  let providerStatus: number | undefined, providerError: string | undefined;
+  for (let i = 0; i < accounts.length; i += FRESH_REACH_ACCOUNT_CONCURRENCY) {
+    const batch = accounts.slice(i, i + FRESH_REACH_ACCOUNT_CONCURRENCY);
+    attempted += batch.length;
+    const results = await Promise.all(batch.map(async (account): Promise<FreshReachAuthorResult> => {
       const handle = account.handle.replace(/^@+/, "").trim().toLowerCase();
       const tracked = targetStore.targets.find((target) => target.handle.toLowerCase() === handle);
       const cached = tracked ? targetPosts.get(tracked.handle) : undefined;
       if (cached?.id && tracked?.lastPolledAt && Date.now() - tracked.lastPolledAt < TARGET_POLL_TTL_MS) {
-        return { ok: true, handle, account, tracked, fromCache: true, tweets: [{
+        return { ok: true, handle, account, tracked, fromCache: true, network: false, budget: false, providerBlocked: false, tweets: [{
           ...cached, followers: account.followers, isReply: false,
         } satisfies TwttrTweet] };
       }
-      const response = await send<{ ok?: boolean; data?: unknown; error?: string }>({
+      const response = await send<TwttrGetResponse>({
         type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: true,
       });
-      if (response?.error?.startsWith("budget-")) return { ok: false, handle, account, tracked, budget: true, tweets: [] as TwttrTweet[] };
-      if (!response?.ok) { freshReachFailedAt.set(handle, Date.now()); return { ok: false, handle, account, tracked, tweets: [] as TwttrTweet[] }; }
+      const error = response?.error;
+      const status = response?.status;
+      const budget = !!error?.startsWith("budget-");
+      const providerBlocked = budget || error === "no-twttr-config" || !!error?.startsWith("provider-backoff")
+        || [0, 401, 402, 403, 429].includes(status ?? -1) || (status ?? 0) >= 500;
+      if (!response?.ok) {
+        // A malformed/unknown handle may deserve a short per-account backoff. Provider-wide auth,
+        // quota, rate, timeout, and outage failures must not poison all 24 saved accounts.
+        if (!providerBlocked && status != null && status >= 400 && status < 500) freshReachFailedAt.set(handle, Date.now());
+        return {
+          ok: false, handle, account, tracked, fromCache: false,
+          network: response?.network === true, budget, providerBlocked, status, error,
+          tweets: [],
+        };
+      }
       freshReachFailedAt.delete(handle);
       const tweets = parseTimelineTweets(response.data)
         .filter((post) => !post.isReply && post.text && post.author.toLowerCase() === handle)
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))
         .slice(0, 3)
         .map((post) => ({ ...post, followers: post.followers ?? account.followers }));
-      return { ok: true, handle, account, tracked, tweets };
+      return {
+        ok: true, handle, account, tracked, fromCache: response?.cached === true,
+        network: response?.network === true, budget: false, providerBlocked: false,
+        status, error, tweets,
+      };
     }));
     for (const result of results) {
+      if (result.network) providerCalls++;
+      if (result.fromCache) cacheHits++;
       if (result.budget) budgetLimited = true;
-      if (!result.ok) continue;
+      if (!result.ok) {
+        failed++;
+        if (result.providerBlocked && !providerError) {
+          providerStatus = result.status;
+          providerError = result.error;
+        }
+        continue;
+      }
       checked++;
       if (isMassiveFreshReachAccount(result.account.followers, myFollowers)) massiveChecked++;
       if (result.account.shortlisted) shortlistChecked++;
@@ -890,9 +943,16 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
         targetsChanged = true;
       }
     }
+    // Provider-wide failures make every remaining URL fail identically. Preserve quota and report
+    // the partial scan honestly instead of burning through another three batches of circuit hits.
+    if (results.some((result) => result.providerBlocked)) break;
   }
   if (targetsChanged) persistTargets();
-  return { posts, checked, massiveChecked, shortlistChecked, watchlistChecked, budgetLimited };
+  return {
+    posts, selected: accounts.length, attempted, checked, failed,
+    massiveChecked, shortlistChecked, watchlistChecked,
+    providerCalls, cacheHits, budgetLimited, providerStatus, providerError,
+  };
 }
 /** Search X (via the Twttr API) for fresh posts in the user's niche, score them
  *  with the same Claude scorer the feed uses, and drop the worthwhile ones into
@@ -909,8 +969,11 @@ async function findSpots(mode: FindSpotsMode = "niche") {
   }
   const runId = mode === "fresh-reach" ? freshReachRunId() : "";
   if (mode === "fresh-reach") lastFreshReachRun = {
-    id: runId, at: Date.now(), state: "searching", accountsChecked: 0,
-    originals: 0, eligible: 0, added: 0, budgetLimited: false,
+    id: runId, at: Date.now(), state: "searching",
+    accountsSelected: 0, accountsChecked: 0, accountFailures: 0,
+    latestOriginals: 0, directOriginals: 0, originals: 0,
+    eligible: 0, contentScored: 0, added: 0,
+    providerCalls: 0, cacheHits: 0, budgetLimited: false,
     breakoutCandidates: 0, majorCandidates: 0, addedBreakouts: 0, addedMajor: 0,
     accountsDiscovered: 0, radarSize: heavyHitters.size,
     massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length,
@@ -922,21 +985,33 @@ async function findSpots(mode: FindSpotsMode = "niche") {
     ? "Hunting proven breakout distribution and unusually early openings on major accounts…"
     : "Searching X for fresh posts in your niche…");
   try {
-    // Every explicit Fresh click expands the saved account radar with one rotating, operator-free
-    // Top query while Latest searches current posts. The governor/cache still bound network cost.
+    // Every explicit Fresh click expands the saved account radar with two rotating, operator-free
+    // Top queries plus the focused lens while Latest searches current posts. The governor/cache
+    // still owns actual provider-rate and billing-cycle boundaries.
     const radarBefore = heavyHitters.size;
-    const explorationQuery = mode === "fresh-reach" ? nextFreshReachExploreQuery(q) : "";
+    const explorationQueries = mode === "fresh-reach"
+      ? Array.from({ length: Math.max(0, FRESH_REACH_TOP_LENSES - 1) }, () => nextFreshReachExploreQuery(q))
+      : [];
     const heavyRefresh = mode === "fresh-reach"
-      ? findHeavyHitters(true, [nicheSearchQuery(q), explorationQuery])
-      : Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
+      ? findHeavyHitters(true, [nicheSearchQuery(q), ...explorationQueries])
+      : Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false, providerCalls: 0, cacheHits: 0 });
     const [search, radarRefresh] = await Promise.all([
-      send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+      send<TwttrGetResponse>({
         type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: mode === "fresh-reach" ? "50" : "30", query: nicheSearchQuery(q) }, intent: true, // OR the topics so it matches ANY, not ALL keywords (intent clause dropped)
       }),
       heavyRefresh,
     ]);
-    if (search?.error === "no-twttr-config") { twttrUnconfigured = true; toast("Add your RapidAPI key in the Goobi panel to find spots."); return; }
-    if (search?.error?.startsWith("budget-")) { toast("The local/provider X-data safety budget is nearly used — Find spots is paused. Check RapidAPI for the billing-cycle reset."); return; }
+    if (search?.error === "no-twttr-config") {
+      twttrUnconfigured = true;
+      failFreshReachRun(runId, "Add your RapidAPI key in the Goobi panel to run the data search.");
+      toast("Add your RapidAPI key in the Goobi panel to find spots.");
+      return;
+    }
+    if (search?.error?.startsWith("budget-")) {
+      failFreshReachRun(runId, "The local/provider X-data safety budget paused this hunt. Check RapidAPI for the billing-cycle reset.");
+      toast("The local/provider X-data safety budget is nearly used — Find spots is paused. Check RapidAPI for the billing-cycle reset.");
+      return;
+    }
     let latestUnavailable = false;
     if (!search?.ok) {
       const s = search?.status;
@@ -952,14 +1027,21 @@ async function findSpots(mode: FindSpotsMode = "niche") {
           ? "Key invalid or not subscribed to twitter241 on RapidAPI."
           : s === 429 ? "RapidAPI rate limit reached; wait for the provider reset."
             : "Check your RapidAPI key and provider status in the popup.";
-        toast(`X search failed${s ? ` (HTTP ${s})` : ""}. ${why}${search?.error ? ` — provider says: ${search.error}` : ""}`);
+        const failure = `X search failed${s ? ` (HTTP ${s})` : ""}. ${why}${search?.error ? ` Provider: ${search.error}` : ""}`;
+        failFreshReachRun(runId, failure);
+        toast(failure);
         return;
       }
     }
     if (!selfHandle) selfHandle = getSelf();
     let originals = pickDiscoveryTweets(latestUnavailable ? undefined : search?.data, mode === "fresh-reach" ? 50 : 18)
       .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle);
-    let freshHunt: FreshReachAuthorHunt = { posts: [], checked: 0, massiveChecked: 0, shortlistChecked: 0, watchlistChecked: 0, budgetLimited: false };
+    const latestOriginals = originals.length;
+    let freshHunt: FreshReachAuthorHunt = {
+      posts: [], selected: 0, attempted: 0, checked: 0, failed: 0,
+      massiveChecked: 0, shortlistChecked: 0, watchlistChecked: 0,
+      providerCalls: 0, cacheHits: 0, budgetLimited: false,
+    };
     const directlyCheckedAuthors = new Set<string>();
     const accountPriorityByHandle = new Map<string, number>();
     if (mode === "fresh-reach") {
@@ -968,7 +1050,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       const rankedAccounts = pickFreshReachAccounts(pool, myFollowers, Date.now(), pool.length);
       for (const candidate of rankedAccounts) accountPriorityByHandle.set(candidate.account.handle.toLowerCase(), candidate.priority);
       // A broad Latest result that already gives us an eligible original is useful now. Do not pay
-      // for an author-specific duplicate check; spend the twelve slots on accounts Latest missed.
+      // for an author-specific duplicate check; spend the 24 direct slots on accounts Latest missed.
       const covered = new Set(pickFreshReachCandidates(
         originals, myFollowers, Date.now(), replyLog.authors, originals.length,
       ).map((candidate) => candidate.post.author.toLowerCase()));
@@ -988,7 +1070,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
     // old opportunity-only top-12 could let twelve generic celebrity posts hide a relevant #13,
     // and a generic newest post could hide a better older post by the same author.
     const freshCandidates = mode === "fresh-reach"
-      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, 24, 2)
+      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, FRESH_REACH_CONTENT_CANDIDATES, 2)
       : [];
     const discovered = mode === "fresh-reach" ? freshCandidates.map((candidate) => candidate.post) : originals;
     const evidenceById = new Map<string, FreshReachEvidence>();
@@ -1007,8 +1089,12 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       distributionScore: candidate.signals.distributionScore,
     });
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) Object.assign(lastFreshReachRun, {
-      state: "complete", accountsChecked: freshHunt.checked, originals: originals.length,
+      state: "complete",
+      accountsSelected: freshHunt.selected, accountsChecked: freshHunt.checked, accountFailures: freshHunt.failed,
+      latestOriginals, directOriginals: freshHunt.posts.length, originals: originals.length,
       eligible: freshCandidates.length, budgetLimited: freshHunt.budgetLimited || radarRefresh.budgetLimited,
+      providerCalls: (search?.network ? 1 : 0) + radarRefresh.providerCalls + freshHunt.providerCalls,
+      cacheHits: (search?.cached ? 1 : 0) + radarRefresh.cacheHits + freshHunt.cacheHits,
       breakoutCandidates: freshCandidates.filter((candidate) => candidate.kind === "breakout").length,
       majorCandidates: freshCandidates.filter((candidate) => candidate.kind === "major-early").length,
       accountsDiscovered: Math.max(radarRefresh.discovered, heavyHitters.size - radarBefore),
@@ -1018,7 +1104,11 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       massiveChecked: freshHunt.massiveChecked,
       shortlistChecked: freshHunt.shortlistChecked,
       watchlistChecked: freshHunt.watchlistChecked,
-      note: latestUnavailable ? lastFreshReachRun.note : undefined,
+      note: latestUnavailable
+        ? lastFreshReachRun.note
+        : freshHunt.providerError
+          ? `Direct checks stopped early${freshHunt.providerStatus ? ` (HTTP ${freshHunt.providerStatus})` : ""}; broad search results were still reviewed.`
+          : undefined,
     });
     // Refresh every returned original before applying the strict Fresh screen. A post that crossed
     // the age/reply boundary must lose its live Fresh claim instead of keeping stale metrics merely
@@ -1046,7 +1136,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
     }
     if (!discovered.length) {
       toast(mode === "fresh-reach"
-        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. ${freshHunt.checked ? `Scanned ${freshHunt.checked} ${freshHunt.checked === 1 ? "account" : "accounts"}${freshHunt.massiveChecked ? ` (${freshHunt.massiveChecked} massive${freshHunt.watchlistChecked ? `, ${freshHunt.watchlistChecked} pinned` : ""})` : ""}${latestUnavailable ? " from the saved radar" : " plus Latest"}. ` : ""}No just-posted, uncrowded eligible opening right now${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
+        ? `Reviewed ${originals.length} unique originals from ${freshHunt.checked}/${freshHunt.selected} returned accounts${latestUnavailable ? "" : " plus Latest"}. None passed the just-posted, uncrowded live gate${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
         : "X returned no usable posts for this niche right now.");
       return;
     }
@@ -1055,17 +1145,26 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       const rising = discovered.filter((t) => opps.has(t.id) && t.postedAt != null && Date.now() - t.postedAt <= 2 * HOUR_MS && slotOdds(t.replies) > 0.45 && (opportunityMomentum(t.id)?.score ?? 0) >= 0.25).length;
       toast(refreshed
         ? `Refreshed ${refreshed} ${refreshed === 1 ? "spot" : "spots"}${rising ? ` · ${rising} picking up` : ""}. No new matches this time.`
-        : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
+        : `${discovered.length} ${discovered.length === 1 ? "post passed" : "posts passed"} the live gate; all were already reviewed.`);
       return;
     }
+    if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) lastFreshReachRun.contentScored = found.length;
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
-    // Two bounded model calls preserve response completeness at the 24-post deep-scan ceiling; one
-    // 1,536-token JSON response can truncate before returning every row. Indices stay global.
+    // Bounded 12-row model calls preserve response completeness at the 36-post deep-scan ceiling;
+    // one 1,536-token JSON response can truncate before returning every row. Indices stay global.
     const scoreBatches = Array.from({ length: Math.ceil(posts.length / 12) }, (_, i) => posts.slice(i * 12, i * 12 + 12));
     const scoreResponses = await Promise.all(scoreBatches.map((batch) =>
       send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: batch })));
-    if (scoreResponses.some((response) => response?.error === "no-key")) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
-    if (scoreResponses.some((response) => !response || response.error)) { toast("Couldn't score the posts — try again."); return; }
+    if (scoreResponses.some((response) => response?.error === "no-key")) {
+      failFreshReachRun(runId, "The data search completed, but an Anthropic key is needed to score the candidate posts.");
+      toast("Add your Anthropic key in the Goobi panel to score posts.");
+      return;
+    }
+    if (scoreResponses.some((response) => !response || response.error)) {
+      failFreshReachRun(runId, "The data search completed, but content scoring did not complete. Try again.");
+      toast("Couldn't score the posts — try again.");
+      return;
+    }
     const scores = scoreResponses.flatMap((response) => response?.scores ?? []);
     // Fresh Reach keeps only the best CONTENT × observed-opening result per author after scoring.
     // This preserves API recall without letting one prolific account crowd the final queue.
@@ -1149,7 +1248,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
         ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length} · found ${added} strong ${added === 1 ? "opening" : "openings"}${addedBreakouts ? ` · ${addedBreakouts} breakout` : ""}${addedMajor ? ` · ${addedMajor} major + early` : ""}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"}` : ""}. The best observed opening is pinned first.`
         : `Found ${added} fresh reply ${added === 1 ? "spot" : "spots"} in your niche.`
       : mode === "fresh-reach"
-        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. Scored ${discovered.length} live candidates; none had a strong enough specific contribution this time.`
+        ? `Radar ${heavyHitters.size} · keep-list ${currentFreshReachShortlist().length}${lastFreshReachRun?.accountsDiscovered ? ` · saved ${lastFreshReachRun.accountsDiscovered} new` : ""}. Scored ${found.length} live candidates; none had a strong enough specific contribution this time.`
         : `Checked ${discovered.length} posts. No new high-fit spots this time.`);
   } finally {
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId && lastFreshReachRun.state === "searching") {
@@ -5602,7 +5701,7 @@ async function draftTargetReply(handle: string): Promise<void> {
  *  and a plain write would wipe the compounding history), prune past-TTL on both load and write,
  *  cap sizes. authorReach is PUBLIC author data (no owner stamp); heavyHitters is derived from
  *  the user's niche QUERY, so it's stamped with the niche and flushed when the niche changes. */
-const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 200;
+const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 400;
 type ReachEntry = { followers?: number; following?: number; bio?: string; at: number };
 function mergeHeavyHitterEntry(stored: HeavyHitterEntry | undefined, live: HeavyHitterEntry): HeavyHitterEntry {
   if (!stored) return live;
@@ -5666,7 +5765,11 @@ function schedulePersistReach(): void {
 let heavyHitters = new Map<string, HeavyHitterEntry>(); // persistent Fresh Reach radar: size, observed engagement, checks, and strong openings
 let heavyLoading = false;
 let showAllFreshRadar = false;
-interface HeavyRefreshResult { discovered: number; total: number; budgetLimited: boolean; status?: number; error?: string; }
+interface HeavyRefreshResult {
+  discovered: number; total: number; budgetLimited: boolean;
+  providerCalls: number; cacheHits: number;
+  status?: number; error?: string;
+}
 const heavyFlights = new Map<string, Promise<HeavyRefreshResult>>();
 let heavyTried = false; // auto-discover once per session on entering Targets
 
@@ -5730,7 +5833,7 @@ function syncFreshReachShortlistIntoRadar(): FreshReachShortlistAccount[] {
  * every individual post still has to pass the strict live/content gates before it becomes a reply. */
 function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | "latest"): number {
   const now = Date.now();
-  const before = heavyHitters.size;
+  let discovered = 0;
   const grouped = new Map<string, { followers: number; rates: number[]; viewRates: number[]; distribution: number[]; views: number[]; engagements: number[] }>();
   for (const tweet of tweets) {
     if (tweet.isReply || !tweet.author || !tweet.followers || tweet.followers < Math.max(2, myFollowers * 2)) continue;
@@ -5756,6 +5859,7 @@ function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | 
   };
   for (const [handle, group] of grouped) {
     const previous = heavyHitters.get(handle);
+    if (!previous) discovered++;
     const observedRate = robust(group.rates);
     const observedDistribution = robust(group.distribution);
     const observedViewRate = robust(group.viewRates);
@@ -5775,17 +5879,22 @@ function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | 
     });
     authorReach.set(handle, { ...(authorReach.get(handle) ?? { at: now }), followers: group.followers, at: now });
   }
+  if (heavyHitters.size > HEAVY_PERSIST_MAX) {
+    const overflow = heavyHitters.size - HEAVY_PERSIST_MAX;
+    const oldest = [...heavyHitters.entries()].sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0)).slice(0, overflow);
+    for (const [handle] of oldest) heavyHitters.delete(handle);
+  }
   if (grouped.size) schedulePersistReach();
-  return heavyHitters.size - before;
+  return discovered;
 }
 /** Top search supplies account-discovery evidence and normalized observed distribution. A manual
- * Fresh hunt uses both the focused niche query and one rotating exploration query; the governor
+ * Fresh hunt uses the focused niche query and up to two rotating exploration queries; the governor
  * still owns caching and monthly-budget enforcement for every request. */
 function findHeavyHitters(silent = false, queryOverride?: string | readonly string[]): Promise<HeavyRefreshResult> {
   const niche = xNiche.trim();
-  if (!niche) return Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false });
+  if (!niche) return Promise.resolve({ discovered: 0, total: heavyHitters.size, budgetLimited: false, providerCalls: 0, cacheHits: 0 });
   const requested = Array.isArray(queryOverride) ? queryOverride : [queryOverride || nicheSearchQuery(niche)];
-  const queries = [...new Set(requested.map((query) => query.trim()).filter(Boolean))].slice(0, 2);
+  const queries = [...new Set(requested.map((query) => query.trim()).filter(Boolean))].slice(0, FRESH_REACH_TOP_LENSES);
   const flightKey = queries.join("\n");
   const existing = heavyFlights.get(flightKey);
   if (existing) return existing;
@@ -5797,9 +5906,11 @@ function findHeavyHitters(silent = false, queryOverride?: string | readonly stri
     // quality filtering happens entirely in the client-side screen below (isBait/RT/lang), which
     // was already in place. (The operator suffix added in the "hardening" pass silently killed
     // this feature: 0 parsed → empty pool, no error.)
-    const results = await Promise.all(queries.map((query) => send<{ ok?: boolean; status?: number; data?: unknown; error?: string }>({
+    const results = await Promise.all(queries.map((query) => send<TwttrGetResponse>({
       type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query }, intent: true,
     })));
+    const providerCalls = results.filter((result) => result?.network).length;
+    const cacheHits = results.filter((result) => result?.cached).length;
     const successful = results.filter((result) => result?.ok);
     const firstFailure = results.find((result) => !result?.ok);
     const firstError = firstFailure?.error;
@@ -5814,16 +5925,17 @@ function findHeavyHitters(silent = false, queryOverride?: string | readonly stri
       return {
         discovered: 0, total: heavyHitters.size,
         budgetLimited: !!firstError?.startsWith("budget-"),
+        providerCalls, cacheHits,
         status: firstFailure?.status, error: firstError,
       };
     }
     const now = Date.now();
     for (const [handle, value] of heavyHitters) if (!value.at || now - value.at >= HEAVY_HITTER_TTL_MS) heavyHitters.delete(handle);
-    const before = heavyHitters.size;
-    captureFreshRadarTweets(results.flatMap((result) => result?.ok ? parseTimelineTweets(result.data) : []), "top");
+    const discovered = captureFreshRadarTweets(results.flatMap((result) => result?.ok ? parseTimelineTweets(result.data) : []), "top");
     return {
-      discovered: Math.max(0, heavyHitters.size - before), total: heavyHitters.size,
+      discovered, total: heavyHitters.size,
       budgetLimited: results.some((result) => result?.error?.startsWith("budget-")),
+      providerCalls, cacheHits,
     };
   } finally {
     if (heavyFlights.get(flightKey) === flight) heavyFlights.delete(flightKey);
@@ -5847,7 +5959,7 @@ function buildTargets(): HTMLElement {
   const locked = currentReplyPace().level === "easeoff"; // same adaptive pace source as the dock chip
   const shortlist = syncFreshReachShortlistIntoRadar(); // idempotent; also drops expired 30-day winners
   const sub = document.createElement("div"); sub.className = "ideasub";
-  sub.textContent = "Fresh Reach uses Latest plus two Top discovery lenses, then checks up to twelve due accounts for genuinely early originals. Four rotating lanes go to massive accounts you pin; measured winners and new evidence-backed accounts keep separate coverage. Every post still needs a specific contribution.";
+  sub.textContent = "Fresh Reach uses Latest plus three Top discovery lenses, then checks up to 24 due accounts for genuinely early originals. Four rotating lanes go to massive accounts you pin; measured winners and new evidence-backed accounts keep separate coverage. Every post still needs a specific contribution.";
   head.append(sub);
   const watchHead = document.createElement("div"); watchHead.className = "tg-radar-head";
   const watchCopy = document.createElement("div");
@@ -5946,7 +6058,7 @@ function buildTargets(): HTMLElement {
     const radarTitle = document.createElement("div"); radarTitle.className = "tg-sughead"; radarTitle.textContent = `Fresh Reach radar · ${radarAccounts.length} saved`;
     const radarMeta = document.createElement("div"); radarMeta.className = "tg-foot";
     const massiveN = radarAccounts.filter(([, entry]) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length;
-    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · measured winners plus new exploration choose the next twelve checks`;
+    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · measured winners plus new exploration choose the next 24 checks`;
     radarCopy.append(radarTitle, radarMeta);
     const scanRadar = document.createElement("button"); scanRadar.className = "scanb tg-track"; scanRadar.textContent = findingSpots ? "Scanning…" : "Scan + expand";
     scanRadar.disabled = findingSpots || locked; scanRadar.onclick = () => void findSpots("fresh-reach");
@@ -6724,7 +6836,7 @@ function renderDock() {
         ? " · building the account pool and checking fresh originals"
         : lastFreshReachRun.state === "failed"
           ? ` · ${lastFreshReachRun.note || "the search did not complete"}`
-          : ` · discovered ${lastFreshReachRun.accountsDiscovered} new ${lastFreshReachRun.accountsDiscovered === 1 ? "account" : "accounts"} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.massiveSaved ? ` (${lastFreshReachRun.massiveSaved} massive)` : ""} · keep-list ${lastFreshReachRun.shortlistSize} · scanned ${lastFreshReachRun.accountsChecked}${lastFreshReachRun.massiveChecked ? ` (${lastFreshReachRun.massiveChecked} massive${lastFreshReachRun.watchlistChecked ? `, ${lastFreshReachRun.watchlistChecked} pinned` : ""}${lastFreshReachRun.shortlistChecked ? `, ${lastFreshReachRun.shortlistChecked} winner` : ""})` : ""} · ${lastFreshReachRun.originals} originals · ${lastFreshReachRun.breakoutCandidates} breakout pace · ${lastFreshReachRun.majorCandidates} major + early · ${lastFreshReachRun.eligible} live matches · ${lastFreshReachRun.added} strong ${lastFreshReachRun.added === 1 ? "opening" : "openings"}${lastFreshReachRun.addedBreakouts ? ` (${lastFreshReachRun.addedBreakouts} breakout)` : ""}${lastFreshReachRun.addedMajor ? ` (${lastFreshReachRun.addedMajor} major)` : ""}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}`;
+          : ` · API ${lastFreshReachRun.providerCalls} live ${lastFreshReachRun.providerCalls === 1 ? "call" : "calls"}${lastFreshReachRun.cacheHits ? ` + ${lastFreshReachRun.cacheHits} cache ${lastFreshReachRun.cacheHits === 1 ? "hit" : "hits"}` : ""} · accounts ${lastFreshReachRun.accountsChecked}/${lastFreshReachRun.accountsSelected} returned${lastFreshReachRun.accountFailures ? ` (${lastFreshReachRun.accountFailures} failed)` : ""}${lastFreshReachRun.massiveChecked ? ` · ${lastFreshReachRun.massiveChecked} massive${lastFreshReachRun.watchlistChecked ? `, ${lastFreshReachRun.watchlistChecked} pinned` : ""}${lastFreshReachRun.shortlistChecked ? `, ${lastFreshReachRun.shortlistChecked} winner` : ""}` : ""} · reviewed ${lastFreshReachRun.originals} unique originals (${lastFreshReachRun.latestOriginals} Latest + ${lastFreshReachRun.directOriginals} direct before dedupe) · ${lastFreshReachRun.eligible} passed live gate${lastFreshReachRun.breakoutCandidates ? ` (${lastFreshReachRun.breakoutCandidates} breakout)` : ""}${lastFreshReachRun.majorCandidates ? ` (${lastFreshReachRun.majorCandidates} major + early)` : ""} · ${lastFreshReachRun.contentScored} content-scored · ${lastFreshReachRun.added} recommended${lastFreshReachRun.addedBreakouts ? ` (${lastFreshReachRun.addedBreakouts} breakout)` : ""}${lastFreshReachRun.addedMajor ? ` (${lastFreshReachRun.addedMajor} major)` : ""}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.accountsDiscovered ? ` (+${lastFreshReachRun.accountsDiscovered})` : ""}${lastFreshReachRun.massiveSaved ? `, ${lastFreshReachRun.massiveSaved} massive` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}${lastFreshReachRun.note ? ` · ${lastFreshReachRun.note}` : ""}`;
       receipt.append(lead, detail); discovery.append(receipt);
     }
     d.append(discovery);

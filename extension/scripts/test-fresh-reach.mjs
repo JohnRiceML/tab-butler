@@ -93,7 +93,9 @@ ok(accounts.length === 3, "account hunt keeps practical accounts and one massive
 ok(accounts.some((x) => x.account.handle === "large") && accounts.some((x) => x.account.handle === "tracked"), "heavy hitters and tracked active accounts both enter the bounded hunt");
 ok(accounts.some((x) => x.account.handle === "mega" && x.massive), "massive radar accounts are explicitly labeled rather than silently excluded");
 ok(accounts.every((x) => x.priority >= 0 && x.priority <= 1), "account priorities remain bounded opportunity signals");
-ok(m.FRESH_REACH_ACCOUNT_CHECKS === 12, "manual Fresh Reach hunt budgets twelve diverse direct account checks");
+ok(m.FRESH_REACH_ACCOUNT_CHECKS === 24, "manual Fresh Reach hunt budgets twenty-four diverse direct account checks");
+ok(m.FRESH_REACH_ACCOUNT_CONCURRENCY === 6 && m.FRESH_REACH_TOP_LENSES === 3, "the 10/sec plan gets six-wide direct batches and three Top discovery lenses");
+ok(m.FRESH_REACH_CONTENT_CANDIDATES === 36, "the deeper data scan preserves up to thirty-six candidates for bounded content scoring");
 ok(m.FRESH_REACH_WATCHLIST_MAX === 12 && m.FRESH_REACH_WATCHLIST_LANES === 4, "private massive watchlist is capped at twelve with four rotating scan lanes");
 ok(m.pickFreshReachAccounts([
   { handle: "checked", followers: 10_000, lastCheckedAt: NOW - 2 * MIN },
@@ -191,14 +193,16 @@ const massivePost = m.freshReachCandidate(post({ followers: 2_000_000 }), MY, NO
 ok(massivePost && massivePost.opportunity < midBand.opportunity, "massive-account eligibility carries a visibility-gap penalty instead of an automatic size reward");
 
 const copilot = readFileSync(join(here, "../src/content/x-copilot.ts"), "utf8");
-ok(copilot.includes("findHeavyHitters(true, [nicheSearchQuery(q), explorationQuery])"), "manual hunt pairs focused and rotating Top discovery lenses");
+ok(copilot.includes("findHeavyHitters(true, [nicheSearchQuery(q), ...explorationQueries])"), "manual hunt pairs the focused lens with rotating Top discovery lenses");
 ok(copilot.includes("filter((query) => query !== focused)"), "the first rotating Top lens cannot duplicate the always-on focused query");
 ok(copilot.includes("viewsObserved: candidate.post.views") && copilot.includes("distributionScore: candidate.signals.distributionScore"), "selection evidence persists the public distribution snapshot");
 ok(copilot.includes("Best measured breakout opening now") && copilot.includes("Major account · early"), "reply UI names breakout and major-early opportunities distinctly");
 ok(copilot.includes("Massive account keep-list") && copilot.includes("Scan winners"), "the measured massive-account shortlist is visible and directly scannable");
 ok(copilot.includes("Massive watchlist") && copilot.includes("addFreshReachWatch") && copilot.includes("Scan pinned"), "the owner-scoped massive-account watchlist is visible, addable, and directly scannable");
-ok(copilot.includes("replyLog.authors, 24, 2") && copilot.includes("posts.slice(i * 12, i * 12 + 12)") && copilot.includes("freshChosenIds"), "Fresh Reach preserves 24/two-per-author recall through bounded content scoring before final author diversity");
+ok(copilot.includes("FRESH_REACH_CONTENT_CANDIDATES, 2") && copilot.includes("posts.slice(i * 12, i * 12 + 12)") && copilot.includes("freshChosenIds"), "Fresh Reach preserves 36/two-per-author recall through bounded content scoring before final author diversity");
 ok(copilot.includes("checking your saved Fresh Reach accounts directly instead") && copilot.includes("![401, 402, 403, 429].includes(s)"), "query-specific Latest failures can use saved accounts without falling through provider-auth or rate failures");
+ok(copilot.includes("Provider-wide auth") && copilot.includes("if (results.some((result) => result.providerBlocked)) break"), "provider-wide failures stop later direct batches without poisoning saved accounts");
+ok(copilot.includes("reviewed ${lastFreshReachRun.originals} unique originals") && copilot.includes("passed live gate") && copilot.includes("content-scored"), "the receipt separates raw review depth from live-gate and content-scoring results");
 ok(copilot.includes("Fresh measurement ·") && copilot.includes("API matched") && copilot.includes("accounts kept"), "Find people exposes the Fresh Reach measurement funnel instead of hiding attribution gaps");
 ok(copilot.includes('xReplyInsertOn && opp?.source !== "fresh-reach"'), "Fresh Reach remains excluded from the legacy insert helper");
 

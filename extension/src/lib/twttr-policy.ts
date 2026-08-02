@@ -32,11 +32,11 @@ export const TWTTR_CLASS: Record<TwttrClass, ClassPolicy> = {
 
 export const TWTTR_BUDGET = {
   BYTES: 8 * 1024 * 1024 * 1024, // conservative local UTC-month transfer envelope; billing-cycle dashboard remains authoritative
-  REQUESTS: 80_000,              // conservative local fallback when plan quota headers are unavailable
+  REQUESTS: 90_000,              // 10% headroom below the owner's 100k plan when provider headers are unavailable
   CONSERVE: 0.70,
   FROZEN: 0.85,
   LOCKDOWN: 0.95,
-  RATE_PER_SEC: 8,               // local smoothing ceiling; provider response headers may impose a tighter window
+  RATE_PER_SEC: 9,               // one-request headroom below the owner's 10/sec plan; provider headers remain authoritative
   FAIL_TTL: 600_000,             // negative-cache a failure for 10 min
 } as const;
 /** Plan request quotas may be daily or monthly and RapidAPI exposes no universal billing-reset
@@ -50,7 +50,7 @@ export const PROVIDER_QUOTA_OBSERVATION_TTL_MS = 6 * 3_600_000;
  *  content script): author reach reuses the followers-class TTL; heavy-hitter engagement
  *  character drifts slowly, so a week. Entries past TTL are pruned on load/persist, never shown. */
 export const AUTHOR_REACH_TTL_MS = TWTTR_CLASS.followers.ttl; // 24h
-export const HEAVY_HITTER_TTL_MS = 30 * 24 * 3_600_000; // persistent Fresh Reach radar; refreshed by discovery/checks and capped at 200
+export const HEAVY_HITTER_TTL_MS = 30 * 24 * 3_600_000; // persistent Fresh Reach radar; refreshed by discovery/checks and capped at 400
 
 /** The content script may request only endpoints whose response shape is fixture-tested in this
  * repository. This keeps a compromised page/content-script path from turning the fixed RapidAPI
@@ -88,7 +88,7 @@ export function degradeMode(usedFrac: number): DegradeMode {
 export function canFetch(tier: Tier, mode: DegradeMode, intent: boolean): boolean {
   switch (mode) {
     case "lockdown": return false;                                  // cache only
-    case "frozen":   return tier === "cheap";                       // expensive + med blocked
+    case "frozen":   return tier === "cheap" || intent;             // ambient expensive/med stop; explicit user work survives
     case "conserve": return tier !== "expensive" || intent;         // expensive needs explicit intent
     default:         return true;                                   // normal
   }

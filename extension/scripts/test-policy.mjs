@@ -31,6 +31,8 @@ eq(classForPath("lists"), "other", "unknown -> other");
 
 eq(TWTTR_CLASS.user.tier, "cheap", "user is cheap");
 eq(TWTTR_CLASS.search.tier, "expensive", "search is expensive");
+eq(mod.TWTTR_BUDGET.REQUESTS, 90_000, "local request fallback keeps ten percent headroom below the owner's 100k plan");
+eq(mod.TWTTR_BUDGET.RATE_PER_SEC, 9, "local smoothing keeps one request/second below the owner's 10/sec plan");
 ok(allowedTwttrPath("user") && allowedTwttrPath("/search-v3") && allowedTwttrPath("user-replies-v2"), "only repository-proven endpoints are allowlisted");
 ok(!allowedTwttrPath("followers") && !allowedTwttrPath("user-likes") && !allowedTwttrPath("https://example.com"), "unproven or arbitrary endpoints are rejected");
 
@@ -51,7 +53,8 @@ ok(canFetch("med", "conserve", false) === true, "conserve: med ok");
 ok(canFetch("cheap", "conserve", false) === true, "conserve: cheap ok");
 ok(canFetch("cheap", "frozen", false) === true, "frozen: cheap still flows (ranking never dark)");
 ok(canFetch("med", "frozen", false) === false, "frozen: med blocked");
-ok(canFetch("expensive", "frozen", true) === false, "frozen: expensive blocked even with intent");
+ok(canFetch("expensive", "frozen", false) === false, "frozen: ambient expensive work is blocked");
+ok(canFetch("expensive", "frozen", true) === true, "frozen: explicit user work survives until lockdown");
 ok(canFetch("cheap", "lockdown", true) === false, "lockdown: everything blocked");
 
 // monthKeyOf (UTC year-month) + month roll

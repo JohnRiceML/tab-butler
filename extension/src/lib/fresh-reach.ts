@@ -16,7 +16,13 @@ export const FRESH_REACH_MAX_REPLIES = 29;
 export const FRESH_REACH_BREAKOUT_MAX_REPLIES = 49;
 export const FRESH_REACH_MAJOR_MAX_REPLIES = 79;
 export const FRESH_REACH_MAJOR_EARLY_MS = 20 * 60_000;
-export const FRESH_REACH_ACCOUNT_CHECKS = 12;
+/** A cold manual hunt spends at most 24 author reads; together with one Latest and three Top
+ * discovery reads that is 28 provider calls. Cache reuse and the governor/provider headers still
+ * own the actual request rate and monthly boundary. */
+export const FRESH_REACH_ACCOUNT_CHECKS = 24;
+export const FRESH_REACH_ACCOUNT_CONCURRENCY = 6;
+export const FRESH_REACH_TOP_LENSES = 3;
+export const FRESH_REACH_CONTENT_CANDIDATES = 36;
 /** Explicitly pinned massive accounts get bounded, rotating coverage without consuming the hunt. */
 export const FRESH_REACH_WATCHLIST_MAX = 12;
 export const FRESH_REACH_WATCHLIST_LANES = 4;

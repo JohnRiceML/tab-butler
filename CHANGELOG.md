@@ -4,10 +4,16 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
-- **Fresh Reach deep scan + provider-aware measurement:** expanded each manual hunt to 12 due
-  account checks and up to 24 pre-Claude post candidates (two per author across two bounded scorer
-  batches), then keeps only the strongest strict content × opening result per author. Find people
-  now has an owner-scoped private max-12 massive-account watchlist with four rotating direct-check
+- **Fresh Reach deep scan + provider-aware measurement:** expanded each manual hunt to 24 due
+  account checks and up to 36 pre-Claude post candidates (two per author across three bounded scorer
+  batches), then keeps only the strongest strict content × opening result per author. Each click now
+  uses one Latest plus three Top discovery lenses, direct checks run six-wide under a 9/sec local
+  smoothing ceiling, and the fallback request envelope is 90k—leaving headroom below the owner's
+  stated 10/sec and 100k/month plan while provider headers remain authoritative. The hunt receipt
+  now separates live X-data calls, cache hits, accounts returned, unique originals reviewed, live-gate
+  survivors, content-scored posts, and recommendations instead of labeling survivors as posts searched.
+  Provider-wide failures stop later batches without incorrectly backoff-marking every saved account.
+  Find people now has an owner-scoped private max-12 massive-account watchlist with four rotating direct-check
   lanes, while measured winners and evidence-backed massive exploration remain separately bounded.
   Fame alone and authors replied to in the last day cannot force a reserved slot. Public
   distribution evidence decays on a 14-day half-life, strong-opening yield counts only unique posts
@@ -45,9 +51,9 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 - **Fresh reach hunt — timely, reachable conversations without the algorithm-hack fiction:**
   Replies now exposes **⚡ Fresh reach**, a persistent larger-account radar. Every click
-  runs a focused niche Top query plus one rotating operator-free Top discovery query—interleaving
+  runs a focused niche Top query plus rotating operator-free Top discovery queries—interleaving
   niche topics with broad general-interest domains—alongside niche Latest, merges newly
-  observed authors into a 30-day/200-account niche-stamped radar, then directly checks up to 12 ranked accounts
+  observed authors into a 30-day/400-account niche-stamped radar, then directly checks up to 24 ranked accounts
   for their newest original posts. Per-handle searches are concurrency-bounded, share the
   12-minute provider cache and Target data, and rotate toward due accounts. Bounded lanes cover
   the private massive watchlist, a max-10 keep-list learned from settled X-reported views on the
