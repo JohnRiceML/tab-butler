@@ -4,6 +4,82 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Reply handoff is now copy-only:** removed every reply-composer DOM insertion method, the
+  scripted Like + insert path, its setting, and the cross-tab draft claim/fill protocol. For a
+  visible feed post Goobi copies the draft, scrolls the exact matched article into view, and gives
+  it a temporary accent outline; for an
+  off-page result it copies and opens/focuses the exact status page. The user clicks Reply, pastes, reviews, and posts manually, then explicitly
+  confirms the reply before it affects totals or pacing. A regression assertion prevents composer
+  click/fill primitives from being reintroduced accidentally.
+
+- **Fresh Reach evidence integrity + recall hardening:** public distribution, peak views, and peak
+  engagements now retain their own observation timestamps and decay on a 14-day half-life; a weak
+  new sighting can no longer make an old viral post look current. Direct account reads feed those
+  metrics back into the radar, while cached snapshots older than six minutes can seed discovery but
+  cannot claim a live opening. Successful-opening totals are independent of the bounded dedupe-ID
+  list, cached rows cannot inflate yield, and weak lifetime yield no longer reserves a massive lane.
+  Personalized radar and reply-ledger inputs are owner-scoped; grow-only per-tab check counters and
+  opening-event unions preserve simultaneous tab increments and repair stale last-writer storage. The
+  36-post content batch now excludes already-reviewed rows and preserves practical plus massive
+  recall before the strict content gate. Breakout and major-early thresholds are monotonic: crossing
+  a label boundary cannot make an otherwise identical open post rank worse. API quote posts now
+  retain bounded embedded-post context through scoring and drafting while the outer author remains
+  the reply target. Target-card cache hits also preserve their true observation timestamp, so an
+  older cached response cannot regain a live Fresh Reach label merely because the card reopened.
+  Reply-card avatars now show a compact ↗ cue only when the eventual review action needs to open
+  the exact post on a separate X page; visible feed posts have no badge. The draft button mirrors
+  that state with **Review & reply here** versus **Open post & review reply ↗**.
+
+- **X-data governor completion:** provider quota observations survive the unrelated UTC-month local
+  meter rollover, known remaining quota is pessimistically decremented at dispatch and same-window
+  out-of-order headers reconcile only downward; an elapsed provider plan reset clears a stale zero
+  and permits a fresh probe. Queue waits have a
+  two-minute ceiling, and the 15-second abort remains armed through response-body reads. Cache
+  eviction now counts decoded JSON bytes while receipts expose the original cache timestamp/age;
+  failed Fresh Reach receipts retain paid-call and cache telemetry instead of hiding it. Within the
+  bounded 6 MB cache, broad discovery queries survive disposable per-author reads first.
+
+- **Local-first personal posting model:** the side panel can now import X's account-content CSV,
+  parse RFC 4180 quoting/newlines locally, and persist only owner-scoped aggregate evidence. The
+  model separates originals from replies, measures sample-gated content structures and character
+  bands with Bayesian shrinkage, and labels every recommendation as historical correlation. Post
+  Ideas uses the strongest structures for at most three of five drafts; Community Spark receives a
+  reply-length prior only when that optional style is selected. The raw export is never stored or
+  uploaded, an account mismatch pauses the model, and the user can replace or clear it from an
+  accessible Imported → Learned → Applied receipt. A dedicated regression suite covers parsing,
+  privacy, owner isolation, gates, prompt wiring, and reset controls.
+
+- **Community Spark reply component:** added a distinct delivery-style control beside reply angles.
+  It uses the existing exact post anchor, useful-move brief, author relationship, thread context,
+  voice, and SOUL.md to produce a 55–170 character reply with one compressed insight or natural
+  bit of wit and an optional narrow invitation to continue. The mode forbids summary, flattery,
+  forced jokes, engagement bait, and invented experience; it works with any substantive angle,
+  uses a smaller Sonnet output budget, renders as a responsive accessible toggle, ignores stale
+  overlapping draft responses, and logs the optional style on confirmed replies for later honest
+  outcome comparison. It is now active by default; toggling it off or back on persists that choice
+  across tabs and browser restarts, and every feed, dock, Fresh Reach, and target-account draft uses
+  the saved preference.
+
+- **Fresh Reach now ranks actual distribution, not fame:** account selection separately scores
+  log-scaled peak views and peak engagements alongside age-normalized distribution, cutting raw
+  audience weight from 22% to 8% and normalized engagement-rate weight from 12% to 6%. Up to three
+  new massive accounts can receive evidence-backed exploration lanes in a 24-check hunt, while
+  measured reply-view winners and private pins keep their existing lanes. Fame alone still cannot
+  reserve a check, every post still needs live timing/room plus the strict content-quality gate, and
+  the radar now sorts and labels peak engagement evidence explicitly.
+
+- **One smart X-data load governor:** replaced independent token waiters with one service-worker
+  scheduler shared by every `TWTTR_GET` consumer and X tab. Network starts are evenly spaced at a
+  9/sec ceiling under the owner's 10/sec plan, active fetches cap at eight, manual clicks jump ahead
+  of ambient enrichment, and bounded fairness admits background work after eight priority starts.
+  Provider remaining/reset headers dynamically lower or pause the queue; a short 429 gets one safe
+  read-only retry through that same queue, while auth, outage, and plan-quota failures retain hard
+  circuits. Plan-quota reset and rate-window reset are now parsed separately, missing headers no
+  longer coerce to a false zero, retry attempts are counted in Fresh Reach receipts, and the popup
+  exposes live rate/active/waiting telemetry. Mocked load tests prove 12 simultaneous reads complete,
+  never exceed nine starts in a rolling second, never exceed eight active fetches, preserve priority
+  fairness, and meter a rate retry correctly.
+
 - **Fresh Reach deep scan + provider-aware measurement:** expanded each manual hunt to 24 due
   account checks and up to 36 pre-Claude post candidates (two per author across three bounded scorer
   batches), then keeps only the strongest strict content × opening result per author. Each click now

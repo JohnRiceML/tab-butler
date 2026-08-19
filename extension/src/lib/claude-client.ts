@@ -1,6 +1,6 @@
 import { CONFIG } from "./config";
 import { idleMinutes } from "./heuristics";
-import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, DM_DRAFT_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, POST_IDEAS_JUDGE_SYSTEM, POST_IDEAS_REGEN_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
+import { ADVISE_SYSTEM, CLASSIFY_SYSTEM, DM_DRAFT_SYSTEM, POST_IDEA_REWRITE_SYSTEM, POST_IDEAS_SYSTEM, POST_IDEAS_JUDGE_SYSTEM, POST_IDEAS_REGEN_SYSTEM, RECALL_SYSTEM, REPLY_ANGLES, REPLY_STYLES, X_DRAFT_SYSTEM, X_SCORE_SYSTEM } from "./prompts";
 import { cleanDraft } from "./text-clean";
 import { soulPrompt } from "./soul";
 import type { AdviceResult, ClassifyResult, TabInput } from "./types";
@@ -169,15 +169,17 @@ export async function scorePosts(posts: XPost[], niche: string, products: { name
 }
 
 
-/** Draft a reply in the user's voice. Quality matters → Sonnet. An optional
- *  `angle` (REPLY_ANGLES id) steers the strategy without overriding the voice. */
-export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string, steer?: string, extra?: string, soulMd?: string): Promise<string> {
+/** Draft a reply in the user's voice. Quality matters → Sonnet. An optional `angle` selects the
+ * substantive move; an optional style changes delivery without overriding the angle or voice. */
+export async function draftReply(post: { author: string; text: string; context?: string }, voice: string, angle?: string, product?: string, steer?: string, style?: string, extra?: string, soulMd?: string): Promise<string> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const ctx = post.context ? `\n\nParent/quoted post (for context):\n${post.context}` : "";
   const prod = product?.trim() ? `\n\nThe user's own product/work (mention ONLY if this post invites it or it genuinely adds value):\n${product.trim()}` : "";
   const def = angle ? REPLY_ANGLES.find((a) => a.id === angle) : undefined;
   const angleLine = def ? `\n\n${def.directive}` : "";
+  const styleDef = style ? REPLY_STYLES.find((candidate) => candidate.id === style) : undefined;
+  const styleLine = styleDef ? `\n\n${styleDef.directive}` : "";
   // Free-text steer the user typed on the draft panel — honored strongly, but it never
   // overrides the voice or the hard rules in the system prompt (no emojis/hashtags/etc.).
   const steerLine = steer?.trim() ? `\n\nThe user wants this specific steer on the reply: ${steer.trim()}\nFollow it as closely as you can while keeping their voice and all the rules above.` : "";
@@ -186,8 +188,8 @@ export async function draftReply(post: { author: string; text: string; context?:
     key,
     "claude-sonnet-4-6",
     X_DRAFT_SYSTEM,
-    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}${soulPrompt(soulMd)}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${extra ?? ""}${prod}${angleLine}${steerLine}`,
-    400,
+    `User voice:\n${voice || "(not set — write terse and specific; no marketing language, no adjectives-for-the-sake-of-it, no emojis, no hashtags)"}${soulPrompt(soulMd)}\n\nReply to @${post.author}'s post:\n${post.text}${ctx}${extra ?? ""}${prod}${angleLine}${styleLine}${steerLine}`,
+    styleDef ? 120 : 400,
   );
   return cleanDraft(reply); // dashes + quote-wrapping net (prompt says it, this guarantees it)
 }
@@ -225,7 +227,7 @@ export interface OwnPostLite { text: string; likes?: number; reposts?: number; }
  *  their voice. Remixes the winning PATTERNS, never the content. Quality → Sonnet.
  *  The model scores ONLY hookStrength (0-3); the honest virality band is computed in the
  *  content script from hookStrength + the real measured rank of the source it remixed. */
-export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number, shapeLine?: string, strategyLine?: string, soulMd?: string): Promise<PostIdea[]> {
+export async function generatePostIdeas(posts: { author: string; text: string; likes?: number; reposts?: number; followers?: number; shape?: string }[], voice: string, niche: string, ownPosts: OwnPostLite[] = [], followers?: number, shapeLine?: string, strategyLine?: string, soulMd?: string, postingModelLine?: string): Promise<PostIdea[]> {
   const key = await getKey();
   if (!key) throw new Error("no-key");
   const list = posts.map((p, i) => {
@@ -242,7 +244,8 @@ export async function generatePostIdeas(posts: { author: string; text: string; l
   const fol = followers ? `\n\nUser approximate followers: ~${followers} (aim the post at this reach tier).` : "";
   const shp = shapeLine?.trim() ? `\n\nMEASURED shape signal for this user (X-reported, settled posts only): ${shapeLine.trim()} When two seeds are equally strong, prefer that shape for 1-2 of the 5 — never force it onto a weak seed.` : "";
   const strategy = strategyLine?.trim() ? `\n\nACTIVE 14-DAY STRATEGY TEST: ${strategyLine.trim()} Make 3 of the 5 ideas valid executions of this bet, while preserving source honesty and never inventing evidence. Keep 2 ideas exploratory so the batch does not become repetitive.` : "";
-  const userMsg = `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${soulPrompt(soulMd)}${ownBlock}${fol}${shp}${strategy}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`;
+  const personal = postingModelLine?.trim() ? `\n\nIMPORTED PERSONAL POSTING EVIDENCE: ${postingModelLine.trim()}` : "";
+  const userMsg = `User niche / what they post about:\n${niche || "(not set)"}\n\nUser voice (from their REPLIES — tone + word choice only, NOT post structure):\n${voice || "(not set — write terse and specific; no marketing language, no emojis, no hashtags)"}${soulPrompt(soulMd)}${ownBlock}${fol}${shp}${strategy}${personal}\n\nOver-performing posts from others in the space (remix the PATTERNS, never copy the content):\n${list}`;
   const raw = await callDirect<{ ideas: { text: string; source?: string; pattern: string; why: string; critique?: string; hookStrength?: number }[] }>(
     key,
     "claude-sonnet-4-6",

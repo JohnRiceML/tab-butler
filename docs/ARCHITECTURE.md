@@ -44,12 +44,13 @@ window). Reach comes from best-effort, budgeted **Twttr** (`twitter241` on Rapid
 `/user` lookups for follower/following/bio.
 
 Drafting calls Claude (**Sonnet**) with the user's saved *voice* and user-authored
-*SOUL.md*, the post, an optional angle/product, and a free-text *steer*. The default
-manual path first locates the exact article already rendered in the current tab, activates
-its Reply control in place, and verifies the draft in X's composer. Only an off-page result
-uses the five-minute one-shot handoff to open or focus its exact X status tab. The user
-reviews, edits, and posts it manually, then explicitly confirms it in Goobi. A legacy on-page
-Like + insert helper remains opt-in; Fresh reach never uses it.
+*SOUL.md*, the post, an optional angle/product, an optional **Community Spark** delivery
+style (short, exact, conversation-opening), and a free-text *steer*. When the matching
+owner imported an analytics CSV, Community Spark can also receive one aggregate,
+correlation-labeled response-length prior. The reply action copies the draft and leaves X's
+controls and composer untouched. If the post is off-page, the service worker only opens or
+focuses its exact X status tab. The user clicks Reply, pastes, reviews, and posts manually,
+then explicitly confirms it in Goobi. There is no auto-like or composer-insertion mode.
 The reply log drives today's count, the rate/reputation guards, the "✓ commented"
 badge, and the playground treats.
 
@@ -66,6 +67,7 @@ the two surfaces differ, and this matters for Chrome Web Store compliance:
 |---|---|---|
 | **X copilot — scoring** | The **post text** + author handle of timeline posts | Automatically as you scroll, once the copilot is enabled + a key is set |
 | **X copilot — drafting** | The post text, your saved voice and SOUL.md, optional quoted-tweet context + product | On demand when you click Draft |
+| **Personal posting model** | Aggregate structure/length counts and rates only; **never raw CSV rows or post text from the export** | On demand when you click Ideas or select Community Spark |
 | **X copilot — reach** | Author **handles** to the Twttr/RapidAPI provider | Best-effort enrichment |
 | **Tab manager** | Tab **id/title/url/idle** only — **never page content** (except the active tab on an explicit "summarize/file this") | When the smart tier is opted in |
 
@@ -75,6 +77,8 @@ limited-use disclosures + posted privacy policy must cover the X post text, and
 Claude tab features stay gated behind `smartEnabled` plus a key; X processing also
 requires the versioned in-product data disclosure acceptance. Keys
 live in `chrome.storage` / the service worker — never bundled or placed on the page.
+The optional analytics CSV is parsed in popup memory; only its owner-scoped aggregate
+model is persisted locally. Changing the saved handle pauses rather than cross-applying it.
 
 ## Claude integration
 

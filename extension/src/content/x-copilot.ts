@@ -1,5 +1,5 @@
 import { CONFIG } from "../lib/config";
-import { REPLY_ANGLES } from "../lib/prompts";
+import { REPLY_ANGLES, REPLY_STYLES, type ReplyStyleId } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, freshReachExplorationQueries, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum, dailyShape } from "../lib/momentum";
 import { activityCells, chain, pickCallout } from "../lib/activity";
@@ -20,8 +20,8 @@ import { builderTier } from "../lib/community";
 import { freshOpportunityMetricStore, observeMany, momentumFor, applyMomentum, adjustedTargetTime, mergeOpportunityMetricStores, pruneStore as pruneOpportunityMetrics, type OpportunityMetricStore } from "../lib/opportunity-momentum";
 import { connectionEvidence, foldCompletedExchanges, freshRelationshipMemory, mergeRelationshipMemory, pruneRelationshipMemory, type RelationshipMemoryStore } from "../lib/relationship-memory";
 import { recommendReply, repeatAuthorWarning, replyFreshness, type ReplyRecommendation } from "../lib/reply-recommendation";
-import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_ACCOUNT_CONCURRENCY, FRESH_REACH_CONTENT_CANDIDATES, FRESH_REACH_MAX_AGE_MS, FRESH_REACH_TOP_LENSES, FRESH_REACH_WATCHLIST_MAX, decayFreshReachEvidence, freshReachCandidate, freshReachContentEligible, freshReachOpeningBand, freshReachOpeningScore, freshReachPostSignals, freshReachShortlist, isMassiveFreshReachAccount, pickFreshReachAccounts, pickFreshReachCandidates, type FreshReachAccount, type FreshReachOpportunityKind, type FreshReachShortlistAccount } from "../lib/fresh-reach";
-import { handoffMatchesPath, isReplyBubblePath, statusIdFromPath, validReplyHandoff, type ReplyHandoff } from "../lib/reply-handoff";
+import { FRESH_REACH_ACCOUNT_CHECKS, FRESH_REACH_ACCOUNT_CONCURRENCY, FRESH_REACH_CONTENT_CANDIDATES, FRESH_REACH_MAX_AGE_MS, FRESH_REACH_TOP_LENSES, FRESH_REACH_WATCHLIST_MAX, decayFreshReachEvidence, decayFreshReachMetric, freshReachAbsoluteDistribution, freshReachCandidate, freshReachContentEligible, freshReachCounterTotal, freshReachOpeningBand, freshReachOpeningScore, freshReachPostSignals, freshReachShortlist, incrementFreshReachCounter, isMassiveFreshReachAccount, mergeFreshReachCounters, pickFreshReachAccounts, pickFreshReachCandidates, pickFreshReachContentCandidates, recordFreshReachOpening, strongestFreshReachEvidence, type FreshReachAccount, type FreshReachCounterComponents, type FreshReachOpportunityKind, type FreshReachShortlistAccount } from "../lib/fresh-reach";
+import type { ReplyPostTarget } from "../lib/reply-handoff";
 import { GROWTH_STRATEGIES, GROWTH_WINDOW_DAYS, activeGrowthExperiment, captureGrowthSnapshot, evaluateGrowthExperiment, finishGrowthExperiment, freshGrowthStore, growthStrategy, mergeGrowthStores, recommendedGrowthStrategy, seedFollowerSnapshot, settleGrowthExperiments, startGrowthExperiment, summarizeGrowthWindow, type GrowthExperiment, type GrowthStore, type GrowthStrategyId, type TaggedGrowthAction } from "../lib/growth-loop";
 import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDraftDm, canMarkDmSend, canMoveDmReady, dmPacingStatus, dueFollowUps, findDmDuplicate, followUpCount, freshDmStore, markDmReplied, markDmSent, mergeDmStores, pruneDmStore, rankDmSuggestions, redactDmTouch, removeDmCandidate, removeDmContext, sortDmCandidates, updateDmCandidate, type DmCandidate, type DmContextKind, type DmIntent, type DmPhase, type DmStore, type DmSuggestionInput } from "../lib/dm-workspace";
 import { candidateDmSignal, deriveDmMetrics, rankDmNextActions } from "../lib/dm-intelligence";
@@ -57,7 +57,7 @@ let xProducts: ProductItem[] = [];
 let legacyProduct = "";
 let xDefaultAngle = "";   // "" = use the scorer's per-post category; else a REPLY_ANGLES id
 let xDefaultProduct = ""; // "" = best-fit; else a product name to prefer when promoting
-let xReplyInsertOn = false; // default off: exact-post X handoff + manual review; true preserves an explicit legacy opt-in
+let communitySparkOn = true; // default on; the draft-panel toggle persists this preference across tabs/restarts
 let learnLoopOn = false;  // close-the-loop kill switch: MEASURED outcomes influence ranking + the drafter's default angle. Default OFF until a real-data backtest validates the signal; even ON, learn-stats' own gates (fitCorr n>=12, bestAngle rel>=1.15, neutral-on-absent) keep it inert on thin data.
 let debugOn = false;      // dev-only: exposes window.__goobiExport() for backtesting. No product effect.
 
@@ -148,15 +148,18 @@ interface FreshReachEvidence {
 }
 interface HeavyHitterEntry {
   followers: number; engRate: number; n: number; at?: number;
-  distributionScore?: number; viewRate?: number;
-  peakViews?: number; peakEngagements?: number;
+  distributionScore?: number; distributionObservedAt?: number;
+  viewRate?: number; viewRateObservedAt?: number;
+  peakViews?: number; peakViewsObservedAt?: number;
+  peakEngagements?: number; peakEngagementsObservedAt?: number;
   discoveredAt?: number; lastSeenAt?: number; lastCheckedAt?: number;
-  checks?: number; strongOpenings?: number; latestPostId?: string;
+  checks?: number; checkCounts?: FreshReachCounterComponents;
+  strongOpenings?: number; openingBaseCount?: number; openingEventIds?: string[]; latestPostId?: string;
   openingPostIds?: string[];
   shortlisted?: boolean; replyViewOutcomes?: number; replyViewScore?: number; bestReplyViews?: number; shortlistAt?: number;
   source?: "top" | "latest";
 }
-interface HeavyHitterStore { niche?: string; entries?: Record<string, HeavyHitterEntry>; }
+interface HeavyHitterStore { ownerHandle?: string; niche?: string; entries?: Record<string, HeavyHitterEntry>; }
 interface FreshReachWatchEntry {
   handle: string; followers: number; addedAt: number;
   lastCheckedAt?: number; checks?: number; strongOpenings?: number; openingPostIds?: string[];
@@ -229,6 +232,7 @@ function teardown(): void {
   if (flushTimer) clearTimeout(flushTimer);
   try { resetPlay(); } catch { /* ignore */ } // destroy the big Goobi + cancel in-flight treats
   try { stopIdeasGoobi(); } catch { /* ignore */ }
+  try { clearReplyPostHighlight(); } catch { /* ignore */ }
   try { dockHost?.remove(); } catch { /* ignore */ } // detaching the dock stops Goobi's loops (they self-guard on isConnected)
   try { dismissPanel(true); } catch { /* ignore */ }
 }
@@ -702,7 +706,21 @@ function failFreshReachRun(runId: string, note: string): void {
   lastFreshReachRun.note = note;
 }
 const freshReachRunId = (): string => `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+const freshReachCounterActor = `tab.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 10)}`;
 let freshReachExploreIndex = 0;
+
+function recordHeavyHitterOpening(entry: HeavyHitterEntry, postId: string): boolean {
+  const recent = [...new Set(entry.openingPostIds ?? [])];
+  const events = new Set(entry.openingEventIds ?? []);
+  if (!postId || recent.includes(postId) || events.has(postId)) return false;
+  const base = entry.openingBaseCount ?? Math.max(entry.strongOpenings ?? 0, recent.length);
+  events.add(postId);
+  entry.openingBaseCount = base;
+  entry.openingEventIds = [...events];
+  entry.openingPostIds = [...recent, postId].slice(-20);
+  entry.strongOpenings = base + events.size;
+  return true;
+}
 
 function nextFreshReachExploreQuery(niche: string): string {
   const focused = nicheSearchQuery(niche);
@@ -796,9 +814,9 @@ function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount
     handle,
     followers: heavy.followers,
     engagementRate: heavy.engRate,
-    distributionScore: decayFreshReachEvidence(heavy.distributionScore, heavy.lastSeenAt ?? heavy.discoveredAt, now),
-    peakViews: heavy.peakViews,
-    peakEngagements: heavy.peakEngagements,
+    distributionScore: decayFreshReachEvidence(heavy.distributionScore, heavy.distributionObservedAt ?? heavy.lastSeenAt ?? heavy.discoveredAt, now),
+    peakViews: decayFreshReachMetric(heavy.peakViews, heavy.peakViewsObservedAt ?? heavy.lastSeenAt ?? heavy.discoveredAt, now),
+    peakEngagements: decayFreshReachMetric(heavy.peakEngagements, heavy.peakEngagementsObservedAt ?? heavy.lastSeenAt ?? heavy.discoveredAt, now),
     lastReplyAt: replyLog.authors[handle],
     lastCheckedAt: Math.max(heavy.lastCheckedAt ?? 0, freshReachCheckedAt.get(handle) ?? 0) || undefined,
     checks: heavy.checks,
@@ -832,6 +850,8 @@ function freshReachAccountPool(latest: readonly TwttrTweet[]): FreshReachAccount
 
 interface FreshReachAuthorHunt {
   posts: TwttrTweet[];
+  /** Authors backed by a new provider read in this run; cached rows cannot earn new yield credit. */
+  networkCheckedAuthors: string[];
   selected: number; attempted: number; checked: number; failed: number;
   massiveChecked: number; shortlistChecked: number; watchlistChecked: number;
   providerCalls: number; cacheHits: number; budgetLimited: boolean;
@@ -839,11 +859,15 @@ interface FreshReachAuthorHunt {
 }
 interface TwttrGetResponse {
   ok?: boolean; status?: number; data?: unknown; error?: string;
-  cached?: boolean; network?: boolean;
+  cached?: boolean; network?: boolean; networkAttempts?: number;
+  cachedAt?: number; cacheAgeMs?: number;
+  queuedMs?: number; queueDepth?: number; ratePerSecond?: number; rateRetries?: number;
 }
 interface FreshReachAuthorResult {
   ok: boolean; handle: string; account: FreshReachAccount;
   tracked?: Target; fromCache: boolean; network: boolean;
+  cachedAt?: number;
+  networkAttempts: number;
   budget: boolean; providerBlocked: boolean; status?: number; error?: string;
   tweets: TwttrTweet[];
 }
@@ -853,6 +877,7 @@ interface FreshReachAuthorResult {
  * 12 minutes and enforces local plus provider-reported budget limits. Tracked-account results also refresh Targets. */
 async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]): Promise<FreshReachAuthorHunt> {
   const posts: TwttrTweet[] = [];
+  const networkCheckedAuthors = new Set<string>();
   let attempted = 0, checked = 0, failed = 0, providerCalls = 0, cacheHits = 0;
   let massiveChecked = 0, shortlistChecked = 0, watchlistChecked = 0, budgetLimited = false, targetsChanged = false;
   let providerStatus: number | undefined, providerError: string | undefined;
@@ -864,8 +889,8 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
       const tracked = targetStore.targets.find((target) => target.handle.toLowerCase() === handle);
       const cached = tracked ? targetPosts.get(tracked.handle) : undefined;
       if (cached?.id && tracked?.lastPolledAt && Date.now() - tracked.lastPolledAt < TARGET_POLL_TTL_MS) {
-        return { ok: true, handle, account, tracked, fromCache: true, network: false, budget: false, providerBlocked: false, tweets: [{
-          ...cached, followers: account.followers, isReply: false,
+        return { ok: true, handle, account, tracked, fromCache: true, network: false, cachedAt: tracked.lastPolledAt, networkAttempts: 0, budget: false, providerBlocked: false, tweets: [{
+          ...cached, followers: account.followers, isReply: false, observedAt: tracked.lastPolledAt,
         } satisfies TwttrTweet] };
       }
       const response = await send<TwttrGetResponse>({
@@ -882,7 +907,7 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
         if (!providerBlocked && status != null && status >= 400 && status < 500) freshReachFailedAt.set(handle, Date.now());
         return {
           ok: false, handle, account, tracked, fromCache: false,
-          network: response?.network === true, budget, providerBlocked, status, error,
+          network: response?.network === true, networkAttempts: response?.networkAttempts ?? (response?.network ? 1 : 0), budget, providerBlocked, status, error,
           tweets: [],
         };
       }
@@ -891,15 +916,16 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
         .filter((post) => !post.isReply && post.text && post.author.toLowerCase() === handle)
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0))
         .slice(0, 3)
-        .map((post) => ({ ...post, followers: post.followers ?? account.followers }));
+        .map((post) => ({ ...post, followers: post.followers ?? account.followers, observedAt: response.cachedAt ?? Date.now() }));
       return {
         ok: true, handle, account, tracked, fromCache: response?.cached === true,
-        network: response?.network === true, budget: false, providerBlocked: false,
+        cachedAt: response.cachedAt,
+        network: response?.network === true, networkAttempts: response?.networkAttempts ?? (response?.network ? 1 : 0), budget: false, providerBlocked: false,
         status, error, tweets,
       };
     }));
     for (const result of results) {
-      if (result.network) providerCalls++;
+      providerCalls += result.networkAttempts;
       if (result.fromCache) cacheHits++;
       if (result.budget) budgetLimited = true;
       if (!result.ok) {
@@ -914,9 +940,10 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
       if (isMassiveFreshReachAccount(result.account.followers, myFollowers)) massiveChecked++;
       if (result.account.shortlisted) shortlistChecked++;
       if (result.account.watchlisted) watchlistChecked++;
-      const checkedAt = Date.now();
+      const checkedAt = result.cachedAt ?? Date.now();
       freshReachCheckedAt.set(result.handle, checkedAt);
       posts.push(...result.tweets);
+      if (!result.fromCache) networkCheckedAuthors.add(result.handle);
       const watched = watchEntry(result.handle);
       if (watched && !result.fromCache) {
         watched.lastCheckedAt = checkedAt;
@@ -927,7 +954,8 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
       const radar = heavyHitters.get(result.handle);
       if (radar && !result.fromCache) {
         radar.lastCheckedAt = checkedAt;
-        radar.checks = (radar.checks ?? 0) + 1;
+        radar.checkCounts = incrementFreshReachCounter(radar.checkCounts, freshReachCounterActor, radar.checks ?? 0);
+        radar.checks = freshReachCounterTotal(radar.checkCounts);
         radar.latestPostId = result.tweets[0]?.id ?? radar.latestPostId;
         radar.at = checkedAt; // an explicit successful radar check keeps the saved account alive
         schedulePersistReach();
@@ -937,9 +965,9 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
         result.tracked.lastPolledAt = checkedAt;
         if (newest?.id) result.tracked.lastFreshPostId = newest.id;
         targetPosts.set(result.tracked.handle, newest ? {
-          id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author,
+          id: newest.id, text: newest.text, context: newest.context, postedAt: newest.postedAt, observedAt: newest.observedAt, author: newest.author,
           replies: newest.replies, likes: newest.likes, reposts: newest.reposts, quotes: newest.quotes, views: newest.views,
-        } : { id: "", text: "", author: result.tracked.handle });
+        } : { id: "", text: "", observedAt: checkedAt, author: result.tracked.handle });
         targetsChanged = true;
       }
     }
@@ -949,15 +977,15 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
   }
   if (targetsChanged) persistTargets();
   return {
-    posts, selected: accounts.length, attempted, checked, failed,
+    posts, networkCheckedAuthors: [...networkCheckedAuthors], selected: accounts.length, attempted, checked, failed,
     massiveChecked, shortlistChecked, watchlistChecked,
     providerCalls, cacheHits, budgetLimited, providerStatus, providerError,
   };
 }
 /** Search X (via the Twttr API) for fresh posts in the user's niche, score them
  *  with the same Claude scorer the feed uses, and drop the worthwhile ones into
- *  the dock. These are OFF the current page: Draft/Copy work, but inserting into
- *  a reply box needs the post opened (the panel/toast guide that). */
+ *  the dock. These are OFF the current page, so copy-only review opens the exact
+ *  post without touching its Reply control or composer. */
 async function findSpots(mode: FindSpotsMode = "niche") {
   if (findingSpots) return;
   if (!enabled) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
@@ -1001,6 +1029,13 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       }),
       heavyRefresh,
     ]);
+    if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) Object.assign(lastFreshReachRun, {
+      providerCalls: (search?.networkAttempts ?? (search?.network ? 1 : 0)) + radarRefresh.providerCalls,
+      cacheHits: (search?.cached ? 1 : 0) + radarRefresh.cacheHits,
+      budgetLimited: radarRefresh.budgetLimited || !!search?.error?.startsWith("budget-"),
+      accountsDiscovered: Math.max(radarRefresh.discovered, heavyHitters.size - radarBefore),
+      radarSize: heavyHitters.size,
+    });
     if (search?.error === "no-twttr-config") {
       twttrUnconfigured = true;
       failFreshReachRun(runId, "Add your RapidAPI key in the Goobi panel to run the data search.");
@@ -1034,15 +1069,18 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       }
     }
     if (!selfHandle) selfHandle = getSelf();
-    let originals = pickDiscoveryTweets(latestUnavailable ? undefined : search?.data, mode === "fresh-reach" ? 50 : 18)
+    const latestObservedAt = search?.cachedAt ?? Date.now();
+    let originals: TwttrTweet[] = pickDiscoveryTweets(latestUnavailable ? undefined : search?.data, mode === "fresh-reach" ? 50 : 18)
+      .map((post) => ({ ...post, observedAt: latestObservedAt }))
       .filter((t) => !selfHandle || t.author.toLowerCase() !== selfHandle);
     const latestOriginals = originals.length;
     let freshHunt: FreshReachAuthorHunt = {
-      posts: [], selected: 0, attempted: 0, checked: 0, failed: 0,
+      posts: [], networkCheckedAuthors: [], selected: 0, attempted: 0, checked: 0, failed: 0,
       massiveChecked: 0, shortlistChecked: 0, watchlistChecked: 0,
       providerCalls: 0, cacheHits: 0, budgetLimited: false,
     };
     const directlyCheckedAuthors = new Set<string>();
+    const openingCreditAuthors = new Set<string>();
     const accountPriorityByHandle = new Map<string, number>();
     if (mode === "fresh-reach") {
       captureFreshRadarTweets(originals, "latest");
@@ -1060,43 +1098,56 @@ async function findSpots(mode: FindSpotsMode = "niche") {
         .map((candidate) => candidate.account);
       freshHunt = await fetchFreshReachAuthorPosts(accounts);
       for (const post of freshHunt.posts) directlyCheckedAuthors.add(post.author.toLowerCase());
+      for (const handle of freshHunt.networkCheckedAuthors) openingCreditAuthors.add(handle);
+      // Direct reads are the freshest evidence about saved/watchlisted accounts. Fold their public
+      // metrics back into the radar instead of letting an old Top-search peak live indefinitely.
+      captureFreshRadarTweets(freshHunt.posts, "latest");
       const byId = new Map<string, TwttrTweet>();
       for (const post of [...originals, ...freshHunt.posts]) {
         if (!selfHandle || post.author.toLowerCase() !== selfHandle) byId.set(post.id, post);
       }
       originals = [...byId.values()];
     }
-    // Keep a wider, two-post-per-author set until Claude judges actual contribution quality. The
-    // old opportunity-only top-12 could let twelve generic celebrity posts hide a relevant #13,
-    // and a generic newest post could hide a better older post by the same author.
+    // Refreshing and content scoring are separate. Already-reviewed high-opportunity posts must not
+    // consume the 36 model slots and hide a new #37; practical and massive accounts each retain a
+    // bounded recall lane until Claude judges actual contribution quality.
+    const novelOriginals = originals.filter((post) => !opps.has(post.id) && !seen.has(post.id));
+    const allLiveFreshCandidates = mode === "fresh-reach"
+      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, originals.length, 2)
+      : [];
     const freshCandidates = mode === "fresh-reach"
-      ? pickFreshReachCandidates(originals, myFollowers, Date.now(), replyLog.authors, FRESH_REACH_CONTENT_CANDIDATES, 2)
+      ? pickFreshReachContentCandidates(novelOriginals, myFollowers, Date.now(), replyLog.authors, FRESH_REACH_CONTENT_CANDIDATES, 2)
       : [];
     const discovered = mode === "fresh-reach" ? freshCandidates.map((candidate) => candidate.post) : originals;
-    const evidenceById = new Map<string, FreshReachEvidence>();
+    const liveEvidenceById = new Map<string, FreshReachEvidence>();
     const observedAt = Date.now();
-    for (const candidate of freshCandidates) evidenceById.set(candidate.post.id, {
-      runId, discoveredAt: observedAt, observedAt,
-      expiresAt: (candidate.post.postedAt ?? observedAt) + FRESH_REACH_MAX_AGE_MS,
-      repliesObserved: candidate.post.replies!, sizeMultiple: candidate.sizeMultiple,
-      accountSource: freshAccountSource(candidate.post.author),
-      accountPriority: accountPriorityByHandle.get(candidate.post.author.toLowerCase()) ?? 0,
-      observedOpportunity: candidate.opportunity, contentFit: 0, kind: candidate.kind,
-      viewsObserved: candidate.post.views,
-      engagementsObserved: candidate.signals.engagements,
-      viewsPerMinute: candidate.signals.viewsPerMinute,
-      engagementsPerMinute: candidate.signals.engagementsPerMinute,
-      distributionScore: candidate.signals.distributionScore,
-    });
+    const evidenceCandidates = new Map([...allLiveFreshCandidates, ...freshCandidates].map((candidate) => [candidate.post.id, candidate]));
+    for (const candidate of evidenceCandidates.values()) {
+      const previous = opps.get(candidate.post.id)?.freshReach;
+      liveEvidenceById.set(candidate.post.id, {
+        runId, discoveredAt: previous?.discoveredAt ?? observedAt, observedAt: candidate.post.observedAt ?? observedAt,
+        expiresAt: (candidate.post.postedAt ?? observedAt) + FRESH_REACH_MAX_AGE_MS,
+        repliesObserved: candidate.post.replies!, sizeMultiple: candidate.sizeMultiple,
+        accountSource: freshAccountSource(candidate.post.author),
+        accountPriority: accountPriorityByHandle.get(candidate.post.author.toLowerCase()) ?? 0,
+        observedOpportunity: candidate.opportunity, contentFit: opps.get(candidate.post.id)?.score ?? 0, kind: candidate.kind,
+        viewsObserved: candidate.post.views,
+        engagementsObserved: candidate.signals.engagements,
+        viewsPerMinute: candidate.signals.viewsPerMinute,
+        engagementsPerMinute: candidate.signals.engagementsPerMinute,
+        distributionScore: candidate.signals.distributionScore,
+      });
+    }
+    const evidenceById = new Map(freshCandidates.map((candidate) => [candidate.post.id, liveEvidenceById.get(candidate.post.id)!]));
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) Object.assign(lastFreshReachRun, {
       state: "complete",
       accountsSelected: freshHunt.selected, accountsChecked: freshHunt.checked, accountFailures: freshHunt.failed,
       latestOriginals, directOriginals: freshHunt.posts.length, originals: originals.length,
-      eligible: freshCandidates.length, budgetLimited: freshHunt.budgetLimited || radarRefresh.budgetLimited,
-      providerCalls: (search?.network ? 1 : 0) + radarRefresh.providerCalls + freshHunt.providerCalls,
+      eligible: allLiveFreshCandidates.length, budgetLimited: freshHunt.budgetLimited || radarRefresh.budgetLimited,
+      providerCalls: (search?.networkAttempts ?? (search?.network ? 1 : 0)) + radarRefresh.providerCalls + freshHunt.providerCalls,
       cacheHits: (search?.cached ? 1 : 0) + radarRefresh.cacheHits + freshHunt.cacheHits,
-      breakoutCandidates: freshCandidates.filter((candidate) => candidate.kind === "breakout").length,
-      majorCandidates: freshCandidates.filter((candidate) => candidate.kind === "major-early").length,
+      breakoutCandidates: allLiveFreshCandidates.filter((candidate) => candidate.kind === "breakout").length,
+      majorCandidates: allLiveFreshCandidates.filter((candidate) => candidate.kind === "major-early").length,
       accountsDiscovered: Math.max(radarRefresh.discovered, heavyHitters.size - radarBefore),
       radarSize: heavyHitters.size,
       massiveSaved: [...heavyHitters.values()].filter((entry) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length,
@@ -1130,13 +1181,15 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       Object.assign(existing, nextMetrics);
       if (mode === "fresh-reach" && freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()])) {
         existing.source = "fresh-reach"; // provenance remains manual-only; live eligibility is rechecked at display/draft time
-        const evidence = evidenceById.get(t.id);
+        const evidence = liveEvidenceById.get(t.id);
         if (evidence) existing.freshReach = { ...evidence, contentFit: existing.score };
       }
     }
     if (!discovered.length) {
       toast(mode === "fresh-reach"
-        ? `Reviewed ${originals.length} unique originals from ${freshHunt.checked}/${freshHunt.selected} returned accounts${latestUnavailable ? "" : " plus Latest"}. None passed the just-posted, uncrowded live gate${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
+        ? allLiveFreshCandidates.length
+          ? `Refreshed ${allLiveFreshCandidates.length} live ${allLiveFreshCandidates.length === 1 ? "opening" : "openings"}; all were already reviewed. No new match this time.`
+          : `Reviewed ${originals.length} unique originals from ${freshHunt.checked}/${freshHunt.selected} returned accounts${latestUnavailable ? "" : " plus Latest"}. None passed the just-posted, uncrowded live gate${freshHunt.budgetLimited ? " — the data budget limited some account checks" : ""}.`
         : "X returned no usable posts for this niche right now.");
       return;
     }
@@ -1149,7 +1202,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       return;
     }
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) lastFreshReachRun.contentScored = found.length;
-    const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400) }));
+    const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400), context: t.context?.slice(0, 320) }));
     // Bounded 12-row model calls preserve response completeness at the 36-post deep-scan ceiling;
     // one 1,536-token JSON response can truncate before returning every row. Indices stay global.
     const scoreBatches = Array.from({ length: Math.ceil(posts.length / 12) }, (_, i) => posts.slice(i * 12, i * 12 + 12));
@@ -1212,23 +1265,26 @@ async function findSpots(mode: FindSpotsMode = "niche") {
           if (evidence?.kind === "breakout") addedBreakouts++;
           if (evidence?.kind === "major-early") addedMajor++;
           const handle = t.author.toLowerCase();
-          if (directlyCheckedAuthors.has(handle)) {
+          if (directlyCheckedAuthors.has(handle) && openingCreditAuthors.has(handle)) {
             const radar = heavyHitters.get(handle);
-            if (radar && !radar.openingPostIds?.includes(t.id)) {
-              radar.openingPostIds = [...(radar.openingPostIds ?? []), t.id].slice(-20);
-              radar.strongOpenings = radar.openingPostIds.length;
-              radar.at = Date.now();
-              schedulePersistReach();
+            if (radar) {
+              if (recordHeavyHitterOpening(radar, t.id)) {
+                radar.at = Date.now();
+                schedulePersistReach();
+              }
             }
             const watched = watchEntry(handle);
-            if (watched && !watched.openingPostIds?.includes(t.id)) {
-              watched.openingPostIds = [...(watched.openingPostIds ?? []), t.id].slice(-20);
-              watched.strongOpenings = watched.openingPostIds.length;
-              persistFreshReachWatchlist();
+            if (watched) {
+              const history = recordFreshReachOpening(watched.openingPostIds, watched.strongOpenings, t.id);
+              if (history.added) {
+                watched.openingPostIds = history.postIds;
+                watched.strongOpenings = history.total;
+                persistFreshReachWatchlist();
+              }
             }
           }
         }
-        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, quotes: t.quotes, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: mode === "fresh-reach" ? "fresh-reach" : "search", freshReach: evidence });
+        opps.set(t.id, { id: t.id, author: t.author, text: t.text.slice(0, 400), context: t.context?.slice(0, 320), score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, postedAt: t.postedAt, likes: t.likes, replies: t.replies, reposts: t.reposts, quotes: t.quotes, views: t.views, avatar: t.avatar, name: t.name, followers: t.followers, source: mode === "fresh-reach" ? "fresh-reach" : "search", freshReach: evidence });
         if (t.author && t.followers != null) {
           const key = t.author.toLowerCase();
           authorReach.set(key, { ...authorReach.get(key), followers: t.followers, at: Date.now(), failed: false });
@@ -1632,6 +1688,18 @@ const PANEL_CSS = `
        border: .5px solid rgba(214,154,92,.28); background: #221c15; color: #cbb89c; }
 .ang:hover { background: rgba(214,154,92,.10); }
 .ang.on { background: ${ACCENT}; color: ${INK}; border-color: transparent; font-weight: 600; }
+.reply-style { margin:-2px 0 10px; }
+.spark { width:100%; display:flex; align-items:center; gap:9px; box-sizing:border-box; text-align:left; cursor:pointer;
+         padding:8px 10px; border-radius:10px; border:1px solid rgba(93,202,165,.22); background:rgba(93,202,165,.055); color:#d8c9b2; font:inherit; }
+.spark:hover { border-color:rgba(93,202,165,.45); background:rgba(93,202,165,.09); }
+.spark.on { border-color:rgba(93,202,165,.62); background:rgba(93,202,165,.14); box-shadow:inset 0 0 0 .5px rgba(93,202,165,.18); }
+.spark-mark { width:25px; height:25px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; border-radius:8px;
+              background:rgba(93,202,165,.13); color:#72d9b5; font-size:13px; }
+.spark.on .spark-mark { background:#5dcaa5; color:#0c2119; }
+.spark-copy { min-width:0; display:flex; flex-direction:column; gap:1px; }
+.spark-copy b { color:#f3ead9; font-size:11.5px; font-weight:650; }
+.spark-copy small { color:#9eae9f; font-size:10.5px; line-height:1.35; }
+.spark-state { margin-left:auto; color:#72d9b5; font-size:10px; font-weight:650; letter-spacing:.25px; text-transform:uppercase; }
 .load { color: #b6a892; font-size: 12.5px; padding: 6px 0; }
 .ta { width: 100%; box-sizing: border-box; background: #221c15; color: #f3ead9;
       border: .5px solid rgba(214,154,92,.18); border-radius: 9px; padding: 9px; font: inherit; resize: vertical; }
@@ -1701,8 +1769,8 @@ let draftOppAuthor = "";
  *  suppress reach ongoing, not per-reply), so this persists across navigations +
  *  restarts: times = reply timestamps (rolling hour) for the volume guard,
  *  authors = last-replied-at per handle for the spread guard, drafts = recent
- *  normalized reply texts for the duplicate-reply guard. Persisted after a
- *  successful Like + insert attempt or an explicit copy/open confirmation. */
+ *  normalized reply texts for the duplicate-reply guard. Persisted only after
+ *  explicit posted confirmation or a later API match. */
 /** One sent reply's features — the raw material for the "what's working" learning
  *  loop. `outcome` IS written by the daily measure pass (runMeasurePass matches your
  *  posted replies via /user-replies and reads their real engagement); the features are
@@ -1718,6 +1786,7 @@ interface SentRecord {
   ageMs?: number;        // how old the post was when you replied (freshness)
   category?: string;     // opportunity category (promote/value/ask/…)
   angle?: string;        // the drafting angle used
+  draftStyle?: ReplyStyleId; // optional delivery style; lets future settled outcomes compare the component honestly
   source?: Opp["source"];// discovery provenance; lets measured cohorts compare Fresh reach honestly
   lane?: ReplyRecommendation["lane"]; // recommendation policy lane at handoff time
   freshReach?: FreshReachEvidence; // observed opening evidence at selection time (optional for old/non-Fresh records)
@@ -1731,8 +1800,9 @@ interface SentRecord {
   confirmation?: "rapidapi" | "manual";
   outcome?: { at: number; likes?: number; replies?: number; views?: number; reposts?: number; tweetId?: string; authorReplied?: boolean; frozen?: boolean };
 }
-interface ReplyLog { times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
-let replyLog: ReplyLog = { times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] };
+interface ReplyLog { ownerHandle?: string; times: number[]; authors: Record<string, number>; drafts: { norm: string; at: number }[]; daily: Record<string, number>; total: number; sent: SentRecord[]; }
+const freshReplyLog = (ownerHandle = ""): ReplyLog => ({ ownerHandle, times: [], authors: {}, drafts: [], daily: {}, total: 0, sent: [] });
+let replyLog: ReplyLog = freshReplyLog();
 let paceResetAt = 0; // reset only changes Goobi's local pressure baseline; the reply ledger stays intact
 let sentSeq = 0; // bump per reply so two in the same millisecond still get distinct ids
 const commentedIds = new Set<string>(); // post ids you've replied to — drives the "✓ commented" badge in the feed
@@ -1776,7 +1846,7 @@ function mergeReplyLog(a: ReplyLog, b: Partial<ReplyLog>): ReplyLog {
   const dailySum = Object.values(daily).reduce((s, v) => s + v, 0);
   const total = Math.max(a.total || 0, Number(b.total) || 0, dailySum); // never regress the all-time counter
 
-  return { times, authors, drafts, daily, total, sent };
+  return { ownerHandle: a.ownerHandle ?? b.ownerHandle, times, authors, drafts, daily, total, sent };
 }
 
 /** Local YYYY-MM-DD for the per-day reply tally ("how many did I send today"). */
@@ -1792,8 +1862,15 @@ const DRAFT_MAX = 50;
 
 /** The current draft request, so the angle chips and Regenerate can re-draft
  *  with the SAME post/context/oppId (and switch only the angle). */
-interface DraftReq { author: string; text: string; context?: string; oppId?: string; angle?: string; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; steer?: string; isReplyToOwnPost?: boolean; }
+interface DraftReq { author: string; text: string; context?: string; oppId?: string; angle?: string; style?: ReplyStyleId; avatar?: string; products?: ProductItem[]; productIndex?: number; name?: string; steer?: string; isReplyToOwnPost?: boolean; }
 let lastDraft: DraftReq | null = null;
+let draftRequestSeq = 0; // stale angle/style requests cannot repaint over the user's newest choice
+
+/** The persisted delivery choice for every newly opened reply draft. An absent
+ * storage value intentionally resolves to ON during boot for existing installs. */
+function preferredReplyStyle(): ReplyStyleId | undefined {
+  return communitySparkOn ? REPLY_STYLES[0].id : undefined;
+}
 
 /** Authors we've followed (or confirmed already-followed) this session. */
 const followed = new Set<string>();
@@ -1836,7 +1913,7 @@ async function followAuthor(el: HTMLElement | null): Promise<"followed" | "alrea
  *  painted). An element with a DIFFERENT extractable id is a different tweet and
  *  is never matched, so we can never act on a same-author lookalike. Off-page
  *  opps (e.g. search-discovered, whose id is not in the DOM) find nothing, so
- *  Like + insert degrades to the exact-post review handoff when the post is not rendered. Pass no text to
+ *  copy-only review opens the exact post when it is not rendered. Pass no text to
  *  force a strict id-only lookup. */
 function findPost(id: string, text?: string): HTMLElement | null {
   let byText: HTMLElement | null = null;
@@ -1875,172 +1952,27 @@ function waitFor(sel: string, ms: number): Promise<HTMLElement | null> {
   });
 }
 
-function waitForMatch(find: () => HTMLElement | null, ms: number): Promise<HTMLElement | null> {
-  return new Promise((res) => {
-    const now = find();
-    if (now) return res(now);
-    const obs = new MutationObserver(() => {
-      const found = find();
-      if (found) { clearTimeout(t); obs.disconnect(); res(found); }
-    });
-    const t = setTimeout(() => { obs.disconnect(); res(find()); }, ms);
-    obs.observe(document.body, { childList: true, subtree: true });
-  });
-}
-
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/** Resolve X's real contenteditable from its tweetTextarea wrapper. */
-function composerEditable(node: HTMLElement): HTMLElement {
-  if (node.getAttribute("contenteditable") === "true") return node;
-  return node.querySelector<HTMLElement>('[contenteditable="true"]') || node;
-}
-
-function composerText(node: HTMLElement): string {
-  return (node.textContent || "").replace(/​/g, "").replace(/\s+/g, " ").trim();
-}
-
-function replyButtonIn(postEl: HTMLElement): HTMLElement | null {
-  const candidates = postEl.querySelectorAll<HTMLElement>('[data-testid="reply"], button[aria-label="Reply"], [role="button"][aria-label="Reply"]');
-  const semantic = Array.from(candidates).find((button) => !button.closest('[role="link"]'));
-  if (semantic) return semantic;
-  // Current X comment-bubble glyph supplied by the live UI. Use it only as a
-  // tertiary fallback, scoped to the already ID-matched article, and click its
-  // interactive parent rather than the SVG/path itself.
-  const bubblePath = Array.from(postEl.querySelectorAll<SVGPathElement>("svg path"))
-    .find((path) => isReplyBubblePath(path.getAttribute("d")));
-  return bubblePath?.closest<HTMLElement>('button,[role="button"]') || null;
-}
-
-function composerIn(root: ParentNode): HTMLElement | null {
-  const wrapper = root.querySelector<HTMLElement>('[data-testid^="tweetTextarea_"]');
-  if (wrapper) return wrapper;
-  return root.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]');
-}
-
-function dialogReplyComposer(): HTMLElement | null {
-  for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"]')) {
-    const composer = composerIn(dialog);
-    if (composer) return composer;
-  }
-  return null;
-}
-
-function pageReplyComposer(): HTMLElement | null {
-  const main = document.querySelector<HTMLElement>("main");
-  return main ? composerIn(main) : null;
-}
-
-function placeComposerCaretAtEnd(node: HTMLElement): void {
-  try {
-    const range = document.createRange(); range.selectNodeContents(node); range.collapse(false);
-    const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
-  } catch { /* best-effort */ }
-}
-
-/** Fill one empty X reply composer in one verified operation. This does not type
- *  word-by-word, submit the reply, or overwrite text already present. */
-async function fillReplyComposer(node: HTMLElement, text: string): Promise<"ok" | "occupied" | "blocked"> {
-  const editor = composerEditable(node);
-  const want = text.replace(/​/g, "").replace(/\s+/g, " ").trim();
-  const complete = () => want.length > 0 && composerText(editor) === want;
-  if (complete()) return "ok";
-  if (composerText(editor)) return "occupied";
-
-  const clearAttempt = async () => {
-    try {
-      editor.focus();
-      const range = document.createRange(); range.selectNodeContents(editor);
-      const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
-      document.execCommand("delete", false);
-      await sleep(30);
-    } catch { /* best-effort */ }
-  };
-  const methods = [
-    () => document.execCommand("insertText", false, text),
-    () => {
-      try {
-        const data = new DataTransfer(); data.setData("text/plain", text);
-        editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
-      } catch { /* try beforeinput next */ }
-    },
-    () => {
-      editor.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
-      editor.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
-    },
-  ];
-
-  for (const method of methods) {
-    if (composerText(editor)) await clearAttempt();
-    if (composerText(editor)) return "blocked";
-    editor.focus(); placeComposerCaretAtEnd(editor); method();
-    for (let i = 0; i < 12; i++) { if (complete()) return "ok"; await sleep(40); }
-  }
-  return complete() ? "ok" : "blocked";
-}
-
-/** Open only the selected post's reply composer and fill it. Never submits. */
-async function insertReplyIntoX(text: string, postEl: HTMLElement | null): Promise<"ok" | "no-composer" | "occupied" | "blocked"> {
-  const existingDialog = dialogReplyComposer();
-  if (existingDialog) return "occupied"; // do not risk filling an unrelated composer
-  if (!postEl?.isConnected) return "no-composer";
-  postEl.scrollIntoView({ block: "center" });
-  const reply = replyButtonIn(postEl);
-  if (!reply) return "no-composer";
-  reply.click();
-  const editor = await waitForMatch(
-    () => dialogReplyComposer() || (location.pathname.includes("/status/") ? pageReplyComposer() : null),
-    3500,
-  );
-  if (!editor) return "no-composer";
-  return fillReplyComposer(editor, text);
-}
-
-const likedPostIds = new Set<string>();
-
-/** Like only the selected outer post. The `like` test id disappears once liked,
- *  so this can never toggle an existing like off. */
-function likeSelectedPost(id: string | null, postEl: HTMLElement | null): boolean {
-  if (id && likedPostIds.has(id)) return true;
-  const target = id ? findPost(id) : (postEl?.isConnected ? postEl : null);
-  if (!target?.isConnected) return false;
-  const unlike = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="unlike"]')).find((candidate) => !candidate.closest('[role="link"]'));
-  if (unlike) { if (id) likedPostIds.add(id); return true; }
-  const buttons = Array.from(target.querySelectorAll<HTMLElement>('[data-testid="like"]'));
-  const button = buttons.find((candidate) => !candidate.closest('[role="link"]')) || buttons[0];
-  if (!button) return false;
-  button.click();
-  if (id) likedPostIds.add(id);
-  return true;
-}
 
 let inserting = false;
 interface PendingManualReply {
   text: string;
   opp?: Opp;
   angle?: string;
+  style?: ReplyStyleId;
   author: string;
-  handoff: ReplyHandoff;
+  target: ReplyPostTarget;
   copied: boolean;
-  opened: boolean;
-  status: "opening" | "ok" | "no-composer" | "occupied" | "blocked";
+  status: "opening" | "ready" | "open-failed";
 }
 let pendingManualReply: PendingManualReply | undefined;
 
-function handoffToken(): string {
-  try { return crypto.randomUUID(); } catch { return `${Date.now()}.${Math.random().toString(36).slice(2)}`; }
-}
-
-function buildReplyHandoff(text: string, opp?: Opp): ReplyHandoff | null {
+function buildReplyTarget(opp?: Opp): ReplyPostTarget | null {
   const postId = opp?.id ?? draftOppId ?? "";
   if (!/^\d+$/.test(postId)) return null;
   return {
-    version: 1,
-    token: handoffToken(),
     postId,
     author: (opp?.author ?? draftOppAuthor).replace(/^@+/, ""),
-    text,
-    createdAt: Date.now(),
   };
 }
 
@@ -2060,12 +1992,11 @@ async function copyReplyText(text: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Copy immediately from the user's click, then ask the service worker to store
- *  the one-shot draft and open the exact X status tab. The destination content
- *  script owns the reply-icon click + verified composer fill. */
-async function copyReplyAndOpenPost(handoff: ReplyHandoff): Promise<{ copied: boolean; opened: boolean }> {
-  const copied = copyReplyText(handoff.text);
-  const opened = send<{ ok?: boolean }>({ type: "OPEN_REPLY_HANDOFF", handoff });
+/** Copy immediately from the user's click, then ask the service worker to open
+ *  the exact X status tab. The draft is never stored for or inserted into X. */
+async function copyReplyAndOpenPost(text: string, target: ReplyPostTarget): Promise<{ copied: boolean; opened: boolean }> {
+  const copied = copyReplyText(text);
+  const opened = send<{ ok?: boolean }>({ type: "OPEN_REPLY_POST", postId: target.postId, author: target.author });
   const [didCopy, result] = await Promise.all([copied, opened]);
   return { copied: didCopy, opened: result?.ok === true };
 }
@@ -2073,18 +2004,15 @@ async function copyReplyAndOpenPost(handoff: ReplyHandoff): Promise<{ copied: bo
 async function copyAndOpenPendingReplyPost(): Promise<void> {
   const pending = pendingManualReply;
   if (!pending) return;
-  pending.handoff = { ...pending.handoff, token: handoffToken(), createdAt: Date.now() };
   pending.status = "opening";
-  pending.opened = false;
   renderPendingManualReplyCard();
-  const result = await copyReplyAndOpenPost(pending.handoff);
+  const result = await copyReplyAndOpenPost(pending.text, pending.target);
   if (pendingManualReply !== pending) return;
   pending.copied = result.copied;
-  pending.opened = result.opened;
-  if (!result.opened && pending.status === "opening") pending.status = "no-composer";
+  pending.status = result.opened ? "ready" : "open-failed";
   renderPendingManualReplyCard();
   toast(result.opened
-    ? "Opened the exact X post. Goobi is activating Reply and prefilling the draft."
+    ? "Opened the exact X post and copied the draft. Click Reply and paste it yourself."
     : "X could not be opened. Your draft remains available in Goobi.");
 }
 
@@ -2102,8 +2030,8 @@ function markPendingManualReplyPosted(): void {
   // Clear first: even a double click or re-entrant render can record this handoff
   // only once. The normal record/nudge path owns every tally and safety update.
   pendingManualReply = undefined;
-  const warn = recordReplyAndNudge(pending.text, pending.opp, pending.angle, pending.author, "manual");
-  if (pending.handoff.postId) repaintReplyPost(pending.handoff.postId);
+  const warn = recordReplyAndNudge(pending.text, pending.opp, pending.angle, pending.style, pending.author, "manual");
+  if (pending.target.postId) repaintReplyPost(pending.target.postId);
   dismissPanel();
   toast(warn || "Reply marked as posted.");
 }
@@ -2120,21 +2048,17 @@ function renderPendingManualReplyCard(): void {
   h.append(title);
   const state = document.createElement("div"); state.className = "manual-state";
   const status = document.createElement("b");
-  status.textContent = pending.status === "ok"
-    ? "X reply box ready · draft prefilled"
-    : pending.status === "opening"
-      ? "Opening the post · preparing Reply"
-      : pending.status === "occupied"
-        ? "X already has a reply draft open"
-        : "X post opened · paste the draft if needed";
+  status.textContent = pending.status === "opening"
+    ? "Opening the exact post"
+    : pending.status === "ready"
+      ? "Draft copied · paste it into X yourself"
+      : "The post could not be opened";
   const help = document.createElement("span");
-  help.textContent = pending.status === "ok"
-    ? "Goobi opened the exact post, clicked its Reply icon, and verified the draft in X's input. Review or edit it, post it yourself, then come back here."
-    : pending.status === "opening"
-      ? "Goobi is waiting for the exact post to render, then it will click Reply and verify the draft landed. Nothing is submitted automatically."
-      : pending.copied
-        ? "Goobi did not overwrite X's composer. The draft is on your clipboard; paste it into the reply box, review it, and post it yourself."
-        : "Goobi did not overwrite X's composer and clipboard access was unavailable. Copy the draft below, review it in X, and post it yourself.";
+  help.textContent = pending.status === "opening"
+    ? "Goobi is only opening the post and copying the draft. It will not click Reply, touch X's composer, like, or post."
+    : pending.copied
+      ? "Click X's Reply button yourself, paste the draft from your clipboard, review it, and post it yourself."
+      : "Clipboard access was unavailable. Copy the draft below, then click X's Reply button and paste it yourself.";
   const draft = document.createElement("textarea"); draft.className = "manual-draft"; draft.rows = 4; draft.readOnly = true; draft.value = pending.text; draft.setAttribute("aria-label", "Reply draft to copy");
   state.append(status, help, draft);
   const actions = document.createElement("div"); actions.className = "manual-actions";
@@ -2147,47 +2071,6 @@ function renderPendingManualReplyCard(): void {
   root.append(p);
   requestAnimationFrame(() => { if (panelRoot === root) open.focus(); });
 }
-
-let fulfillingReplyHandoff = false;
-
-/** On the exact status tab opened by the service worker, claim the one-shot
- *  handoff, click that article's Reply control, and verify the draft text landed.
- *  A failure never overwrites an occupied composer and never submits anything. */
-async function maybeFulfillReplyHandoff(): Promise<void> {
-  const postId = statusIdFromPath(location.pathname);
-  if (!postId || fulfillingReplyHandoff || invalidated) return;
-  fulfillingReplyHandoff = true;
-  try {
-    const raw = await getLocal(CONFIG.X_REPLY_HANDOFF_KEY);
-    const candidates = (Array.isArray(raw) ? raw : raw == null ? [] : [raw])
-      .map((value) => validReplyHandoff(value))
-      .filter((value): value is ReplyHandoff => !!value);
-    if (!candidates.some((handoff) => handoffMatchesPath(handoff, location.pathname))) return;
-    const postEl = await waitForMatch(() => findPost(postId), 12_000);
-    if (!postEl || invalidated) return; // leave the unclaimed handoff available for a reload/retry
-    const claimed = await send<{ handoff?: ReplyHandoff | null }>({ type: "CLAIM_REPLY_HANDOFF", postId });
-    const handoff = claimed?.handoff;
-    if (!handoff || invalidated) return;
-    const status = await insertReplyIntoX(handoff.text, postEl);
-    await send({ type: "REPLY_HANDOFF_RESULT", handoff, status });
-    toast(status === "ok"
-      ? "Reply opened and draft prefilled. Review it, then post on X when ready."
-      : status === "occupied"
-        ? "X already has a reply draft open, so Goobi did not overwrite it. Your new draft was copied before this tab opened."
-        : "Goobi opened the post but could not safely fill X's reply box. Your draft was copied before this tab opened.");
-  } finally {
-    fulfillingReplyHandoff = false;
-  }
-}
-
-chrome.runtime.onMessage.addListener((msg: Message) => {
-  if (msg.type !== "REPLY_HANDOFF_STATUS") return;
-  const pending = pendingManualReply;
-  if (!pending || pending.handoff.token !== msg.token) return;
-  pending.status = msg.status;
-  renderPendingManualReplyCard();
-  if (msg.status === "ok") toast("X's reply box is prefilled and ready for your review.");
-});
 
 /** Record a confirmed reply in the persisted reputation log and return the single
  *  most important nudge (duplicate-reply > adaptive pace > repeat-author), or null.
@@ -2205,7 +2088,7 @@ function bumpDaily(now: number): void {
  *  "what's working" loop correlates with outcomes: the daily measure-pass fills SentRecord.outcome,
  *  learnFeatures/aggregateAccounts turn it into per-angle/per-account signal, and (behind
  *  learnLoopOn) accountRankMultipliers + learnedBestAngle feed it back into ranking + drafting. */
-function logSentReply(now: number, text: string, opp?: Opp, angle?: string, confirmation?: "rapidapi" | "manual"): void {
+function logSentReply(now: number, text: string, opp?: Opp, angle?: string, draftStyle?: ReplyStyleId, confirmation?: "rapidapi" | "manual"): void {
   const gx = activeGrowthExperiment(growthStore);
   const recommendation = opp ? recommendationFor(opp, now) : undefined;
   const rec: SentRecord = {
@@ -2218,6 +2101,7 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string, conf
     ageMs: opp?.postedAt ? Math.max(0, now - opp.postedAt) : undefined,
     category: opp?.category,
     angle: angle || opp?.category,
+    draftStyle,
     source: opp?.source,
     lane: recommendation?.lane,
     freshReach: opp?.freshReach ? { ...opp.freshReach, contentFit: opp.score } : undefined,
@@ -2235,15 +2119,15 @@ function logSentReply(now: number, text: string, opp?: Opp, angle?: string, conf
   if (replyLog.sent.length > SENT_MAX) replyLog.sent = replyLog.sent.slice(-SENT_MAX);
 }
 
-/** Record one assisted reply attempt after a successful composer fill or explicit
- *  copy/open confirmation: count it, log its features, update author recency,
+/** Record one explicitly confirmed reply after the user posts it manually:
+ *  count it, log its features, update author recency,
  *  persist, and refresh the UI. */
-function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now(), confirmation?: "rapidapi" | "manual"): void {
+function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = Date.now(), confirmation?: "rapidapi" | "manual", draftStyle?: ReplyStyleId): void {
   replyLog.times = replyLog.times.filter((t) => now - t < HOUR_MS);
   replyLog.times.push(now); // every confirmed reply enters the adaptive rolling pace ledger
   const firstToday = (replyLog.daily[dayKey(now)] || 0) === 0;
   bumpDaily(now);
-  logSentReply(now, text, opp, angle, confirmation);
+  logSentReply(now, text, opp, angle, draftStyle, confirmation);
   const confirmedAuthor = (opp?.author ?? draftOppAuthor).replace(/^@+/, "").toLowerCase();
   if (confirmedAuthor) replyLog.authors[confirmedAuthor] = Math.max(replyLog.authors[confirmedAuthor] ?? 0, now);
   const pid = opp?.id ?? draftOppId; // you replied → drop it from the dock (the feed badge handles the green "✓")
@@ -2263,7 +2147,7 @@ function recordSentReply(text: string, opp?: Opp, angle?: string, now: number = 
   requestScan(); // flip this post's in-feed badge to the green "✓ Commented" call-out
 }
 
-function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, replyAuthor?: string, confirmation?: "rapidapi" | "manual"): string | null {
+function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, draftStyle?: ReplyStyleId, replyAuthor?: string, confirmation?: "rapidapi" | "manual"): string | null {
   const now = Date.now();
   const displayAuthor = (replyAuthor || opp?.author || draftOppAuthor).replace(/^@+/, "");
   const author = displayAuthor.toLowerCase();
@@ -2275,60 +2159,56 @@ function recordReplyAndNudge(text: string, opp?: Opp, angle?: string, replyAutho
   if (author) replyLog.authors[author] = now;
   if (norm) replyLog.drafts.push({ norm, at: now });
   replyLog.drafts = replyLog.drafts.filter((d) => now - d.at < DRAFT_TTL).slice(-DRAFT_MAX);
-  recordSentReply(text, opp, angle, now, confirmation); // pushes this reply onto the adaptive pace ledger
+  recordSentReply(text, opp, angle, now, confirmation, draftStyle); // pushes this reply onto the adaptive pace ledger
   const pace = currentReplyPace(now);
   return pickReplyNudge({ duplicate, repliesThisHour: pace.repliesThisHour, pacePressure: pace.pressure, repeatAuthor: repeat ? displayAuthor : null });
 }
 
-async function startCopyOpenHandoff(text: string, opp?: Opp, angle?: string): Promise<void> {
-  const handoff = buildReplyHandoff(text, opp);
-  if (!handoff) {
+async function startCopyOpenHandoff(text: string, opp?: Opp, angle?: string, style?: ReplyStyleId): Promise<void> {
+  const target = buildReplyTarget(opp);
+  if (!target) {
     const copied = await copyReplyText(text);
     toast(copied
       ? "This opportunity no longer has a valid X post ID. The draft was copied instead."
       : "This opportunity no longer has a valid X post ID. Copy the draft from Goobi instead.");
     return;
   }
-  const pending: PendingManualReply = { text, opp, angle, author: opp?.author || draftOppAuthor, handoff, copied: false, opened: false, status: "opening" };
+  const pending: PendingManualReply = { text, opp, angle, style, author: opp?.author || draftOppAuthor, target, copied: false, status: "opening" };
   pendingManualReply = pending;
   renderPendingManualReplyCard();
-  const result = await copyReplyAndOpenPost(handoff);
+  const result = await copyReplyAndOpenPost(text, target);
   if (pendingManualReply !== pending) return;
   pending.copied = result.copied;
-  pending.opened = result.opened;
-  if (!result.opened && pending.status === "opening") pending.status = "no-composer";
+  pending.status = result.opened ? "ready" : "open-failed";
   renderPendingManualReplyCard();
   toast(result.opened
-    ? "Opened the exact X post. Goobi is activating Reply and prefilling the draft."
+    ? "Opened the exact X post and copied the draft. Click Reply and paste it yourself."
     : "X could not be opened. Your draft remains available in Goobi.");
 }
 
-/** Prefer X's already-rendered UI. If the exact post is on this page, click its
- *  comment control and fill the local composer without opening or focusing any
- *  other tab. The caller resolves the exact article synchronously so an off-page
- *  fallback retains the original click gesture. */
-async function startVisiblePostReview(text: string, postEl: HTMLElement, opp?: Opp, angle?: string): Promise<void> {
-  const handoff = buildReplyHandoff(text, opp);
-  if (!handoff) return;
-  const copied = copyReplyText(text); // fallback starts inside the user gesture; success still uses X's input directly
-  const status = await insertReplyIntoX(text, postEl);
+/** For a visible feed post, copy the draft and scroll the exact matched article
+ *  into view while leaving X's own controls and composer untouched. */
+async function startVisiblePostReview(text: string, postEl: HTMLElement, opp?: Opp, angle?: string, style?: ReplyStyleId): Promise<void> {
+  const target = buildReplyTarget(opp);
+  if (!target) return;
+  highlightReplyTarget(postEl);
+  postEl.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  const copied = await copyReplyText(text);
   const pending: PendingManualReply = {
     text,
     opp,
     angle,
+    style,
     author: opp?.author || draftOppAuthor,
-    handoff,
-    copied: await copied,
-    opened: true,
-    status,
+    target,
+    copied,
+    status: "ready",
   };
   pendingManualReply = pending;
   renderPendingManualReplyCard();
-  toast(status === "ok"
-    ? "Clicked Reply on this post and prefilled the draft. Review it in X before posting."
-    : status === "occupied"
-      ? "X already has a reply draft open, so Goobi did not overwrite it."
-      : "Goobi found this post but could not safely fill its reply box. The draft is ready to paste.");
+  toast(copied
+    ? "Scrolled to the post and copied the draft. Click X's Reply button and paste it yourself."
+    : "Scrolled to the post. Copy the draft, then click X's Reply button and paste it yourself.");
 }
 
 async function handoffReply(text: string): Promise<void> {
@@ -2338,53 +2218,83 @@ async function handoffReply(text: string): Promise<void> {
   try {
     const opp = draftOppId ? opps.get(draftOppId) : undefined;
     const angle = lastDraft?.angle;
+    const style = lastDraft?.style;
     const postEl = draftOppId ? findPost(draftOppId, opp?.source === "feed" ? opp.text : undefined) : null;
-    if (postEl) await startVisiblePostReview(text, postEl, opp, angle);
-    else await startCopyOpenHandoff(text, opp, angle);
-  } finally {
-    inserting = false;
-  }
-}
-
-async function likeAndInsertReply(text: string): Promise<void> {
-  if (inserting) return;
-  if (!text.replace(/​/g, "").trim()) { toast("The draft is empty — nothing to insert."); return; }
-  inserting = true;
-  try {
-    const opp = draftOppId ? opps.get(draftOppId) : undefined;
-    const angle = lastDraft?.angle;
-    const postEl = draftOppId ? findPost(draftOppId, opp?.source === "feed" ? opp.text : undefined) : null;
-    const result = await insertReplyIntoX(text, postEl);
-    if (result === "ok") {
-      const liked = draftOppId ? likeSelectedPost(draftOppId, postEl) : false;
-      const postId = draftOppId ?? opp?.id;
-      const warn = recordReplyAndNudge(text, opp, angle);
-      if (postId) repaintReplyPost(postId);
-      dismissPanel(true);
-      toast(warn || (liked
-        ? "Post liked and reply inserted. Review it, then submit on X."
-        : "Reply inserted. Review it, then submit on X."));
-      return;
-    }
-    const reason = result === "occupied"
-      ? "An X composer is already open or contains text."
-      : result === "no-composer" ? "That post is not available in this tab." : "X blocked the composer fill.";
-    toast(`${reason} Switching to the exact-post review flow.`);
-    await startCopyOpenHandoff(text, opp, angle);
+    if (postEl) await startVisiblePostReview(text, postEl, opp, angle, style);
+    else await startCopyOpenHandoff(text, opp, angle, style);
   } finally {
     inserting = false;
   }
 }
 
 function runReplyDraftAction(text: string): Promise<void> {
-  const opp = draftOppId ? opps.get(draftOppId) : undefined;
-  // Keyword-discovered cold opportunities always use X's official, manual review surface.
-  return xReplyInsertOn && opp?.source !== "fresh-reach" ? likeAndInsertReply(text) : handoffReply(text);
+  return handoffReply(text);
+}
+
+/** Current navigation truth for the review action. X virtualizes feed rows, so source alone is not
+ * enough: a feed-sourced post that has scrolled out of the DOM also needs the exact-status page. */
+function replyReviewNeedsPage(postId: string | null | undefined, opp?: Opp): boolean {
+  if (!postId) return true;
+  return !findPost(postId, opp?.source === "feed" ? opp.text : undefined);
+}
+
+interface HighlightedReplyPost {
+  el: HTMLElement;
+  outline: string;
+  outlinePriority: string;
+  outlineOffset: string;
+  outlineOffsetPriority: string;
+  boxShadow: string;
+  boxShadowPriority: string;
+  animation?: Animation;
+  timeout: number;
+}
+let highlightedReplyPost: HighlightedReplyPost | undefined;
+
+function clearReplyPostHighlight(): void {
+  const active = highlightedReplyPost;
+  if (!active) return;
+  highlightedReplyPost = undefined;
+  clearTimeout(active.timeout);
+  active.animation?.cancel();
+  if (!active.el.isConnected) return;
+  active.el.style.setProperty("outline", active.outline, active.outlinePriority);
+  active.el.style.setProperty("outline-offset", active.outlineOffset, active.outlineOffsetPriority);
+  active.el.style.setProperty("box-shadow", active.boxShadow, active.boxShadowPriority);
+}
+
+/** Temporarily call out the exact feed article without clicking or changing any X control. */
+function highlightReplyTarget(postEl: HTMLElement): void {
+  clearReplyPostHighlight();
+  const active: HighlightedReplyPost = {
+    el: postEl,
+    outline: postEl.style.getPropertyValue("outline"),
+    outlinePriority: postEl.style.getPropertyPriority("outline"),
+    outlineOffset: postEl.style.getPropertyValue("outline-offset"),
+    outlineOffsetPriority: postEl.style.getPropertyPriority("outline-offset"),
+    boxShadow: postEl.style.getPropertyValue("box-shadow"),
+    boxShadowPriority: postEl.style.getPropertyPriority("box-shadow"),
+    timeout: 0,
+  };
+  postEl.style.setProperty("outline", `3px solid ${ACCENT}`, "important");
+  postEl.style.setProperty("outline-offset", "-3px", "important");
+  postEl.style.setProperty("box-shadow", "0 0 0 5px rgba(214,154,92,.22), 0 0 30px rgba(214,154,92,.28)", "important");
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    active.animation = postEl.animate([
+      { boxShadow: "0 0 0 3px rgba(214,154,92,.18), 0 0 18px rgba(214,154,92,.2)" },
+      { boxShadow: "0 0 0 8px rgba(214,154,92,.3), 0 0 34px rgba(214,154,92,.38)" },
+      { boxShadow: "0 0 0 5px rgba(214,154,92,.22), 0 0 30px rgba(214,154,92,.28)" },
+    ], { duration: 900, iterations: 2, easing: "ease-in-out" });
+  }
+  active.timeout = window.setTimeout(() => {
+    if (highlightedReplyPost === active) clearReplyPostHighlight();
+  }, 5_000);
+  highlightedReplyPost = active;
 }
 
 async function draftFor(req: DraftReq) {
   if (pendingManualReply) { renderPendingManualReplyCard(); toast("Finish or cancel the reply waiting for confirmation first."); return; }
-  const { author, text, context, oppId, angle, avatar, name, steer, isReplyToOwnPost: reqOwnReply } = req;
+  const { author, text, context, oppId, angle, style, avatar, name, steer, isReplyToOwnPost: reqOwnReply } = req;
   draftOppId = oppId ?? null;
   draftOppAuthor = author;
   // The picker lists ALL products when promoting (choose any); default-select the
@@ -2401,9 +2311,10 @@ async function draftFor(req: DraftReq) {
   productIndex = productIndex ?? 0;
   req = { ...req, productIndex };
   lastDraft = req;
+  const requestSeq = ++draftRequestSeq;
   // The product to weave in: the chosen one when promoting, else all (drafter picks).
   const product = candidates ? productContext(candidates[productIndex]) : productContext(undefined);
-  const ui = { angle, avatar, name, products: candidates, productIndex, steer };
+  const ui = { angle, style, avatar, name, products: candidates, productIndex, steer };
   const root = ensurePanel();
   paintPanel(root, author, text, { loading: true, ...ui });
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
@@ -2424,7 +2335,8 @@ async function draftFor(req: DraftReq) {
       ? `Goobi currently classifies this as ${freshReachKindLabel(liveFresh.kind)} from these public observations: ${freshReachMetricFacts(dOpp, liveFresh).join(", ")}. These are product heuristics, not an X ranking guarantee. Write one self contained contribution for surrounding readers, not flattery for the author. Never mention targeting, timing, account size, Premium, a blue check, reach, views, engagement, or impressions in the reply.`
       : "This post was found by Fresh reach but has since left Goobi's strict timing, competition, or audience window. Do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution that remains worthwhile for surrounding readers."
     : undefined;
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, product, steer, reason: dOpp?.reason, category: dOpp?.category, anchor: dOpp?.anchor, replyBrief: dOpp?.replyBrief, authorLine, threadLine, opportunityLine });
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, style, product, steer, reason: dOpp?.reason, category: dOpp?.category, anchor: dOpp?.anchor, replyBrief: dOpp?.replyBrief, authorLine, threadLine, opportunityLine });
+  if (requestSeq !== draftRequestSeq) return; // a newer angle/style/steer choice owns the panel
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${friendlyErr(resp.error)}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -2455,6 +2367,32 @@ function angleRow(active?: string): HTMLElement {
   return row;
 }
 
+/** Delivery style is orthogonal to angle: it compresses whichever substantive move is active into
+ * a short, thread-opening reply. The whole component is one accessible toggle and re-drafts in place. */
+function replyStyleControl(active?: ReplyStyleId): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "reply-style";
+  const style = REPLY_STYLES[0];
+  const on = active === style.id;
+  const button = document.createElement("button"); button.className = "spark" + (on ? " on" : "");
+  button.type = "button"; button.setAttribute("aria-pressed", String(on));
+  button.title = "Think through the exact post, then write one short, specific reply that gives the conversation somewhere useful to go.";
+  const mark = document.createElement("span"); mark.className = "spark-mark"; mark.textContent = "✦"; mark.setAttribute("aria-hidden", "true");
+  const copy = document.createElement("span"); copy.className = "spark-copy";
+  const label = document.createElement("b"); label.textContent = style.label;
+  const description = document.createElement("small"); description.textContent = style.description;
+  copy.append(label, description); button.append(mark, copy);
+  if (on) { const state = document.createElement("span"); state.className = "spark-state"; state.textContent = "On"; button.append(state); }
+  button.onclick = () => {
+    const d = lastDraft;
+    if (!d) return;
+    communitySparkOn = !on;
+    safeSet({ [CONFIG.X_COMMUNITY_SPARK_KEY]: communitySparkOn });
+    void draftFor({ ...d, style: preferredReplyStyle() });
+  };
+  wrap.append(button);
+  return wrap;
+}
+
 /** Product picker, shown when the active angle is Promote: pick which product to plug. */
 function productRow(candidates: ProductItem[], selected: number): HTMLElement {
   const row = document.createElement("div"); row.className = "prods";
@@ -2473,10 +2411,10 @@ function productRow(candidates: ProductItem[], selected: number): HTMLElement {
 function openDraftFromEl(el: HTMLElement) {
   const info = statusInfo(el);
   const meta = info ? (opps.get(info.id) ?? seen.get(info.id)) : undefined;
-  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), oppId: info?.id, angle: initialAngle(meta?.category), avatar: avatarUrl(el), products: meta?.products, name: displayName(el), isReplyToOwnPost: meta?.isReplyToOwnPost || isReplyToOwnPost(el) });
+  void draftFor({ author: info?.author || "this post", text: outerText(el), context: quotedText(el), oppId: info?.id, angle: initialAngle(meta?.category), style: preferredReplyStyle(), avatar: avatarUrl(el), products: meta?.products, name: displayName(el), isReplyToOwnPost: meta?.isReplyToOwnPost || isReplyToOwnPost(el) });
 }
 
-function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number; steer?: string }) {
+function paintPanel(root: ShadowRoot, author: string, text: string, opts: { loading?: boolean; note?: string; draft?: string; angle?: string; style?: ReplyStyleId; avatar?: string; name?: string; products?: ProductItem[]; productIndex?: number; steer?: string }) {
   root.replaceChildren();
   const p = document.createElement("div"); p.className = "p";
   p.setAttribute("role", "dialog"); p.setAttribute("aria-modal", "false"); p.setAttribute("aria-labelledby", "goobi-draft-title");
@@ -2500,23 +2438,27 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     p.append(repeat);
   }
   p.append(angleRow(opts.angle));
+  p.append(replyStyleControl(opts.style));
   if (opts.angle === "promote" && opts.products && opts.products.length) p.append(productRow(opts.products, opts.productIndex ?? 0));
   if (opts.loading) {
-    const l = document.createElement("div"); l.className = "load"; l.textContent = "Drafting in your voice…"; p.append(l);
+    const l = document.createElement("div"); l.className = "load"; l.textContent = opts.style === "community-spark" ? "Finding the sharpest community reply…" : "Drafting in your voice…"; p.append(l);
   } else if (opts.note) {
     const n = document.createElement("div"); n.className = "load"; n.textContent = opts.note; p.append(n);
   } else {
-    const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = 5; ta.value = opts.draft ?? ""; ta.setAttribute("aria-label", "Reply draft");
-    const manualReview = !xReplyInsertOn || (draftOppId ? opps.get(draftOppId)?.source === "fresh-reach" : false);
-    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = manualReview ? "Review & reply on X ↗" : "Like + insert reply in X";
-    insert.title = !manualReview
-      ? "Like the selected post and fill X's reply box; you review and submit it"
-      : "Use this post's Reply control in place and prefill the draft; only off-page results open their exact status page";
+    const ta = document.createElement("textarea"); ta.className = "ta"; ta.rows = opts.style === "community-spark" ? 3 : 5; ta.value = opts.draft ?? ""; ta.setAttribute("aria-label", "Reply draft");
+    const draftOpp = draftOppId ? opps.get(draftOppId) : undefined;
+    const opensPostPage = replyReviewNeedsPage(draftOppId, draftOpp);
+    const insert = document.createElement("button"); insert.className = "b primary"; insert.textContent = opensPostPage
+      ? "Copy & open exact post ↗"
+      : "Copy & scroll to post";
+    insert.title = opensPostPage
+      ? "Copy this draft and open the exact X post. Goobi will not click Reply or fill the composer."
+      : "Copy this draft and scroll the exact feed post into view. Goobi will not click Reply or fill the composer.";
     insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
     insert.onclick = () => void runReplyDraftAction(ta.value);
     // Steering: type how to nudge the reply, then Regenerate (or Enter) re-drafts with it.
     const steer = document.createElement("input"); steer.className = "steer"; steer.type = "text";
-    steer.placeholder = "Steer it — e.g. punchier, ask a question, less formal…";
+    steer.placeholder = opts.style === "community-spark" ? "Steer the spark — drier, warmer, sharper…" : "Steer it — e.g. punchier, ask a question, less formal…";
     steer.value = opts.steer ?? "";
     const row = document.createElement("div"); row.className = "row";
     const copy = document.createElement("button"); copy.className = "b"; copy.textContent = "Copy";
@@ -2526,9 +2468,9 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     regen.onclick = () => { if (lastDraft) void draftFor({ ...lastDraft, steer: steer.value.trim() || undefined }); };
     steer.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); regen.click(); } };
     row.append(copy, regen);
-    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = !manualReview
-      ? "On your click, Goobi likes this post, fills X's reply box, and updates its local activity state. It never submits."
-      : "Manual review mode: X's official composer opens with the draft. You decide whether to edit and post it.";
+    const foot = document.createElement("div"); foot.className = "foot"; foot.textContent = opensPostPage
+      ? "Goobi only copies the draft and opens the post. You click Reply, paste, review, and post manually."
+      : "Goobi copies the draft and scrolls to the post. You click X's Reply button, paste, review, and post manually.";
     p.append(ta, insert, steer, row, foot);
     requestAnimationFrame(() => { if (panelRoot === root) ta.focus(); });
   }
@@ -3006,6 +2948,8 @@ const DOCK_CSS = `
 .botacts { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:8px; padding-top:7px; border-top:.5px solid rgba(214,154,92,.08); }
 .av { width:40px; height:40px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:#221c15; }
 .av.init { display:inline-flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:#fff; }
+.reply-avatar-state { position:relative; display:inline-flex; flex:0 0 auto; border-radius:50%; }
+.reply-avatar-state.offpage::after { content:"↗"; position:absolute; right:-2px; bottom:0; display:flex; align-items:center; justify-content:center; width:14px; height:14px; box-sizing:border-box; border:1px solid #14110d; border-radius:50%; background:var(--g-accent); color:var(--g-bg); font:800 8px/1 -apple-system,system-ui,sans-serif; box-shadow:0 1px 4px rgba(0,0,0,.45); }
 .bodywrap { flex:1; min-width:0; display:flex; gap:12px; }
 .main { flex:1; min-width:0; }
 .nm { display:flex; align-items:center; gap:6px; font-weight:600; font-size:14px; }
@@ -3252,6 +3196,7 @@ function currentFreshReach(o: Opp, now = Date.now()) {
   const handle = o.author.replace(/^@+/, "").toLowerCase();
   return freshReachCandidate({
     id: o.id, author: o.author, text: o.text, postedAt: o.postedAt,
+    observedAt: o.freshReach?.observedAt,
     followers: knownFollowers(o), likes: o.likes, replies: o.replies, reposts: o.reposts,
     quotes: o.quotes, views: o.views, isReply: false,
   }, myFollowers, now, replyLog.authors[handle]);
@@ -3807,7 +3752,7 @@ function renderList(list: HTMLElement) {
     const isFreshHero = hero?.opp.id === o.id;
     const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "") + (isFreshHero ? " fresh-hero" : "") + (o.isReplyToOwnPost ? " inbound-own-post" : "");
     const toggle = () => { const wasOpen = expandedReplyCards.has(o.id); expandedReplyCards.clear(); if (!wasOpen) expandedReplyCards.add(o.id); renderDock(); };
-    const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
+    const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), style: preferredReplyStyle(), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
     const laneColor = rec.lane === "inbound" || rec.lane === "continue" ? "#6fcf7f" : rec.lane === "community" ? "#5dcaa5" : ACCENT;
     const age = fmtAge(o.postedAt);
     const strength = rec.strength === "best next" ? "Best next" : rec.strength === "good option" ? "Good" : "Later";
@@ -3836,9 +3781,18 @@ function renderList(list: HTMLElement) {
     const summaryToggle = document.createElement("div"); summaryToggle.className = "reply-toggle"; summaryToggle.setAttribute("role", "button"); summaryToggle.tabIndex = 0; summaryToggle.setAttribute("aria-expanded", String(open)); summaryToggle.title = open ? "Collapse reply details" : "Show why Goobi recommends this reply";
     summaryToggle.onclick = toggle;
     summaryToggle.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+    const opensPostPage = replyReviewNeedsPage(o.id, o);
+    let avatar: HTMLElement;
     if (o.avatar) {
-      const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.replaceWith(avInitial(o)); summaryToggle.append(av);
-    } else summaryToggle.append(avInitial(o));
+      const av = document.createElement("img"); av.className = "av"; av.src = o.avatar; av.alt = ""; av.loading = "lazy"; av.referrerPolicy = "no-referrer"; av.onerror = () => av.replaceWith(avInitial(o)); avatar = av;
+    } else avatar = avInitial(o);
+    const avatarState = document.createElement("span"); avatarState.className = "reply-avatar-state" + (opensPostPage ? " offpage" : ""); avatarState.append(avatar);
+    if (opensPostPage) {
+      avatarState.setAttribute("role", "img");
+      avatarState.setAttribute("aria-label", `Reviewing this reply opens @${o.author}'s post on a separate X page`);
+      avatarState.title = "Review & reply opens this exact post on X because it is not currently in your feed.";
+    } else avatarState.setAttribute("aria-hidden", "true");
+    summaryToggle.append(avatarState);
     const copy = document.createElement("div"); copy.className = "reply-copy";
     const identity = document.createElement("div"); identity.className = "reply-id";
     const nm = document.createElement("div"); nm.className = "nm";
@@ -4274,7 +4228,7 @@ function dailyGoalTracker(counts: { replies: number; posts: number; dms: number 
   head.append(title, summary, edit); wrap.append(head);
   const grid = document.createElement("div"); grid.className = "dg-grid";
   const specs: Array<{ key: keyof DailyGoals; label: string; view: DockView; title: string }> = [
-    { key: "replies", label: "Replies", view: "replies", title: "Successful Like + insert attempts count immediately as pending; RapidAPI or manual confirmation later verifies them." },
+    { key: "replies", label: "Replies", view: "replies", title: "Only replies matched through RapidAPI or explicitly marked as posted count here." },
     { key: "posts", label: "Posts", view: "ideas", title: "X-detected originals today, or posts explicitly marked shipped in Goobi when X data is unavailable." },
     { key: "dms", label: "DM people", view: "dms", title: "Unique people with an outbound DM you explicitly marked sent today. Goobi cannot read or verify the X inbox." },
   ];
@@ -5282,7 +5236,7 @@ function mountIdeasGoobi(): void {
 
 /* ---------- Target accounts: comment early on big in-reach niche accounts ---------- */
 let targetStore: TargetStore = freshStore("");
-const targetPosts = new Map<string, { id: string; text: string; postedAt?: number; author: string; replies?: number; likes?: number; reposts?: number; quotes?: number; views?: number }>(); // fetched latest post per handle; all provider metrics feed measured momentum
+const targetPosts = new Map<string, { id: string; text: string; context?: string; postedAt?: number; observedAt?: number; author: string; replies?: number; likes?: number; reposts?: number; quotes?: number; views?: number }>(); // fetched latest post per handle; all provider metrics feed measured momentum
 const targetDrafts = new Map<string, string>(); // generated reply draft per handle (session)
 const targetBusy = new Set<string>();           // handles currently fetching/drafting
 let targetAdding = false;
@@ -5588,20 +5542,22 @@ async function findTargetPost(handle: string, ambient = false): Promise<void> {
   try {
     // Ambient polls carry intent:false so conserve mode silently pauses them (the governor's
     // degrade ladder is the budget guard); an explicit user click stays intent:true.
-    const res = await send<{ ok?: boolean; data?: unknown; error?: string }>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: !ambient });
+    const res = await send<TwttrGetResponse>({ type: "TWTTR_GET", path: "search-v3", query: { type: "Latest", count: "10", query: `from:${handle}` }, intent: !ambient });
     if (res?.ok) {
       freshReachFailedAt.delete(handle.toLowerCase());
+      const observedAt = res.cachedAt ?? Date.now();
       const originals = parseTimelineTweets(res.data)
+        .map((post) => ({ ...post, observedAt }))
         .filter((t) => !t.isReply && t.text && t.author?.toLowerCase() === handle.toLowerCase())
         .sort((a, b) => (b.postedAt ?? 0) - (a.postedAt ?? 0));
       observeOpportunityTweets(originals); // snapshot every returned original; newest may change between polls
       const newest = originals[0];
-      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, postedAt: newest.postedAt, author: newest.author, replies: newest.replies, likes: newest.likes, reposts: newest.reposts, quotes: newest.quotes, views: newest.views } : { id: "", text: "", author: handle });
+      targetPosts.set(handle, newest ? { id: newest.id, text: newest.text, context: newest.context, postedAt: newest.postedAt, observedAt, author: newest.author, replies: newest.replies, likes: newest.likes, reposts: newest.reposts, quotes: newest.quotes, views: newest.views } : { id: "", text: "", observedAt, author: handle });
       if (!ambient) targetDrafts.delete(handle); // an explicit refresh invalidates the old draft; an ambient poll never touches the user's draft
       // TTL bookkeeping on the PERSISTED target — this is what makes remounts/second tabs free
       // (selectPollBatch skips anything polled within TARGET_POLL_TTL_MS).
       const tg = targetStore.targets.find((t) => t.handle.toLowerCase() === handle.toLowerCase());
-      if (tg) { tg.lastPolledAt = Date.now(); if (newest?.id) tg.lastFreshPostId = newest.id; persistTargets(); }
+      if (tg) { tg.lastPolledAt = observedAt; if (newest?.id) tg.lastFreshPostId = newest.id; persistTargets(); }
     } else freshReachFailedAt.set(handle.toLowerCase(), Date.now());
   } finally { targetBusy.delete(handle); renderDock(); }
 }
@@ -5621,7 +5577,7 @@ async function pollTargets(): Promise<void> {
     if (invalidated) return;
     const failedAt = freshReachFailedAt.get(tg.handle.toLowerCase());
     if (failedAt && Date.now() - failedAt < FRESH_REACH_FAILURE_BACKOFF_MS) continue;
-    await findTargetPost(tg.handle, true); // sequential — the governor's token bucket stays smooth
+    await findTargetPost(tg.handle, true); // sequential here; the shared governor also smooths every other caller
   }
 }
 
@@ -5637,7 +5593,7 @@ async function draftTargetReply(handle: string): Promise<void> {
       // Score once, then promote the fetched post into the shared opportunity model so drafting,
       // reply logging, duplicate checks, and measured outcomes all see the same honest record.
       const scored = await send<{ scores?: ScoredPost[]; error?: string }>({
-        type: "SCORE_POSTS", posts: [{ i: 0, author: post.author, text: post.text.slice(0, 400) }],
+        type: "SCORE_POSTS", posts: [{ i: 0, author: post.author, text: post.text.slice(0, 400), context: post.context?.slice(0, 320) }],
       });
       if (scored?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score and draft replies."); return; }
       const s = scored?.scores?.[0];
@@ -5652,7 +5608,7 @@ async function draftTargetReply(handle: string): Promise<void> {
       }], myFollowers, Date.now(), replyLog.authors, 1)[0];
       const isFreshReach = freshReachContentEligible(s) && !!freshCandidate;
       const targetFreshEvidence: FreshReachEvidence | undefined = isFreshReach && freshCandidate ? {
-        runId: `target.${Date.now().toString(36)}`, discoveredAt: Date.now(), observedAt: Date.now(),
+        runId: `target.${Date.now().toString(36)}`, discoveredAt: Date.now(), observedAt: post.observedAt ?? Date.now(),
         expiresAt: (post.postedAt ?? Date.now()) + FRESH_REACH_MAX_AGE_MS,
         repliesObserved: post.replies!, sizeMultiple: freshCandidate.sizeMultiple,
         accountSource: "tracked", accountPriority: 1,
@@ -5664,7 +5620,7 @@ async function draftTargetReply(handle: string): Promise<void> {
         openingScore: freshReachOpeningScore({ contentFit: s.score, observedOpportunity: freshCandidate.opportunity }),
       } : undefined;
       opp = {
-        id: post.id, author: post.author, text: post.text.slice(0, 400), score: s.score,
+        id: post.id, author: post.author, text: post.text.slice(0, 400), context: post.context?.slice(0, 320), score: s.score,
         reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk,
         postedAt: post.postedAt, likes: post.likes, replies: post.replies,
         reposts: post.reposts, quotes: post.quotes, views: post.views, followers: target?.followers,
@@ -5686,7 +5642,7 @@ async function draftTargetReply(handle: string): Promise<void> {
         : "This tracked post was originally a Fresh reach opening but has since cooled or filled. Do not imply urgency; draft only a contribution that remains specifically worthwhile."
       : "This is a user selected target account. The post is not inside the strict fresh reach window, so do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution.";
     const resp = await send<{ reply?: string; error?: string }>({
-      type: "DRAFT_REPLY", author: post.author, text: post.text, angle,
+      type: "DRAFT_REPLY", author: post.author, text: post.text, context: post.context, angle, style: preferredReplyStyle(),
       product: productContext(opp.products?.[0]), reason: opp.reason, category: opp.category, anchor: opp.anchor, replyBrief: opp.replyBrief,
       authorLine, opportunityLine,
     });
@@ -5705,9 +5661,39 @@ const REACH_PERSIST_MAX = 600, HEAVY_PERSIST_MAX = 400;
 type ReachEntry = { followers?: number; following?: number; bio?: string; at: number };
 function mergeHeavyHitterEntry(stored: HeavyHitterEntry | undefined, live: HeavyHitterEntry): HeavyHitterEntry {
   if (!stored) return live;
-  const ids = [...new Set([...(stored.openingPostIds ?? []), ...(live.openingPostIds ?? [])])].slice(-20);
+  const allIds = [...new Set([...(stored.openingPostIds ?? []), ...(live.openingPostIds ?? [])])];
+  const ids = allIds.slice(-20);
+  const checkCounts = mergeFreshReachCounters(stored.checkCounts, live.checkCounts, stored.checks ?? 0, live.checks ?? 0);
+  const openingBaseCount = Math.max(
+    stored.openingBaseCount ?? stored.strongOpenings ?? stored.openingPostIds?.length ?? 0,
+    live.openingBaseCount ?? live.strongOpenings ?? live.openingPostIds?.length ?? 0,
+  );
+  const openingEventIds = [...new Set([...(stored.openingEventIds ?? []), ...(live.openingEventIds ?? [])])];
   const liveIsNewer = (live.lastSeenAt ?? live.at ?? 0) >= (stored.lastSeenAt ?? stored.at ?? 0);
   const shortlist = (live.shortlistAt ?? 0) >= (stored.shortlistAt ?? 0) ? live : stored;
+  const now = Date.now();
+  const storedFallback = stored.lastSeenAt ?? stored.discoveredAt ?? stored.at;
+  const liveFallback = live.lastSeenAt ?? live.discoveredAt ?? live.at;
+  const distribution = strongestFreshReachEvidence(
+    { value: stored.distributionScore, observedAt: stored.distributionObservedAt ?? storedFallback },
+    { value: live.distributionScore, observedAt: live.distributionObservedAt ?? liveFallback },
+    now,
+  );
+  const viewRate = strongestFreshReachEvidence(
+    { value: stored.viewRate, observedAt: stored.viewRateObservedAt ?? storedFallback },
+    { value: live.viewRate, observedAt: live.viewRateObservedAt ?? liveFallback },
+    now,
+  );
+  const peakViews = strongestFreshReachEvidence(
+    { value: stored.peakViews, observedAt: stored.peakViewsObservedAt ?? storedFallback },
+    { value: live.peakViews, observedAt: live.peakViewsObservedAt ?? liveFallback },
+    now,
+  );
+  const peakEngagements = strongestFreshReachEvidence(
+    { value: stored.peakEngagements, observedAt: stored.peakEngagementsObservedAt ?? storedFallback },
+    { value: live.peakEngagements, observedAt: live.peakEngagementsObservedAt ?? liveFallback },
+    now,
+  );
   return {
     ...stored, ...live,
     followers: liveIsNewer ? live.followers : stored.followers,
@@ -5717,13 +5703,20 @@ function mergeHeavyHitterEntry(stored: HeavyHitterEntry | undefined, live: Heavy
     discoveredAt: Math.min(stored.discoveredAt ?? Infinity, live.discoveredAt ?? Infinity) === Infinity ? undefined : Math.min(stored.discoveredAt ?? Infinity, live.discoveredAt ?? Infinity),
     lastSeenAt: Math.max(stored.lastSeenAt ?? 0, live.lastSeenAt ?? 0) || undefined,
     lastCheckedAt: Math.max(stored.lastCheckedAt ?? 0, live.lastCheckedAt ?? 0) || undefined,
-    checks: Math.max(stored.checks ?? 0, live.checks ?? 0) || undefined,
+    checkCounts: Object.keys(checkCounts).length ? checkCounts : undefined,
+    checks: freshReachCounterTotal(checkCounts) || undefined,
     openingPostIds: ids.length ? ids : undefined,
-    strongOpenings: Math.max(ids.length, stored.strongOpenings ?? 0, live.strongOpenings ?? 0) || undefined,
-    distributionScore: Math.max(stored.distributionScore ?? 0, live.distributionScore ?? 0) || undefined,
-    viewRate: Math.max(stored.viewRate ?? 0, live.viewRate ?? 0) || undefined,
-    peakViews: Math.max(stored.peakViews ?? 0, live.peakViews ?? 0) || undefined,
-    peakEngagements: Math.max(stored.peakEngagements ?? 0, live.peakEngagements ?? 0) || undefined,
+    openingBaseCount: openingBaseCount || undefined,
+    openingEventIds: openingEventIds.length ? openingEventIds : undefined,
+    strongOpenings: Math.max(openingBaseCount + openingEventIds.length, allIds.length, stored.strongOpenings ?? 0, live.strongOpenings ?? 0) || undefined,
+    distributionScore: distribution.value,
+    distributionObservedAt: distribution.observedAt,
+    viewRate: viewRate.value,
+    viewRateObservedAt: viewRate.observedAt,
+    peakViews: peakViews.value,
+    peakViewsObservedAt: peakViews.observedAt,
+    peakEngagements: peakEngagements.value,
+    peakEngagementsObservedAt: peakEngagements.observedAt,
     source: stored.source === "top" || live.source === "top" ? "top" : (live.source ?? stored.source),
     shortlisted: shortlist.shortlisted,
     replyViewOutcomes: shortlist.replyViewOutcomes,
@@ -5746,14 +5739,15 @@ async function persistReachCaches(): Promise<void> {
   safeSet({ [CONFIG.X_AUTHOR_REACH_KEY]: mergedR });
   // heavyHitters: same merge, stamped with the niche that produced it
   const niche = xNiche.trim();
-  if (niche) {
+  const ownerHandle = (await myHandle() || getSelf()).replace(/^@+/, "").trim().toLowerCase();
+  if (niche && ownerHandle) {
     const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as HeavyHitterStore | undefined;
     const mergedH: Record<string, HeavyHitterEntry> = {};
-    if (storedH?.niche === niche) for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
+    if (storedH?.ownerHandle === ownerHandle && storedH.niche === niche) for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = v;
     for (const [k, v] of heavyHitters) if (v.at && now - v.at < HEAVY_HITTER_TTL_MS) mergedH[k] = mergeHeavyHitterEntry(mergedH[k], v);
     const hKeys = Object.keys(mergedH);
     if (hKeys.length > HEAVY_PERSIST_MAX) for (const k of hKeys.sort((a, b) => (mergedH[a].at ?? 0) - (mergedH[b].at ?? 0)).slice(0, hKeys.length - HEAVY_PERSIST_MAX)) delete mergedH[k];
-    safeSet({ [CONFIG.X_HEAVY_HITTERS_KEY]: { niche, entries: mergedH } });
+    safeSet({ [CONFIG.X_HEAVY_HITTERS_KEY]: { ownerHandle, niche, entries: mergedH } });
   }
 }
 let persistReachTimer: number | undefined;
@@ -5834,16 +5828,18 @@ function syncFreshReachShortlistIntoRadar(): FreshReachShortlistAccount[] {
 function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | "latest"): number {
   const now = Date.now();
   let discovered = 0;
-  const grouped = new Map<string, { followers: number; rates: number[]; viewRates: number[]; distribution: number[]; views: number[]; engagements: number[] }>();
+  const grouped = new Map<string, { followers: number; observedAt: number; rates: number[]; viewRates: number[]; distribution: number[]; views: number[]; engagements: number[] }>();
   for (const tweet of tweets) {
     if (tweet.isReply || !tweet.author || !tweet.followers || tweet.followers < Math.max(2, myFollowers * 2)) continue;
     if (!tweet.text || looksLikeRT(tweet.text) || !isEnglish(tweet.text, tweet.lang) || isBait(tweet.text)) continue;
     const handle = tweet.author.toLowerCase();
     if (!/^[a-z0-9_]{1,15}$/.test(handle) || handle === selfHandle) continue;
-    const signals = freshReachPostSignals(tweet, now);
+    const snapshotAt = tweet.observedAt ?? now;
+    const signals = freshReachPostSignals(tweet, snapshotAt);
     const engagementRate = signals.engagementRate ?? 0;
-    const group = grouped.get(handle) ?? { followers: tweet.followers, rates: [], viewRates: [], distribution: [], views: [], engagements: [] };
+    const group = grouped.get(handle) ?? { followers: tweet.followers, observedAt: snapshotAt, rates: [], viewRates: [], distribution: [], views: [], engagements: [] };
     group.followers = tweet.followers;
+    group.observedAt = Math.min(group.observedAt, snapshotAt); // conservative when snapshots are mixed
     group.rates.push(engagementRate);
     if (signals.viewRate != null) group.viewRates.push(signals.viewRate);
     group.distribution.push(signals.distributionScore);
@@ -5858,26 +5854,52 @@ function captureFreshRadarTweets(tweets: readonly TwttrTweet[], source: "top" | 
     return 0.65 * sorted[sorted.length - 1] + 0.35 * median;
   };
   for (const [handle, group] of grouped) {
+    const evidenceAt = group.observedAt;
     const previous = heavyHitters.get(handle);
     if (!previous) discovered++;
     const observedRate = robust(group.rates);
     const observedDistribution = robust(group.distribution);
     const observedViewRate = robust(group.viewRates);
+    const fallback = previous?.lastSeenAt ?? previous?.discoveredAt ?? previous?.at;
+    const distribution = strongestFreshReachEvidence(
+      { value: previous?.distributionScore, observedAt: previous?.distributionObservedAt ?? fallback },
+      { value: observedDistribution, observedAt: evidenceAt },
+      now,
+    );
+    const viewRate = strongestFreshReachEvidence(
+      { value: previous?.viewRate, observedAt: previous?.viewRateObservedAt ?? fallback },
+      { value: observedViewRate, observedAt: group.viewRates.length ? evidenceAt : undefined },
+      now,
+    );
+    const peakViews = strongestFreshReachEvidence(
+      { value: previous?.peakViews, observedAt: previous?.peakViewsObservedAt ?? fallback },
+      { value: group.views.length ? Math.max(...group.views) : undefined, observedAt: group.views.length ? evidenceAt : undefined },
+      now,
+    );
+    const peakEngagements = strongestFreshReachEvidence(
+      { value: previous?.peakEngagements, observedAt: previous?.peakEngagementsObservedAt ?? fallback },
+      { value: group.engagements.length ? Math.max(...group.engagements) : undefined, observedAt: group.engagements.length ? evidenceAt : undefined },
+      now,
+    );
     heavyHitters.set(handle, {
       ...previous,
       followers: group.followers,
       engRate: source === "top" ? observedRate : (previous?.engRate ?? observedRate),
-      distributionScore: Math.max(previous?.distributionScore ?? 0, observedDistribution),
-      viewRate: Math.max(previous?.viewRate ?? 0, observedViewRate),
-      peakViews: Math.max(previous?.peakViews ?? 0, ...group.views),
-      peakEngagements: Math.max(previous?.peakEngagements ?? 0, ...group.engagements),
+      distributionScore: distribution.value,
+      distributionObservedAt: distribution.observedAt,
+      viewRate: viewRate.value,
+      viewRateObservedAt: viewRate.observedAt,
+      peakViews: peakViews.value,
+      peakViewsObservedAt: peakViews.observedAt,
+      peakEngagements: peakEngagements.value,
+      peakEngagementsObservedAt: peakEngagements.observedAt,
       n: source === "top" ? group.rates.length : (previous?.n ?? group.rates.length),
-      at: now,
-      discoveredAt: previous?.discoveredAt ?? now,
-      lastSeenAt: now,
+      at: Math.max(previous?.at ?? 0, evidenceAt),
+      discoveredAt: previous?.discoveredAt ?? evidenceAt,
+      lastSeenAt: Math.max(previous?.lastSeenAt ?? 0, evidenceAt),
       source: previous?.source === "top" ? "top" : source,
     });
-    authorReach.set(handle, { ...(authorReach.get(handle) ?? { at: now }), followers: group.followers, at: now });
+    authorReach.set(handle, { ...(authorReach.get(handle) ?? { at: evidenceAt }), followers: group.followers, at: Math.max(authorReach.get(handle)?.at ?? 0, evidenceAt) });
   }
   if (heavyHitters.size > HEAVY_PERSIST_MAX) {
     const overflow = heavyHitters.size - HEAVY_PERSIST_MAX;
@@ -5909,7 +5931,7 @@ function findHeavyHitters(silent = false, queryOverride?: string | readonly stri
     const results = await Promise.all(queries.map((query) => send<TwttrGetResponse>({
       type: "TWTTR_GET", path: "search-v3", query: { type: "Top", count: "40", query }, intent: true,
     })));
-    const providerCalls = results.filter((result) => result?.network).length;
+    const providerCalls = results.reduce((sum, result) => sum + (result?.networkAttempts ?? (result?.network ? 1 : 0)), 0);
     const cacheHits = results.filter((result) => result?.cached).length;
     const successful = results.filter((result) => result?.ok);
     const firstFailure = results.find((result) => !result?.ok);
@@ -5931,7 +5953,9 @@ function findHeavyHitters(silent = false, queryOverride?: string | readonly stri
     }
     const now = Date.now();
     for (const [handle, value] of heavyHitters) if (!value.at || now - value.at >= HEAVY_HITTER_TTL_MS) heavyHitters.delete(handle);
-    const discovered = captureFreshRadarTweets(results.flatMap((result) => result?.ok ? parseTimelineTweets(result.data) : []), "top");
+    const discovered = captureFreshRadarTweets(results.flatMap((result) => result?.ok
+      ? parseTimelineTweets(result.data).map((post) => ({ ...post, observedAt: result.cachedAt ?? now }))
+      : []), "top");
     return {
       discovered, total: heavyHitters.size,
       budgetLimited: results.some((result) => result?.error?.startsWith("budget-")),
@@ -6048,8 +6072,15 @@ function buildTargets(): HTMLElement {
       const by = (b[1].strongOpenings ?? 0) / Math.max(1, b[1].checks ?? 0);
       return bs - as || (b[1].replyViewScore ?? 0) - (a[1].replyViewScore ?? 0)
         || by - ay || (b[1].strongOpenings ?? 0) - (a[1].strongOpenings ?? 0)
-        || (decayFreshReachEvidence(b[1].distributionScore, b[1].lastSeenAt ?? b[1].discoveredAt, now) ?? 0)
-          - (decayFreshReachEvidence(a[1].distributionScore, a[1].lastSeenAt ?? a[1].discoveredAt, now) ?? 0)
+        || (freshReachAbsoluteDistribution(
+          decayFreshReachMetric(b[1].peakViews, b[1].peakViewsObservedAt ?? b[1].lastSeenAt ?? b[1].discoveredAt, now),
+          decayFreshReachMetric(b[1].peakEngagements, b[1].peakEngagementsObservedAt ?? b[1].lastSeenAt ?? b[1].discoveredAt, now),
+        ) ?? 0) - (freshReachAbsoluteDistribution(
+          decayFreshReachMetric(a[1].peakViews, a[1].peakViewsObservedAt ?? a[1].lastSeenAt ?? a[1].discoveredAt, now),
+          decayFreshReachMetric(a[1].peakEngagements, a[1].peakEngagementsObservedAt ?? a[1].lastSeenAt ?? a[1].discoveredAt, now),
+        ) ?? 0)
+        || (decayFreshReachEvidence(b[1].distributionScore, b[1].distributionObservedAt ?? b[1].lastSeenAt ?? b[1].discoveredAt, now) ?? 0)
+          - (decayFreshReachEvidence(a[1].distributionScore, a[1].distributionObservedAt ?? a[1].lastSeenAt ?? a[1].discoveredAt, now) ?? 0)
         || b[1].engRate - a[1].engRate || b[1].followers - a[1].followers;
     });
   if (radarAccounts.length) {
@@ -6058,7 +6089,7 @@ function buildTargets(): HTMLElement {
     const radarTitle = document.createElement("div"); radarTitle.className = "tg-sughead"; radarTitle.textContent = `Fresh Reach radar · ${radarAccounts.length} saved`;
     const radarMeta = document.createElement("div"); radarMeta.className = "tg-foot";
     const massiveN = radarAccounts.filter(([, entry]) => isMassiveFreshReachAccount(entry.followers, myFollowers)).length;
-    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · measured winners plus new exploration choose the next 24 checks`;
+    radarMeta.textContent = `${massiveN} massive · remembered for 30 days · measured winners plus up to 3 evidence-backed massive discoveries choose the next 24 checks`;
     radarCopy.append(radarTitle, radarMeta);
     const scanRadar = document.createElement("button"); scanRadar.className = "scanb tg-track"; scanRadar.textContent = findingSpots ? "Scanning…" : "Scan + expand";
     scanRadar.disabled = findingSpots || locked; scanRadar.onclick = () => void findSpots("fresh-reach");
@@ -6070,8 +6101,9 @@ function buildTargets(): HTMLElement {
       const link = document.createElement("a") as HTMLAnchorElement; link.className = "ins-h"; link.textContent = `@${handle}`; link.href = `https://x.com/${handle}`; link.target = "_blank"; link.rel = "noopener"; link.style.textDecoration = "none"; mid.append(link);
       const meta = document.createElement("div"); meta.className = "ins-meta";
       const facts = [`${fmtCount(entry.followers)} followers`, isMassiveFreshReachAccount(entry.followers, myFollowers) ? "massive exploration" : "practical reach"];
-      if ((decayFreshReachEvidence(entry.distributionScore, entry.lastSeenAt ?? entry.discoveredAt, now) ?? 0) >= 0.58) facts.push("recent breakout distribution");
-      if (entry.peakViews != null) facts.push(`peak observed ${fmtCount(entry.peakViews)} views`);
+      if ((decayFreshReachEvidence(entry.distributionScore, entry.distributionObservedAt ?? entry.lastSeenAt ?? entry.discoveredAt, now) ?? 0) >= 0.58) facts.push("recent breakout distribution");
+      if (entry.peakViews != null) facts.push(`recent peak ${fmtCount(entry.peakViews)} views${entry.peakViewsObservedAt ? ` (${fmtAge(entry.peakViewsObservedAt)})` : ""}`);
+      if (entry.peakEngagements != null) facts.push(`${fmtCount(entry.peakEngagements)} recent peak engagements${entry.peakEngagementsObservedAt ? ` (${fmtAge(entry.peakEngagementsObservedAt)})` : ""}`);
       if (entry.strongOpenings) facts.push(`${entry.strongOpenings} strong ${entry.strongOpenings === 1 ? "opening" : "openings"}`);
       if (entry.lastCheckedAt) facts.push(`checked ${fmtAge(entry.lastCheckedAt)}`);
       meta.textContent = facts.join(" · "); mid.append(meta); row.append(mid); body.append(row);
@@ -6185,8 +6217,8 @@ function buildTargets(): HTMLElement {
         c.append(ta);
         const warn = replyQualityWarning(draft); if (warn) { const w = document.createElement("div"); w.className = "tg-warn"; w.textContent = warn; c.append(w); }
         const row = document.createElement("div"); row.className = "idea-actions";
-        const manualReview = !xReplyInsertOn || opps.get(post.id)?.source === "fresh-reach";
-        const handoff = document.createElement("button"); handoff.className = "idea-open"; handoff.textContent = manualReview ? "Review & reply on X ↗" : "Like + insert reply in X";
+        const visiblePost = !replyReviewNeedsPage(post.id, opps.get(post.id));
+        const handoff = document.createElement("button"); handoff.className = "idea-open"; handoff.textContent = visiblePost ? "Copy & scroll to post" : "Copy & open exact post ↗";
         handoff.onclick = () => {
           const liveDraft = targetDrafts.get(tg.handle) || "";
           const sharedOpp = opps.get(post.id);
@@ -6195,9 +6227,9 @@ function buildTargets(): HTMLElement {
           void runReplyDraftAction(liveDraft);
         };
         row.append(handoff); c.append(row);
-        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = !manualReview
-          ? "Your click tries Like + insert first and updates local activity on success; off-page posts fall back to the exact-post review flow. Nothing submits on its own."
-          : "Manual review mode. If this post is visible, Goobi uses its Reply control in place; off-page posts open their exact status page. You edit and post it yourself, then confirm it in Goobi.";
+        const foot = document.createElement("div"); foot.className = "tg-foot"; foot.textContent = visiblePost
+          ? "Goobi copies the draft and scrolls to the post. You click X's Reply button, paste, review, and post manually."
+          : "Goobi copies the draft and opens the exact post. You click Reply, paste, review, and post manually, then confirm it in Goobi.";
         c.append(foot);
       }
     }
@@ -6763,7 +6795,7 @@ function renderDock() {
   cnt.textContent = today > 0
     ? `${verifiedToday.confirmed} verified${verifiedToday.pending ? ` · ${verifiedToday.pending} pending` : ""}`
     : "0 today";
-  cnt.title = `${verifiedToday.confirmed} actual ${verifiedToday.confirmed === 1 ? "reply" : "replies"} matched through RapidAPI or manually confirmed today; ${verifiedToday.pending} successful Like + insert ${verifiedToday.pending === 1 ? "attempt is" : "attempts are"} awaiting a match. Copy/open drafts do not count until manually confirmed.`;
+  cnt.title = `${verifiedToday.confirmed} actual ${verifiedToday.confirmed === 1 ? "reply" : "replies"} matched through RapidAPI or manually confirmed today.${verifiedToday.pending ? ` ${verifiedToday.pending} older unverified ${verifiedToday.pending === 1 ? "record is" : "records are"} still awaiting a match.` : ""} Copied drafts do not count until manually confirmed.`;
   // Live pace chip — surfaces the account-safety status in the moment you're replying.
   const stt = currentReplyPace(now);
   const rhh = stt.repliesThisHour;
@@ -6835,7 +6867,7 @@ function renderDock() {
       detail.textContent = lastFreshReachRun.state === "searching"
         ? " · building the account pool and checking fresh originals"
         : lastFreshReachRun.state === "failed"
-          ? ` · ${lastFreshReachRun.note || "the search did not complete"}`
+          ? ` · API ${lastFreshReachRun.providerCalls} live ${lastFreshReachRun.providerCalls === 1 ? "call" : "calls"}${lastFreshReachRun.cacheHits ? ` + ${lastFreshReachRun.cacheHits} cache ${lastFreshReachRun.cacheHits === 1 ? "hit" : "hits"}` : ""} · ${lastFreshReachRun.note || "the search did not complete"}`
           : ` · API ${lastFreshReachRun.providerCalls} live ${lastFreshReachRun.providerCalls === 1 ? "call" : "calls"}${lastFreshReachRun.cacheHits ? ` + ${lastFreshReachRun.cacheHits} cache ${lastFreshReachRun.cacheHits === 1 ? "hit" : "hits"}` : ""} · accounts ${lastFreshReachRun.accountsChecked}/${lastFreshReachRun.accountsSelected} returned${lastFreshReachRun.accountFailures ? ` (${lastFreshReachRun.accountFailures} failed)` : ""}${lastFreshReachRun.massiveChecked ? ` · ${lastFreshReachRun.massiveChecked} massive${lastFreshReachRun.watchlistChecked ? `, ${lastFreshReachRun.watchlistChecked} pinned` : ""}${lastFreshReachRun.shortlistChecked ? `, ${lastFreshReachRun.shortlistChecked} winner` : ""}` : ""} · reviewed ${lastFreshReachRun.originals} unique originals (${lastFreshReachRun.latestOriginals} Latest + ${lastFreshReachRun.directOriginals} direct before dedupe) · ${lastFreshReachRun.eligible} passed live gate${lastFreshReachRun.breakoutCandidates ? ` (${lastFreshReachRun.breakoutCandidates} breakout)` : ""}${lastFreshReachRun.majorCandidates ? ` (${lastFreshReachRun.majorCandidates} major + early)` : ""} · ${lastFreshReachRun.contentScored} content-scored · ${lastFreshReachRun.added} recommended${lastFreshReachRun.addedBreakouts ? ` (${lastFreshReachRun.addedBreakouts} breakout)` : ""}${lastFreshReachRun.addedMajor ? ` (${lastFreshReachRun.addedMajor} major)` : ""}${lastFreshReachRun.bestOpening ? ` · top ${freshReachOpeningBand(lastFreshReachRun.bestOpening)}` : ""} · radar ${lastFreshReachRun.radarSize}${lastFreshReachRun.accountsDiscovered ? ` (+${lastFreshReachRun.accountsDiscovered})` : ""}${lastFreshReachRun.massiveSaved ? `, ${lastFreshReachRun.massiveSaved} massive` : ""}${lastFreshReachRun.budgetLimited ? " · budget limited" : ""}${lastFreshReachRun.note ? ` · ${lastFreshReachRun.note}` : ""}`;
       receipt.append(lead, detail); discovery.append(receipt);
     }
@@ -7132,7 +7164,6 @@ function installDebugHook(): void {
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
-  void maybeFulfillReplyHandoff(); // a user-started handoff does not depend on re-running Claude or the dock setup path
   const xDataConsent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
   const hasAnthropicKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
   const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
@@ -7149,7 +7180,7 @@ async function boot() {
   legacyProduct = ((await getLocal(CONFIG.X_PRODUCT_KEY)) as string) || "";
   xDefaultAngle = ((await getLocal(CONFIG.X_DEFAULT_ANGLE_KEY)) as string) || "";
   xDefaultProduct = ((await getLocal(CONFIG.X_DEFAULT_PRODUCT_KEY)) as string) || "";
-  xReplyInsertOn = (await getLocal(CONFIG.X_REPLY_INSERT_KEY)) === true; // absent = safe manual handoff; true preserves explicit legacy opt-in
+  communitySparkOn = (await getLocal(CONFIG.X_COMMUNITY_SPARK_KEY)) !== false; // absent = ON; an explicit false survives reloads
   learnLoopOn = (await getLocal(CONFIG.X_LEARN_LOOP_KEY)) === true; // default OFF — enable only after the real-data backtest validates the learned signal
   debugOn = (await getLocal(CONFIG.X_DEBUG_KEY)) === true;
   installDebugHook(); // dev-only window.__goobiExport() when debugOn (no-op otherwise)
@@ -7159,21 +7190,33 @@ async function boot() {
   profileState = (await getLocal(CONFIG.X_PROFILE_KEY)) as ProfileState | undefined;
   myFollowers = Number(await getLocal(CONFIG.X_MY_FOLLOWERS_KEY)) || 0;
   paceResetAt = Number(await getLocal(CONFIG.X_PACE_RESET_KEY)) || 0;
+  const ownHandle = await myHandle();
+  const replyOwner = normalizeWatchHandle(ownHandle || getSelf());
   const storedLog = await getLocal(CONFIG.X_REPLY_LOG_KEY);
   if (storedLog && typeof storedLog === "object") {
     const l = storedLog as Partial<ReplyLog>;
-    const daily = l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {};
-    // Seed all-time from existing per-day history if it predates the `total` field.
-    const total = typeof l.total === "number" ? l.total : Object.values(daily).reduce((a, b) => a + (b || 0), 0);
-    replyLog = {
-      times: Array.isArray(l.times) ? l.times : [],
-      authors: l.authors && typeof l.authors === "object" ? (l.authors as Record<string, number>) : {},
-      drafts: Array.isArray(l.drafts) ? l.drafts : [],
-      daily,
-      total,
-      sent: Array.isArray(l.sent) ? (l.sent as SentRecord[]) : [],
-    };
-    for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); // posts you've replied to → "✓ Commented" in the feed
+    const storedOwner = normalizeWatchHandle(l.ownerHandle || "");
+    // Legacy ledgers predate the owner stamp and are adopted once by the configured account. A
+    // stamped ledger from another account is never allowed to feed pace, learning, or Fresh winners.
+    if (storedOwner && storedOwner !== replyOwner) replyLog = freshReplyLog(replyOwner);
+    else {
+      const daily = l.daily && typeof l.daily === "object" ? (l.daily as Record<string, number>) : {};
+      // Seed all-time from existing per-day history if it predates the `total` field.
+      const total = typeof l.total === "number" ? l.total : Object.values(daily).reduce((a, b) => a + (b || 0), 0);
+      replyLog = {
+        ownerHandle: replyOwner,
+        times: Array.isArray(l.times) ? l.times : [],
+        authors: l.authors && typeof l.authors === "object" ? (l.authors as Record<string, number>) : {},
+        drafts: Array.isArray(l.drafts) ? l.drafts : [],
+        daily,
+        total,
+        sent: Array.isArray(l.sent) ? (l.sent as SentRecord[]) : [],
+      };
+      for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); // posts you've replied to → "✓ Commented" in the feed
+      if (!storedOwner && replyOwner) safeSet({ [CONFIG.X_REPLY_LOG_KEY]: replyLog });
+    }
+  } else {
+    replyLog = freshReplyLog(replyOwner);
   }
   goobiLastSeen = (await getLocal(CONFIG.X_GOOBI_SEEN_KEY)) as number || 0;
   if (goobiLastSeen && Date.now() - goobiLastSeen >= 2 * DAY_MS) goobiWelcomeBack = true; // away a while → he missed you
@@ -7199,12 +7242,12 @@ async function boot() {
     const storedR = (await getLocal(CONFIG.X_AUTHOR_REACH_KEY)) as Record<string, { followers?: number; following?: number; bio?: string; at: number }> | undefined;
     for (const [k, v] of Object.entries(storedR ?? {})) if (v?.at && now - v.at < AUTHOR_REACH_TTL_MS && !authorReach.has(k)) authorReach.set(k, v);
     const storedH = (await getLocal(CONFIG.X_HEAVY_HITTERS_KEY)) as HeavyHitterStore | undefined;
-    if (storedH?.niche && storedH.niche === xNiche.trim()) {
+    const reachOwner = (ownHandle || getSelf()).replace(/^@+/, "").trim().toLowerCase();
+    if (reachOwner && storedH?.ownerHandle === reachOwner && storedH.niche === xNiche.trim()) {
       for (const [k, v] of Object.entries(storedH.entries ?? {})) if (v?.at && now - v.at < HEAVY_HITTER_TTL_MS && !heavyHitters.has(k)) heavyHitters.set(k, v);
     }
     syncFreshReachShortlistIntoRadar();
   }
-  const ownHandle = await myHandle();
   freshReachWatchStore = normalizeFreshReachWatchStore(await getLocal(CONFIG.X_FRESH_REACH_WATCHLIST_KEY), ownHandle || getSelf());
   const storedTargets = await getLocal(CONFIG.X_TARGETS_KEY) as TargetStore | undefined; // big-account target list
   if (storedTargets && Array.isArray(storedTargets.targets) && (!storedTargets.handle || !ownHandle || storedTargets.handle === ownHandle)) targetStore = { ...storedTargets, handle: ownHandle || storedTargets.handle };
@@ -7218,8 +7261,7 @@ async function boot() {
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_PRODUCT_KEY]) xDefaultProduct = (changes[CONFIG.X_DEFAULT_PRODUCT_KEY].newValue as string) || "";
-    if (changes[CONFIG.X_REPLY_INSERT_KEY]) xReplyInsertOn = changes[CONFIG.X_REPLY_INSERT_KEY].newValue === true;
-    if (changes[CONFIG.X_REPLY_HANDOFF_KEY]) void maybeFulfillReplyHandoff(); // an already-open exact status tab can claim the new draft without a duplicate tab
+    if (changes[CONFIG.X_COMMUNITY_SPARK_KEY]) communitySparkOn = changes[CONFIG.X_COMMUNITY_SPARK_KEY].newValue !== false;
     if (changes[CONFIG.X_DAILY_GOALS_KEY]) { dailyGoals = normalizeDailyGoals(changes[CONFIG.X_DAILY_GOALS_KEY].newValue); renderDock(); }
     if (changes[CONFIG.X_LEARN_LOOP_KEY]) { learnLoopOn = changes[CONFIG.X_LEARN_LOOP_KEY].newValue === true; invalidateLearnedMults(); renderDock(); } // flip the loop live (no reload), and re-rank the dock under the new weighting
     if (changes[CONFIG.X_DEBUG_KEY]) { debugOn = changes[CONFIG.X_DEBUG_KEY].newValue === true; installDebugHook(); }
@@ -7233,10 +7275,37 @@ async function boot() {
       heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false; // the radar is tied to the active scoring context; re-discover when that context changes
       syncFreshReachShortlistIntoRadar(); // measured winners survive a niche change; every new post is still content-gated against the new niche
     }
+    if (changes[CONFIG.X_HEAVY_HITTERS_KEY]) {
+      const incoming = changes[CONFIG.X_HEAVY_HITTERS_KEY].newValue as HeavyHitterStore | undefined;
+      // Repair overlapping writes from multiple x.com tabs. Each tab adopts the monotonic union,
+      // then the debounced read-merge-write persistence makes that union durable.
+      void myHandle().then((handle) => {
+        const owner = (handle || getSelf()).replace(/^@+/, "").trim().toLowerCase();
+        if (!owner || incoming?.ownerHandle !== owner || incoming.niche !== xNiche.trim()) return;
+        let changed = false, storageNeedsRepair = false;
+        const incomingEntries = incoming.entries ?? {};
+        for (const key of heavyHitters.keys()) if (!incomingEntries[key]) storageNeedsRepair = true;
+        for (const [key, entry] of Object.entries(incomingEntries)) {
+          if (!entry?.at || Date.now() - entry.at >= HEAVY_HITTER_TTL_MS) continue;
+          const before = heavyHitters.get(key);
+          const merged = mergeHeavyHitterEntry(before, entry);
+          if (JSON.stringify(before) !== JSON.stringify(merged)) {
+            heavyHitters.set(key, merged);
+            changed = true;
+          }
+          if (JSON.stringify(entry) !== JSON.stringify(merged)) storageNeedsRepair = true;
+        }
+        if (changed || storageNeedsRepair) schedulePersistReach();
+        if (changed) renderDock();
+      });
+    }
     if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; syncFreshReachShortlistIntoRadar(); captureGrowthData(); renderDock(); }
     if (changes[CONFIG.X_MY_HANDLE_KEY]) {
       selfHandle = ""; ownStats = undefined; growthOwnerProblem = "";
+      heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false;
+      replyLog = freshReplyLog(normalizeWatchHandle(String(changes[CONFIG.X_MY_HANDLE_KEY].newValue || getSelf())));
+      commentedIds.clear(); invalidateLearnedMults();
       void ensureTargetOwner(); void ensureFreshReachWatchOwner(); void ensureDmOwner(); void ensureGrowthOwner().then(() => renderDock());
     }
     if (changes[CONFIG.X_LEARN_STATS_KEY]) { const nv = changes[CONFIG.X_LEARN_STATS_KEY].newValue as LearnStore | undefined; if (nv?.handle) { learn = nv; foldRelationshipMemory(); renderDock(); } } // synced from another tab's daily scan
@@ -7254,7 +7323,10 @@ async function boot() {
       // Another tab wrote the reply ledger. MERGE (union), never adopt — a stale tab's blob must not
       // reset the rolling-hour count the ease-off safety guard reads, or defeat the daily tally.
       const nv = changes[CONFIG.X_REPLY_LOG_KEY].newValue as Partial<ReplyLog> | undefined;
-      if (nv && typeof nv === "object") { replyLog = mergeReplyLog(replyLog, nv); invalidateLearnedMults(); syncFreshReachShortlistIntoRadar(); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock(); }
+      const incomingOwner = normalizeWatchHandle(nv?.ownerHandle || "");
+      if (nv && typeof nv === "object" && incomingOwner && incomingOwner === normalizeWatchHandle(replyLog.ownerHandle || "")) {
+        replyLog = mergeReplyLog(replyLog, nv); invalidateLearnedMults(); syncFreshReachShortlistIntoRadar(); for (const r of replyLog.sent) if (r.postId) commentedIds.add(r.postId); renderDock();
+      }
     }
     if (changes[CONFIG.X_PACE_RESET_KEY]) {
       paceResetAt = Number(changes[CONFIG.X_PACE_RESET_KEY].newValue) || 0;
@@ -7309,7 +7381,6 @@ async function boot() {
     dismissPanel();
     if (seen.size > 600) { seen.clear(); opps.clear(); authorReach.clear(); } // bound memory across long sessions
     selfHandle = "";
-    void maybeFulfillReplyHandoff();
     requestScan();
     renderDock();
   }, 700);

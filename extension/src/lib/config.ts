@@ -31,8 +31,7 @@ export const CONFIG = {
   X_PRODUCTS_KEY: "xProducts", // ProductItem[] — the user's products, for relevance-tagged promotion
   X_DEFAULT_ANGLE_KEY: "xDefaultAngle", // preferred default reply angle ("" = auto, else a REPLY_ANGLES id)
   X_DEFAULT_PRODUCT_KEY: "xDefaultProduct", // preferred product to promote ("" = auto best-fit, else product name)
-  X_REPLY_INSERT_KEY: "xReplyInsertEnabled", // legacy user-clicked DOM fill (default OFF; true is an explicit user opt-in)
-  X_REPLY_HANDOFF_KEY: "xReplyHandoffV1", // short-lived, one-shot draft handoff to the exact X status tab
+  X_COMMUNITY_SPARK_KEY: "xCommunitySparkEnabled", // persisted Community Spark delivery preference (default ON when absent)
   TWTTR_KEY_KEY: "twttrKey", // BYO RapidAPI key for the Twttr X-data API (read-only enrichment)
   TWTTR_HOST: "twitter241.p.rapidapi.com", // fixed provider host — the parsers are written for this shape. Not a secret, not user-set.
   X_MY_HANDLE_KEY: "xMyHandle", // the user's own X handle — powers voice-learning + the reach sweet-spot
@@ -57,6 +56,7 @@ export const CONFIG = {
   X_PREMIUM_KEY: "xPremium", // the user's X Premium tier ("", "premium", "premium+") — an honest covariate, NEVER a score input
   X_LEARN_LOOP_KEY: "xLearnLoop", // close-the-loop flag: when on, MEASURED per-account/per-angle outcomes influence ranking + the drafter's default angle (default OFF until a real-data backtest validates the signal out of sample). Reversible kill switch.
   X_GROWTH_LOOP_KEY: "xGrowthLoop", // account-scoped 14-day strategy experiments + daily follower/post snapshots
+  X_POSTING_MODEL_KEY: "xPostingModelV1", // aggregate-only, owner-scoped model built locally from an imported X account-content CSV
   X_DEBUG_KEY: "xDebug", // dev-only: exposes window.__goobiExport() to dump the learning data (reply log + trend snaps) for backtesting. No effect on the product.
 } as const;
 

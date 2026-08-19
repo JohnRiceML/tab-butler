@@ -71,7 +71,7 @@ eq(providerRetryAt("1700000000", 1_000), 1_700_000_000_000, "provider epoch-seco
 /* ---- persistence TTL authority (the caches prune on these; declared HERE, single source) ---- */
 ok(mod.AUTHOR_REACH_TTL_MS === TWTTR_CLASS.followers.ttl, "author-reach persistence reuses the followers-class TTL (no forked authority)");
 ok(mod.HEAVY_HITTER_TTL_MS === 30 * 24 * 3_600_000, "Fresh Reach radar accounts persist for 30 days and can be refreshed by later hunts");
-ok(mod.TWTTR_CACHE_MAX_BYTES >= 6 * 1024 * 1024, "response cache can retain one expanded cold Fresh Reach hunt");
+ok(mod.TWTTR_CACHE_MAX_BYTES >= 6 * 1024 * 1024, "response cache retains a bounded high-reuse working set without consuming all extension storage");
 
 console.log(fail === 0 ? `\n✓ twttr policy: ${pass} assertions passed` : `\n✗ twttr policy: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

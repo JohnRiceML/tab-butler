@@ -20,9 +20,9 @@ A public, standalone version of that algorithm read — how X's For You ranking 
   recent people who replied to or mentioned you, with reply-history matching and
   a manual done control. Cold Target discovery stays available one level down.
 - **Drafts in *your* voice** — one click; steer it ("punchier, ask a question") and
-  regenerate. By default Goobi uses the visible post's Reply control in place and
-  verifies the draft in X's composer; only off-page results need their exact status
-  page opened. Goobi never submits the reply.
+  regenerate. Goobi copies the draft but never clicks X's Reply control or writes into
+  the composer. For off-page results it opens the exact status page; you click Reply,
+  paste, review, and post manually.
 - **Builds a Fresh Reach account radar** — every hunt rotates through focused and broad X-data
   searches, remembers promising accounts for 30 days, and scans a diverse bounded slice
   of practical and massive accounts for new originals. Massive accounts can enter the
@@ -43,8 +43,8 @@ A public, standalone version of that algorithm read — how X's For You ranking 
   profile/post/reply strategy, compares it with the prior window, and tells you when
   to double down, tighten the execution, or try a new reason to follow.
 - **Keeps your account safer** — volume / repeat-author / duplicate guards plus
-  a manual X-composer default. The legacy Like + insert helper is opt-in and never
-  applies to Fresh reach. It never auto-submits.
+  a copy-only reply handoff. There is no auto-like, auto-click, composer insertion,
+  or auto-submit path.
 - **Goobi, the pet** — a pixel blob that mirrors your real activity (hunting,
   thinking, sleeping) and a playground where you feed him the replies you sent.
 - **Tab manager (the origin)** — auto-groups tabs by domain, safely archives idle
@@ -158,6 +158,10 @@ Local-first + BYO-key, but the two surfaces differ:
 - **DM workspace** stores the people, notes, drafts, and manually recorded conversation
   context you add in Chrome local storage. That person's selected context goes to Claude
   only when you explicitly click Draft. Goobi does not read the native X inbox or send DMs.
+- **Personal posting model** parses an optional X account-content CSV in the side panel and
+  discards its raw rows after building an owner-scoped aggregate. Only correlation-labeled
+  structure/length counts and rates go to Claude when you explicitly generate Ideas or select
+  Community Spark; another saved handle cannot use the model.
 
 Claude is gated behind an explicit opt-in / a set key; keys live in `chrome.storage`
 / the service worker, never bundled or on-page. The Chrome Web Store limited-use

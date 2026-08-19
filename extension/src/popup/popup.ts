@@ -10,6 +10,7 @@ import { normalizeSoul, SOUL_TEMPLATE } from "../lib/soul";
 import { activeProfileChange, declareProfileChange, invalidateProfileChange, mergeGrowthStores, PROFILE_CHANGE_MIN_OBSERVED_DAYS, PROFILE_CHANGE_VARIABLES, PROFILE_CHANGE_WINDOW_DAYS, profileChangeLabel, readProfileChange, settleProfileChanges, summarizeGrowthWindow, type GrowthStore, type ProfileChangeVariable } from "../lib/growth-loop";
 import { buildOutcomeDashboard, type OutcomeDashboardVM } from "../lib/outcome-dashboard";
 import { LEARN_MULT_MAX, N_MIN_OUT, type LearnReply } from "../lib/learn-stats";
+import { buildPersonalPostingModel, isPersonalPostingModel, postingModelIsActive, type PersonalPostingModel, type PostingPatternStat } from "../lib/posting-analytics";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
@@ -127,13 +128,14 @@ interface ViewData {
   products: ProductItem[];
   xDefaultAngle: string;
   xDefaultProduct: string;
-  xInsertEnabled: boolean;
   twttrKey: string;
   xMyHandle: string;
   xPremium: string;
   twttrMeter: {
     requests: number; bytes: number;
-    providerRequestLimit?: number; providerRequestsRemaining?: number; providerObservedAt?: number;
+    providerRequestLimit?: number; providerRequestsRemaining?: number; providerRequestResetAt?: number; providerObservedAt?: number;
+    providerRateLimit?: number; providerRateRemaining?: number; providerRateResetAt?: number;
+    schedulerQueueDepth?: number; schedulerActive?: number; schedulerRatePerSecond?: number; schedulerPausedUntil?: number;
   } | null;
   replyStats: { today: number; week: number; total: number; days: { label: string; count: number; today: boolean }[] };
   safety: { level: RepLevel; label: string; repliesThisHour: number; countedReplies: number; pressure: number; warmReplies: number; resetAt?: number; accountsToday: number };
@@ -142,6 +144,7 @@ interface ViewData {
   growthOwner: string; // normalized handle whose growth store the popup reads ("" = not configured)
   growthStore: GrowthStore | null; // dock-collected follower/post history; null = never collected
   outcomes: OutcomeDashboardVM; // measured-outcomes dashboard (pure shaping of the reply log)
+  postingModel: PersonalPostingModel | null; // aggregate-only model imported locally from the owner's X analytics CSV
 }
 
 /** Local YYYY-MM-DD — must match the content script's dayKey() so the popup reads
@@ -184,7 +187,6 @@ const MOCK: ViewData = {
   products: [],
   xDefaultAngle: "",
   xDefaultProduct: "",
-  xInsertEnabled: false,
   twttrKey: "",
   xMyHandle: "",
   xPremium: "",
@@ -192,6 +194,7 @@ const MOCK: ViewData = {
   signals: null,
   growthOwner: "",
   growthStore: null,
+  postingModel: null,
   outcomes: buildOutcomeDashboard([], Date.now()),
   replyStats: { today: 7, week: 35, total: 142, days: [
     { label: "Mo", count: 5, today: false }, { label: "Tu", count: 3, today: false },
@@ -240,10 +243,13 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.X_REPLY_INSERT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_PACE_RESET_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_LEARN_LOOP_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_PACE_RESET_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_LEARN_LOOP_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY, CONFIG.X_POSTING_MODEL_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
-  const log = store[CONFIG.X_REPLY_LOG_KEY] as { daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; lane?: ReplyPaceLane; outcome?: { likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean } }[] } | undefined;
+  const rawLog = store[CONFIG.X_REPLY_LOG_KEY] as { ownerHandle?: string; daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; lane?: ReplyPaceLane; outcome?: { likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean } }[] } | undefined;
+  const configuredReplyOwner = String(store[CONFIG.X_MY_HANDLE_KEY] || "").trim().replace(/^@+/, "").toLowerCase();
+  const storedReplyOwner = String(rawLog?.ownerHandle || "").trim().replace(/^@+/, "").toLowerCase();
+  const log = !storedReplyOwner || storedReplyOwner === configuredReplyOwner ? rawLog : undefined;
   const dailySum = log?.daily ? Object.values(log.daily).reduce((a, b) => a + (b || 0), 0) : 0;
   const replyStats = computeReplyStats(log?.daily || {}, log?.total ?? dailySum);
   const laneByAt = new Map((log?.sent || []).filter((record) => record.lane).map((record) => [record.at, record.lane]));
@@ -291,7 +297,6 @@ async function getData(): Promise<ViewData> {
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
     xDefaultProduct: (store[CONFIG.X_DEFAULT_PRODUCT_KEY] as string) || "",
-    xInsertEnabled: store[CONFIG.X_REPLY_INSERT_KEY] === true,
     twttrKey: (store[CONFIG.TWTTR_KEY_KEY] as string) || "",
     xMyHandle: (store[CONFIG.X_MY_HANDLE_KEY] as string) || "",
     xPremium: (store[CONFIG.X_PREMIUM_KEY] as string) || "",
@@ -301,6 +306,7 @@ async function getData(): Promise<ViewData> {
     todaySent,
     growthOwner,
     growthStore,
+    postingModel: isPersonalPostingModel(store[CONFIG.X_POSTING_MODEL_KEY]) ? store[CONFIG.X_POSTING_MODEL_KEY] : null,
     // Stored sent-records are full SentRecords; the narrow inline type above only names the
     // fields THIS file touches directly — the dashboard lib reads the rest structurally.
     outcomes: buildOutcomeDashboard((log?.sent ?? []) as LearnReply[], now, store[CONFIG.X_LEARN_LOOP_KEY] === true),
@@ -532,7 +538,7 @@ function accountSafetyHTML(s: ViewData["safety"]): string {
     ${s.resetAt ? row("↺", "#c68a4e", "Local baseline reset", `${resetAge}m ago · earlier replies remain in history but no longer drive Goobi's meter. This does not reset X activity, limits, or enforcement.`) : ""}
     ${row("👥", "#4fae6a", "Spread across accounts", `${s.accountsToday} different ${s.accountsToday === 1 ? "account" : "accounts"} today, not hammering one thread`)}
     ${row("✅", "#4fae6a", "Replies stay clean", "Civil tone, no copy-paste duplicates — the two things X deboosts hardest")}
-    ${row("🖐️", "#c68a4e", "You stay in control", "Goobi opens X's official reply composer for review and never auto-submits. Legacy Like + insert is optional and never used for Fresh reach.")}
+    ${row("🖐️", "#c68a4e", "You stay in control", "Goobi copies reply drafts, but never clicks X's Reply button, fills the composer, likes, or posts. You paste and send manually.")}
   </div>`;
 }
 
@@ -587,6 +593,7 @@ let activeTab: PanelTab = "x";
 let playground = false;                 // Goobi's playground screen (click the mascot to open)
 let pgGoobi: GoobiHandle | null = null; // the big playground Goobi
 let pgTotal = 0;                        // treats to feed = replies sent today
+let postingImportState: { kind: "loading" | "error"; message: string } | null = null;
 
 /** Goobi's playground — feed him today's replies (one treat each) and pet him. */
 function renderPlayground(d: ViewData): string {
@@ -608,6 +615,56 @@ function renderPlayground(d: ViewData): string {
   <div class="dim" style="font-size:11px;text-align:center;margin-top:12px">Tap Goobi to pet him · ${n} ${n === 1 ? "reply" : "replies"} today</div>`;
 }
 
+function postingPattern(model: PersonalPostingModel, id: string): PostingPatternStat | undefined {
+  return model.patterns.find((pattern) => pattern.id === id);
+}
+
+function postingImportStateHTML(): string {
+  if (!postingImportState) return "";
+  const role = postingImportState.kind === "error" ? "alert" : "status";
+  return `<div class="model-import-state ${postingImportState.kind}" role="${role}">${postingImportState.kind === "loading" ? `<span class="spin" aria-hidden="true"></span>` : ""}<span>${esc(postingImportState.message)}</span></div>`;
+}
+
+/** A compact evidence receipt: what was imported, what cleared the sample gate, and where it is used. */
+function personalPostingModelHTML(d: ViewData): string {
+  const model = d.postingModel;
+  const active = postingModelIsActive(model, d.xMyHandle);
+  const chooser = `<input class="sr-only" id="xanalyticscsv" type="file" accept=".csv,text/csv" aria-describedby="xanalyticshelp"/><button class="btn${model ? "" : " primary"}" data-action="choose-posting-csv" ${postingImportState?.kind === "loading" ? "disabled" : ""}>${postingImportState?.kind === "loading" ? "Reading locally…" : model ? "Replace CSV" : "Choose X analytics CSV"}</button>`;
+  if (!model) return `<div class="li" style="display:block">
+    <div class="posting-receipt" aria-label="Personal posting model status">
+      <div class="receipt-step"><span>Imported</span><b>Waiting for CSV</b></div>
+      <div class="receipt-arrow" aria-hidden="true">→</div>
+      <div class="receipt-step"><span>Learned</span><b>Sample-gated patterns</b></div>
+      <div class="receipt-arrow" aria-hidden="true">→</div>
+      <div class="receipt-step"><span>Applied</span><b>Ideas + Spark</b></div>
+    </div>
+    <div class="dim" id="xanalyticshelp" style="font-size:10.5px;line-height:1.5;margin:9px 0">Export Account analytics → Content from X, then import the CSV here. Goobi stores only aggregate counts and rates in Chrome local storage. Those aggregates go to Claude only when you click Ideas or draft with Community Spark enabled (the default; it can be turned off in the draft panel); raw rows are never saved or uploaded.</div>
+    ${chooser}${postingImportStateHTML()}
+  </div>`;
+
+  const patterns = model.recommendations.patterns.map((id) => postingPattern(model, id)).filter((item): item is PostingPatternStat => !!item);
+  const learned = patterns.length ? patterns.map((item) => item.label).join(" + ") : "No structure cleared the gate";
+  const dateRange = model.range.from && model.range.to ? `${model.range.from} → ${model.range.to}` : "date range unavailable";
+  const mismatch = !active ? `<div class="model-warning">Paused: this model belongs to @${esc(model.ownerHandle)}, but the saved handle is ${d.xMyHandle ? `@${esc(d.xMyHandle.replace(/^@+/, ""))}` : "empty"}. Save the matching handle or replace the CSV.</div>` : "";
+  const chips = patterns.map((item) => `<span class="model-chip" title="${item.posts} posts · ${item.followsPer1k.toFixed(1)} follows per 1K impressions · ${item.confidence} correlation">${esc(item.label)} · ${item.confidence}</span>`).join("");
+  return `<div class="li" style="display:block">
+    <div class="posting-receipt${active ? " ready" : " paused"}" aria-label="Personal posting model status">
+      <div class="receipt-step"><span>Imported</span><b>${model.rows.toLocaleString()} rows</b></div>
+      <div class="receipt-arrow" aria-hidden="true">→</div>
+      <div class="receipt-step"><span>Learned</span><b>${esc(learned)}</b></div>
+      <div class="receipt-arrow" aria-hidden="true">→</div>
+      <div class="receipt-step"><span>Applied</span><b>${active ? "Ideas + Spark" : "Paused"}</b></div>
+    </div>
+    ${mismatch}
+    <div class="model-chips">${chips || `<span class="model-chip muted">Exploratory only</span>`}</div>
+    <div class="model-facts">
+      <span><b>${model.originals.posts}</b> originals</span><span><b>${model.replies.posts}</b> replies</span><span><b>${model.originals.impressions.toLocaleString()}</b> original impressions</span>
+    </div>
+    <div class="dim" id="xanalyticshelp" style="font-size:10.5px;line-height:1.5;margin-top:7px">@${esc(model.ownerHandle)} · ${dateRange}. ${model.recommendations.originalLength ? `Original prior: ${model.recommendations.originalLength} characters. ` : ""}${model.recommendations.replyLength ? `Community Spark prior: ${model.recommendations.replyLength}. ` : ""}Historical correlation only. Raw rows were discarded; these aggregates go to Claude only for Ideas or drafts with Community Spark enabled.</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">${chooser}<button class="act danger" data-action="clear-posting-model">Clear model</button></div>${postingImportStateHTML()}
+  </div>`;
+}
+
 function render(d: ViewData): string {
   if (playground) return renderPlayground(d);
   const all = d.groups;
@@ -624,6 +681,11 @@ function render(d: ViewData): string {
   const providerObservedLabel = providerObservedAge == null ? "" : providerObservedAge < 60 * 60_000
     ? `${Math.max(1, Math.round(providerObservedAge / 60_000))}m ago`
     : `${Math.round(providerObservedAge / (60 * 60_000))}h ago`;
+  const schedulerRate = d.twttrMeter?.schedulerRatePerSecond ?? 9;
+  const schedulerRateLabel = schedulerRate > 0 && schedulerRate < 0.01 ? "<0.01" : schedulerRate.toFixed(schedulerRate < 1 ? 2 : 1);
+  const schedulerPausedFor = d.twttrMeter?.schedulerPausedUntil != null
+    ? Math.max(0, Math.ceil((d.twttrMeter.schedulerPausedUntil - Date.now()) / 1000))
+    : 0;
   return `
   <header class="row-flex between">
     <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Replies scored against X's real ranking code — never posted for you.</div></div></div>
@@ -674,7 +736,7 @@ function render(d: ViewData): string {
     <div class="setup-title">${setupReady ? "You're ready to find a good conversation" : "Set up your reply copilot"}</div>
     <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself. Scoring separates content fit from observed timing and relationship signals; public X ranking code informs directional priors, not claimed live weights." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
     ${setupReady ? `<ul class="dim" style="font-size:10.5px;margin:6px 0 2px;padding-left:16px;line-height:1.5"><li>Uses public X ranking signals as directional context; live weights remain private.</li><li>Measures whether its advice worked on YOUR account: ✓ settled measurement vs ✦ prior, always labeled.</li><li>Drafts in your voice; you always review and post. Never auto-posts.</li></ul>` : ""}
-    ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. Activity, drafts, DM notes, goals, SOUL.md, and growth history stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
+    ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. An imported analytics CSV is parsed locally and its raw rows are discarded; only aggregate pattern/length evidence is sent to Claude when you click Ideas or draft with Community Spark enabled (the default; it can be turned off in the draft panel). Activity, drafts, DM notes, goals, SOUL.md, growth history, and the aggregate model stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
     ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Anthropic key stored</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Anthropic API key</label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Save key</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
     <div class="setup-steps">
       <div class="setup-step${d.hasKey && d.xConsent ? " done" : ""}">${d.hasKey && d.xConsent ? "✓" : "1"} Connect + agree</div>
@@ -714,8 +776,6 @@ function render(d: ViewData): string {
   <details class="fold">
     <summary>Optional personalization <span class="field-hint">products &amp; draft defaults</span></summary>
     <div class="list">
-    <div class="li"><div class="grow"><div class="name">Legacy Like + insert</div><div class="sub">Optional DOM assistance for on-page posts. Default is X's official reply composer, where you review and post manually. Fresh-reach finds always use the manual composer.</div></div>
-      <label class="switch"><input type="checkbox" id="xinsert" aria-label="Like the post and insert the reply into X" ${d.xInsertEnabled ? "checked" : ""}/><span class="track"><span class="knob"></span></span></label></div>
     <div class="li" style="display:block">
       <div class="field">Your products <span class="field-hint">— name, link &amp; a one-liner each</span></div>
       <div id="prodrows">${(d.products.length ? d.products : [undefined]).map((p) => productRow(p)).join("")}</div>
@@ -738,6 +798,11 @@ function render(d: ViewData): string {
     </div>
   </details>
 
+  <details class="fold"${d.postingModel ? " open" : ""}>
+    <summary>Personal posting model <span class="field-hint">${d.postingModel ? `${d.postingModel.rows.toLocaleString()} rows · ${postingModelIsActive(d.postingModel, d.xMyHandle) ? "active" : "paused"}` : "your CSV · local aggregates only"}</span></summary>
+    <div class="list">${personalPostingModelHTML(d)}</div>
+  </details>
+
   <details class="fold">
     <summary>X data features <span class="field-hint">optional · reach, search &amp; learning</span></summary>
     <div class="list">
@@ -746,10 +811,11 @@ function render(d: ViewData): string {
       <input class="control" id="twttrkey" type="password" autocomplete="off" placeholder="${d.twttrKey ? "Stored — leave blank to keep, or paste a new key" : "x-rapidapi-key from RapidAPI"}" value=""/>
       ${d.twttrKey ? `<div class="dim" style="font-size:10.5px;margin-top:4px;color:var(--green)">✓ Key stored. The field stays blank for safety — leave it blank to keep the saved key.</div>` : ""}
       <div class="dim" style="font-size:10.5px;margin-top:6px">Uses a third-party X data provider (twitter241 on RapidAPI), not X's official API. Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key.</div>
-      ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">Local safety meter (UTC month): <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> transferred · ${d.twttrMeter.requests.toLocaleString()} network calls.</div>
+      ${d.twttrMeter ? `<div class="dim" style="font-size:10.5px;margin-top:6px">Local safety meter (UTC month): <b style="color:var(--t1)">${fmtData(d.twttrMeter.bytes)}</b> observed response-byte estimate · ${d.twttrMeter.requests.toLocaleString()} network calls.</div>
       <div class="dim" style="font-size:10.5px;margin-top:3px">${d.twttrMeter.providerRequestLimit != null && d.twttrMeter.providerRequestsRemaining != null
         ? `Provider plan last observed${providerObservedLabel ? ` ${providerObservedLabel}` : ""}: <b style="color:var(--t1)">${d.twttrMeter.providerRequestsRemaining.toLocaleString()}</b> / ${d.twttrMeter.providerRequestLimit.toLocaleString()} requests remaining.`
-        : "Provider quota headers have not been observed yet."} RapidAPI's dashboard and your billing cycle are authoritative; the platform includes 10 GB per billing cycle before bandwidth fees.</div>` : ""}
+        : "Provider quota headers have not been observed yet."} RapidAPI's dashboard and your billing cycle are authoritative; the platform includes 10 GB per billing cycle before bandwidth fees.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:3px">Smart throttle: <b style="color:var(--t1)">${schedulerRateLabel} req/s</b> now · ${d.twttrMeter.schedulerActive ?? 0} active · ${d.twttrMeter.schedulerQueueDepth ?? 0} waiting${schedulerPausedFor ? ` · provider reset wait ${schedulerPausedFor}s` : ""}. Every X-data read shares this queue; clicks jump ahead, background work still gets a fair lane, and concurrency is capped at 8.${d.twttrMeter.providerRateLimit != null && d.twttrMeter.providerRateRemaining != null ? ` Provider window: ${d.twttrMeter.providerRateRemaining.toLocaleString()} / ${d.twttrMeter.providerRateLimit.toLocaleString()} remaining.` : ""}</div>` : ""}
     </div>
     <div class="li" style="display:block">
       <label class="field" for="xmyhandle">Your X handle <span class="field-hint">— for reach ranking &amp; voice learning</span></label>
@@ -792,7 +858,7 @@ function render(d: ViewData): string {
     <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
     <div class="list">${signalHealthHTML(d.signals)}</div>
   </details>
-  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. The default reply action opens X's official composer for your review; Goobi never submits or posts for you.</div></div>
+  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. Reply actions are copy-only: Goobi never clicks Reply, fills X's composer, likes, submits, or posts for you.</div></div>
   </div>`;
 }
 
@@ -1107,6 +1173,18 @@ async function dispatch(el: HTMLElement) {
         ta.value = SOUL_TEMPLATE; ta.focus(); ta.scrollIntoView({ block: "center" });
         break;
       }
+      case "choose-posting-csv": {
+        (document.getElementById("xanalyticscsv") as HTMLInputElement | null)?.click();
+        break;
+      }
+      case "clear-posting-model": {
+        if (!window.confirm("Clear the aggregate personal posting model? You can rebuild it later by importing the CSV again.")) break;
+        await chrome.storage.local.remove(CONFIG.X_POSTING_MODEL_KEY);
+        postingImportState = null;
+        await refresh();
+        toast("Personal posting model cleared. No post history was deleted from X.");
+        break;
+      }
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
@@ -1242,7 +1320,31 @@ async function onInput(e: Event) {
 async function onChange(e: Event) {
   if (!IS_EXT) return;
   const target = e.target as HTMLInputElement;
-  if (target.id === "smart") {
+  if (target.id === "xanalyticscsv") {
+    const file = target.files?.[0];
+    if (!file) return;
+    try {
+      if (file.size > 10 * 1024 * 1024) { postingImportState = { kind: "error", message: "That CSV is over 10 MB. Export a shorter X analytics range and retry." }; await refresh(); return; }
+      const saved = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY]);
+      const handle = ((saved[CONFIG.X_MY_HANDLE_KEY] as string) || "").trim().replace(/^@+/, "");
+      if (!handle) { postingImportState = { kind: "error", message: "Set and save your X handle before importing analytics." }; await refresh(); return; }
+      if (isPersonalPostingModel(saved[CONFIG.X_POSTING_MODEL_KEY]) && !window.confirm("Replace the current personal posting model with this CSV?")) return;
+      postingImportState = { kind: "loading", message: "Reading and aggregating the CSV in this browser…" };
+      await refresh();
+      const model = buildPersonalPostingModel(await file.text(), handle);
+      await chrome.storage.local.set({ [CONFIG.X_POSTING_MODEL_KEY]: model });
+      postingImportState = null;
+      await refresh();
+      toast(`Model ready: ${model.originals.posts} originals and ${model.replies.posts} replies learned for @${model.ownerHandle}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not read that analytics CSV.";
+      postingImportState = { kind: "error", message };
+      await refresh();
+      toast(message);
+    } finally {
+      target.value = ""; // allow selecting the same export again after a correction
+    }
+  } else if (target.id === "smart") {
     if (target.checked && !(await chrome.storage.local.get(CONFIG.ANTHROPIC_KEY_KEY))[CONFIG.ANTHROPIC_KEY_KEY]) {
       target.checked = false;
       toast("Add your Anthropic key before turning on Smart mode.");
@@ -1266,9 +1368,6 @@ async function onChange(e: Event) {
     }
     await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: target.checked });
     toast(target.checked ? "X copilot on — reload x.com to apply." : "X copilot off — reload x.com.");
-  } else if (target.id === "xinsert") {
-    await chrome.storage.local.set({ [CONFIG.X_REPLY_INSERT_KEY]: target.checked });
-    toast(target.checked ? "Legacy Like + insert is on for on-page posts. Fresh-reach finds still use X's manual composer." : "Like + insert is off — replies open X's manual composer.");
   }
 }
 

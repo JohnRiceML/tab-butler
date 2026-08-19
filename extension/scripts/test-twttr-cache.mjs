@@ -41,6 +41,18 @@ ok(cacheFresh(undefined, NOW) === false, "a missing entry is never fresh");
   ok("a" in cache && "b" in cache, "pruneCache does not mutate the input object");
 }
 
+// ---- reuse-aware eviction: broad discovery survives newer disposable author reads ----
+{
+  const big = 1_000_000;
+  const cache = {
+    discovery: { ...entry(NOW - 5_000, NOW + 60_000, big), reuse: 2 },
+    authorOld: entry(NOW - 2_000, NOW + 60_000, big),
+    authorNew: entry(NOW - 1_000, NOW + 60_000, big),
+  };
+  const out = pruneCache(cache, NOW, 2_200_000);
+  ok("discovery" in out && "authorNew" in out && !("authorOld" in out), "eviction preserves high-reuse discovery while rotating disposable author reads");
+}
+
 // ---- byte-bounded eviction: over the cap → drop OLDEST-by-write until under ----
 {
   const big = 1_000_000; // ~1MB each

@@ -28,6 +28,8 @@ export interface TwttrTweet {
   author: string;        // author handle (screen_name)
   name?: string;         // author display name
   text: string;
+  /** Quoted-post text when the provider embeds it. Context only: scoring/drafting still target the outer author. */
+  context?: string;
   likes?: number;
   replies?: number;
   reposts?: number;
@@ -35,6 +37,8 @@ export interface TwttrTweet {
   bookmarks?: number;    // DIAGNOSTIC ONLY — bookmark is confirmed-absent from ranking_scorer.rs; never a ranking input
   views?: number;
   postedAt?: number;     // epoch ms
+  /** When this metric snapshot was fetched. Parsers leave it unset; the governor caller stamps it. */
+  observedAt?: number;
   avatar?: string;
   followers?: number;    // author follower count, when the shape carries it
   authorId?: string;     // author rest_id
@@ -52,6 +56,24 @@ function num(x: any): number | undefined {
 
 function viewCount(views: any): number | undefined {
   return views ? num(views.count) : undefined;
+}
+
+/** X sometimes wraps a tweet in TweetWithVisibilityResults, and quoted_status_result adds
+ * another `result` layer. Normalize both without recursively treating the quote as a timeline row. */
+function unwrapTweetResult(value: any): any {
+  let node = value?.tweet_results?.result ?? value?.result ?? value;
+  if (node?.__typename === "TweetWithVisibilityResults" && node.tweet) node = node.tweet;
+  return node;
+}
+
+function tweetText(value: any): string {
+  const result = unwrapTweetResult(value);
+  return String(
+    result?.note_tweet?.note_tweet_results?.result?.text ??
+      result?.details?.full_text ??
+      result?.legacy?.full_text ??
+      "",
+  ).trim();
 }
 
 /** True if a node looks like an X user "result" object (either shape). */
@@ -97,6 +119,7 @@ export function parseUser(json: any): TwttrUser | null {
 
 /** Flatten one tweet "result" object (the thing under tweet_results.result). */
 function flattenTweet(result: any): TwttrTweet | null {
+  result = unwrapTweetResult(result);
   if (!result || typeof result !== "object") return null;
   if (result.__typename && result.__typename !== "Tweet") return null;
   const id = result.rest_id ?? result.legacy?.id_str;
@@ -111,13 +134,12 @@ function flattenTweet(result: any): TwttrTweet | null {
   const followers = num(uLeg.followers_count) ?? num(ur.relationship_counts?.followers);
   const authorId = ur.rest_id ? String(ur.rest_id) : undefined;
 
-  const text = String(
-    result.note_tweet?.note_tweet_results?.result?.text ??
-      result.details?.full_text ??
-      result.legacy?.full_text ??
-      "",
-  );
+  const text = tweetText(result);
   if (!text) return null;
+  const quotedResult = unwrapTweetResult(result.quoted_status_result);
+  const quotedText = tweetText(quotedResult);
+  const quotedId = quotedResult?.rest_id ?? quotedResult?.legacy?.id_str;
+  const context = quotedText && String(quotedId || "") !== String(id) && quotedText !== text ? quotedText : undefined;
 
   const counts = result.counts ?? {};
   const lg = result.legacy ?? {};
@@ -149,6 +171,7 @@ function flattenTweet(result: any): TwttrTweet | null {
     author: String(author || ""),
     name,
     text,
+    context,
     likes,
     replies,
     reposts,

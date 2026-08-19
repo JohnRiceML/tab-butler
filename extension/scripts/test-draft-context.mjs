@@ -9,6 +9,10 @@ import * as esbuild from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "../src/lib/draft-context.ts"), "utf8");
+const copilot = readFileSync(join(here, "../src/content/x-copilot.ts"), "utf8");
+const config = readFileSync(join(here, "../src/lib/config.ts"), "utf8");
+const worker = readFileSync(join(here, "../src/background/service-worker.ts"), "utf8");
+const client = readFileSync(join(here, "../src/lib/claude-client.ts"), "utf8");
 const js = esbuild.transformSync(src, { loader: "ts", format: "esm" }).code;
 const m = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 
@@ -36,6 +40,14 @@ const coached = m.buildDraftContext({ anchor: "cut onboarding from eight screens
 ok(coached.includes("Exact post detail to engage") && coached.includes("Useful reply move") && coached.includes("commitment can safely move"), "structured scorer coaching grounds the draft in an exact anchor and useful move");
 
 ok(m.buildDraftContext({ measuredLine: "your ask-angle replies earned 1.4x your average (n=9)" }).includes("Measured on this user's own past replies"), "the stage-2 measured line is labeled as measured");
+ok(copilot.includes("replyStyleControl") && copilot.includes("aria-pressed") && copilot.includes("REPLY_STYLES[0]"), "the draft panel exposes one accessible Community Spark delivery-style component");
+ok(config.includes('X_COMMUNITY_SPARK_KEY: "xCommunitySparkEnabled"') && copilot.includes("communitySparkOn = (await getLocal(CONFIG.X_COMMUNITY_SPARK_KEY)) !== false"), "Community Spark defaults on when no preference has been saved");
+ok(copilot.includes("safeSet({ [CONFIG.X_COMMUNITY_SPARK_KEY]: communitySparkOn })") && copilot.includes("changes[CONFIG.X_COMMUNITY_SPARK_KEY].newValue !== false"), "the Community Spark toggle persists and synchronizes its explicit on/off state");
+ok((copilot.match(/style: preferredReplyStyle\(\)/g) || []).length >= 3, "feed, dock, and target-account drafts all honor the saved Community Spark preference");
+ok(copilot.includes("style, product, steer") && worker.includes("msg.steer, msg.style, extra, soul") && client.includes("${angleLine}${styleLine}${steerLine}"), "the selected reply style reaches the real Sonnet draft request after angle and grounding context");
+ok(client.includes("styleDef ? 120 : 400"), "Community Spark uses a smaller bounded Sonnet output budget than standard replies");
+ok(copilot.includes("draftRequestSeq") && copilot.includes("a newer angle/style/steer choice owns the panel"), "a slower prior draft request cannot repaint over a newer component choice");
+ok(copilot.includes("draftStyle?: ReplyStyleId") && copilot.includes("draftStyle,"), "confirmed replies retain the optional style for future settled-outcome comparison");
 
 console.log(fail === 0 ? `\n✓ draft-context: ${pass} assertions passed` : `\n✗ draft-context: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -151,6 +151,34 @@ const searchJson = {
                 },
                 entry_id: "tweet-t4",
               },
+              // quote post: score/draft the OUTER post, but preserve the embedded post as bounded context
+              {
+                content: {
+                  content: {
+                    __typename: "TimelineTweet",
+                    tweet_results: {
+                      result: {
+                        __typename: "Tweet",
+                        rest_id: "t5",
+                        core: { user_results: { result: { rest_id: "u5", core: { name: "Marques", screen_name: "mkbhd" }, relationship_counts: { followers: 20_000_000 } } } },
+                        counts: { favorite_count: 1000, reply_count: 12, retweet_count: 50 },
+                        details: { full_text: "This battery tradeoff is the part reviewers keep missing", created_at_ms: 1782000001000 },
+                        quoted_status_result: {
+                          result: {
+                            __typename: "TweetWithVisibilityResults",
+                            tweet: {
+                              __typename: "Tweet",
+                              rest_id: "quoted-1",
+                              details: { full_text: "The new phone is 2mm thinner but loses almost three hours of battery life" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+                entry_id: "tweet-t5",
+              },
               { content: { __typename: "TimelineTimelineCursor", cursor_type: "Bottom", value: "abc" }, entry_id: "cursor-bottom-0" },
             ],
           },
@@ -160,7 +188,7 @@ const searchJson = {
   },
 };
 const st = parseTimelineTweets(searchJson);
-eq(st.length, 4, "search parseTimeline count");
+eq(st.length, 5, "search parseTimeline count");
 const t1 = st.find((t) => t.id === "t1");
 eq(t1.author, "alice", "search author");
 eq(t1.name, "Alice", "search name");
@@ -179,8 +207,12 @@ eq(t3.isReply, true, "search reply via reply_to_results (no @ prefix)");
 eq(t3.replyToId, "t1", "search reply preserves its structured parent tweet id");
 const t4 = st.find((t) => t.id === "t4");
 eq(t4.isReply, true, "search reply via reply_to_user_results only (no @ prefix)");
+const t5 = st.find((t) => t.id === "t5");
+eq(t5.author, "mkbhd", "quote post keeps the outer author");
+eq(t5.text, "This battery tradeoff is the part reviewers keep missing", "quote post keeps the outer text as the reply target");
+eq(t5.context, "The new phone is 2mm thinner but loses almost three hours of battery life", "quote post preserves embedded text as scoring and drafting context");
 const disc = pickDiscoveryTweets(searchJson, 18);
-eq(disc.length, 1, "discovery drops all replies (structured + @-prefixed)");
+eq(disc.length, 2, "discovery drops all replies (structured + @-prefixed) while retaining quote posts");
 eq(disc[0].id, "t1", "discovery keeps original post");
 
 // LIVE wrapping: instructions nested deep under result.data.<...>.timeline.instructions

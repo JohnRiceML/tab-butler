@@ -40,9 +40,9 @@ A plain extension **reload keeps everything** (`chrome.storage.local` persists).
 ## What is honest about it / limits
 - **Voice is MEASURED, not invented:** the profile is built only from replies the API confirms the user authored (`authorId === userId`), with a guard that drops trivial one-word/emoji samples so the drafter learns real prose. The prompt explicitly says "Do not copy them verbatim."
 - **Followers/replies are a third-party PROXY:** all X data comes from twitter241 on RapidAPI, *not* X's official API — the UI states this plainly ("Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key."). `following` is left `undefined` (not 0) when absent so reciprocity logic stays neutral rather than treating the user as a broadcaster.
-- **No-auto-submit keystone:** the X-tab footer states that the default opens X's official reply composer for manual review and Goobi never submits or posts. The legacy DOM helper is labeled optional and blocked for Fresh reach.
+- **Copy-only keystone:** the X-tab footer states that Goobi never clicks Reply, fills X's composer, likes, submits, or posts. The user pastes drafts manually.
 - **Pace honesty guard:** the safety panel surfaces the same adaptive 8/12 pressure lines, lane/recency weighting, and reset baseline the on-page controls use. Its Reset button writes only `X_PACE_RESET_KEY`; reply history, daily progress, duplicate checks, and X limits remain unchanged.
-- **What it cannot know:** local reply-attempt counts include successful composer fills before provider verification, so abandoning a filled X draft can temporarily overcount. Follower count is best-effort and can be stale/zero until a successful resolve.
+- **What it cannot know:** replies typed natively in X remain invisible until provider verification or explicit confirmation. Follower count is best-effort and can be stale/zero until a successful resolve.
 
 ## Key files
 - `src/popup/popup.ts` — all render + dispatch logic for the X-copilot tab (save-x, learn-voice, product rows, safety/showcase cards).

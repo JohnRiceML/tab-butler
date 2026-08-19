@@ -2,13 +2,13 @@ import { CONFIG } from "../lib/config";
 import { archiveAndClose, undoLast } from "../lib/archive";
 import { advise, classify, draftDm, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
-import { governedFetch, readMeter } from "../lib/twttr-governor";
+import { governedFetch, readMeter, type GovResult } from "../lib/twttr-governor";
 import { buildDraftContext } from "../lib/draft-context";
 import { allowedTwttrPath } from "../lib/twttr-policy";
 import { normalizeDailyGoals } from "../lib/daily-goals";
 import { dueReminderCount } from "../lib/schedule";
-import { handoffMatchesPath, replyPostUrl, statusIdFromPath, validReplyHandoff } from "../lib/reply-handoff";
-import type { ReplyHandoff } from "../lib/reply-handoff";
+import { replyPostUrl, statusIdFromPath } from "../lib/reply-handoff";
+import { isPersonalPostingModel, postingModelCommunityGuidance, postingModelIdeasGuidance } from "../lib/posting-analytics";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -342,8 +342,8 @@ async function fetchFavicons(hosts: string[]): Promise<Record<string, string>> {
 /** Call the Twttr RapidAPI endpoint. Read-only enrichment (profiles, tweets,
  *  search). The host is fixed (CONFIG.TWTTR_HOST); only the BYO key lives in
  *  storage (popup settings) and is never bundled. Routed through the governor
- *  (local safety meter + provider quota headers + 8/sec smoothing + degradation + coalescing). */
-async function twttrFetch(path: string, query?: Record<string, string>, intent = false): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
+ *  (local safety meter + adaptive shared queue + provider headers + degradation + coalescing). */
+async function twttrFetch(path: string, query?: Record<string, string>, intent = false): Promise<GovResult> {
   if (!allowedTwttrPath(path)) return { ok: false, error: "endpoint-not-allowed" };
   const store = await chrome.storage.local.get(CONFIG.TWTTR_KEY_KEY);
   const key = (store[CONFIG.TWTTR_KEY_KEY] as string) || "";
@@ -352,19 +352,6 @@ async function twttrFetch(path: string, query?: Record<string, string>, intent =
 }
 
 /* ---------- popup messaging ---------- */
-
-let claimingReplyHandoff = false;
-
-async function storedReplyHandoffs(): Promise<ReplyHandoff[]> {
-  const raw = (await chrome.storage.local.get(CONFIG.X_REPLY_HANDOFF_KEY))[CONFIG.X_REPLY_HANDOFF_KEY];
-  const values = Array.isArray(raw) ? raw : raw == null ? [] : [raw]; // accept the short-lived single-record shape from pre-release builds
-  return values.map((value) => validReplyHandoff(value)).filter((value): value is ReplyHandoff => !!value).sort((a, b) => a.createdAt - b.createdAt).slice(-8);
-}
-
-async function writeReplyHandoffs(handoffs: ReplyHandoff[]): Promise<void> {
-  if (handoffs.length) await chrome.storage.local.set({ [CONFIG.X_REPLY_HANDOFF_KEY]: handoffs });
-  else await chrome.storage.local.remove(CONFIG.X_REPLY_HANDOFF_KEY);
-}
 
 chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
   (async () => {
@@ -402,7 +389,7 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
         break;
       case "DRAFT_REPLY":
         try {
-          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY]);
+          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY]);
           const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
           const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
           // The content script resolves the relevant product(s) and sends them; fall back to the legacy single-product string.
@@ -411,70 +398,31 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
           // variable in the 2026 pipeline (LLM reply grading + slop score), and these strings are
           // already known — user-message grounding stays separate from the reusable draft rules.
           const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, anchor: msg.anchor, replyBrief: msg.replyBrief, authorLine: msg.authorLine, threadLine: msg.threadLine, opportunityLine: msg.opportunityLine });
-          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, extra, soul) });
+          const storedModel = profile[CONFIG.X_POSTING_MODEL_KEY];
+          const personalReplyLine = msg.style === "community-spark" && isPersonalPostingModel(storedModel)
+            ? postingModelCommunityGuidance(storedModel, (profile[CONFIG.X_MY_HANDLE_KEY] as string) || "")
+            : "";
+          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, anchor: msg.anchor, replyBrief: msg.replyBrief, authorLine: msg.authorLine, threadLine: msg.threadLine, opportunityLine: msg.opportunityLine, measuredLine: personalReplyLine || undefined });
+          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, msg.style, extra, soul) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
         break;
-      case "OPEN_REPLY_HANDOFF": {
-        const sourceTabId = sender.tab?.id;
-        const handoff = validReplyHandoff({ ...msg.handoff, sourceTabId });
-        if (!handoff || sourceTabId == null) { sendResponse({ ok: false, error: "invalid-handoff" }); break; }
+      case "OPEN_REPLY_POST": {
+        if (!/^\d+$/.test(msg.postId)) { sendResponse({ ok: false, error: "invalid-post-id" }); break; }
+        const post = { postId: msg.postId, author: String(msg.author || "").replace(/^@+/, "") };
         try {
-          // Persist before opening so the destination content script can claim the
-          // one-shot draft as soon as X paints the exact status article.
-          const current = await storedReplyHandoffs();
-          await writeReplyHandoffs([...current.filter((item) => item.sourceTabId !== sourceTabId && item.token !== handoff.token), handoff].slice(-8));
           const xTabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
           const existing = xTabs.find((candidate) => {
-            try { return statusIdFromPath(new URL(candidate.url || "").pathname) === handoff.postId; }
+            try { return statusIdFromPath(new URL(candidate.url || "").pathname) === post.postId; }
             catch { return false; }
           });
           const tab = existing?.id != null
             ? await chrome.tabs.update(existing.id, { active: true })
-            : await chrome.tabs.create({ url: replyPostUrl(handoff), active: true });
+            : await chrome.tabs.create({ url: replyPostUrl(post), active: true });
           sendResponse({ ok: true, tabId: tab.id });
         } catch (e) {
-          try { await writeReplyHandoffs((await storedReplyHandoffs()).filter((item) => item.token !== handoff.token)); } catch { /* best-effort */ }
           sendResponse({ ok: false, error: (e as Error).message });
-        }
-        break;
-      }
-      case "CLAIM_REPLY_HANDOFF": {
-        if (claimingReplyHandoff) { sendResponse({ handoff: null }); break; }
-        let senderPath = "";
-        try { senderPath = new URL(sender.tab?.url || "").pathname; } catch { /* invalid sender URL */ }
-        if (statusIdFromPath(senderPath) !== msg.postId) { sendResponse({ handoff: null }); break; }
-        claimingReplyHandoff = true;
-        try {
-          const handoffs = await storedReplyHandoffs();
-          const handoff = [...handoffs].reverse().find((item) => handoffMatchesPath(item, senderPath));
-          if (!handoff) {
-            await writeReplyHandoffs(handoffs); // also clears expired/malformed records
-            sendResponse({ handoff: null });
-            break;
-          }
-          await writeReplyHandoffs(handoffs.filter((item) => item.token !== handoff.token));
-          sendResponse({ handoff });
-        } finally {
-          claimingReplyHandoff = false;
-        }
-        break;
-      }
-      case "REPLY_HANDOFF_RESULT": {
-        const handoff = validReplyHandoff(msg.handoff);
-        let senderPath = "";
-        try { senderPath = new URL(sender.tab?.url || "").pathname; } catch { /* invalid sender URL */ }
-        if (!handoff || !handoffMatchesPath(handoff, senderPath) || handoff.sourceTabId == null) {
-          sendResponse({ ok: false });
-          break;
-        }
-        try {
-          await chrome.tabs.sendMessage(handoff.sourceTabId, { type: "REPLY_HANDOFF_STATUS", token: handoff.token, status: msg.status } satisfies Message);
-          sendResponse({ ok: true });
-        } catch {
-          sendResponse({ ok: false });
         }
         break;
       }
@@ -497,11 +445,15 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
         break;
       case "POST_IDEAS":
         try {
-          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_NICHE_KEY]);
+          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY]);
           const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
           const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
           const niche = (profile[CONFIG.X_NICHE_KEY] as string) || "";
-          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche, msg.ownPosts, msg.followers, msg.shapeLine, msg.strategyLine, soul) });
+          const storedModel = profile[CONFIG.X_POSTING_MODEL_KEY];
+          const postingModelLine = isPersonalPostingModel(storedModel)
+            ? postingModelIdeasGuidance(storedModel, (profile[CONFIG.X_MY_HANDLE_KEY] as string) || "")
+            : "";
+          sendResponse({ ideas: await generatePostIdeas(msg.posts, voice, niche, msg.ownPosts, msg.followers, msg.shapeLine, msg.strategyLine, soul, postingModelLine) });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }

@@ -44,11 +44,17 @@ const load = async (rel) => {
 const { parseTimelineTweets, parseUser, nicheSearchQuery } = await load("../src/lib/twttr.ts");
 
 let spent = 0;
+let latestLimits;
 async function get(path, query) {
   const qs = new URLSearchParams(query).toString();
   const res = await fetch(`https://${HOST}/${path}?${qs}`, { headers: { "Content-Type": "application/json", "x-rapidapi-key": KEY, "x-rapidapi-host": HOST } });
   const text = await res.text();
   spent += text.length;
+  const header = (name) => res.headers.get(name) || undefined;
+  latestLimits = {
+    planLimit: header("x-ratelimit-requests-limit"), planRemaining: header("x-ratelimit-requests-remaining"), planReset: header("x-ratelimit-requests-reset"),
+    rateLimit: header("x-ratelimit-limit"), rateRemaining: header("x-ratelimit-remaining"), rateReset: header("x-ratelimit-reset"),
+  };
   if (!res.ok) return { ok: false, status: res.status, body: text.slice(0, 160) };
   try { return { ok: true, data: JSON.parse(text), bytes: text.length }; } catch { return { ok: false, status: res.status, body: "unparseable" }; }
 }
@@ -167,3 +173,4 @@ if (!preflight.ok) {
 }
 
 console.log(`\n=== ${results.filter((r) => r.pass === true).length} pass · ${results.filter((r) => r.pass === false).length} fail · ${results.filter((r) => r.pass === null).length} inconclusive · ~${(spent / 1024).toFixed(0)} KB spent ===`);
+console.log("Latest provider limits:", latestLimits && Object.values(latestLimits).some(Boolean) ? latestLimits : "quota/rate headers not supplied");

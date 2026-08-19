@@ -53,6 +53,11 @@ ok(/PROFILE CLICK/.test(D), "reply draft encodes the profile-click lever (the fu
 ok(/conversation ranker/.test(D), "reply draft names the specific claim it engages so the 2026 conversation-ranker can place it (kept to one sentence — drafter is at measured ceiling, and this is scoped to semantic placement, NOT the reverted value-paragraph push)");
 ok(/surrounding READERS/.test(D) && /Premium or a blue check/.test(D) && /reach or impressions/.test(D), "high-reach drafts add self-contained reader value without exposing the growth tactic");
 ok(/emphasis quotes/.test(D), "reply draft bans emphasis quote-wrapping (the value paragraph's 'engage the specific claim' push was REVERTED — measured −0.2 voiceMatch for no grade/value gain, drafter was already at ceiling)");
+const communityStyle = m.REPLY_STYLES?.find((style) => style.id === "community-spark");
+ok(communityStyle && /Think deeply, then write lightly/.test(communityStyle.directive), "Community Spark separates deep post understanding from lightweight delivery");
+ok(communityStyle && /55 to 170 characters/.test(communityStyle.directive) && /never more than two short sentences/.test(communityStyle.directive), "Community Spark has a concrete short-reply contract");
+ok(communityStyle && /non obvious implication/.test(communityStyle.directive) && /knowledgeable peer/.test(communityStyle.directive), "Community Spark looks for a precise insight and a worthwhile community opening");
+ok(communityStyle && /Never flatter, summarize, lecture/.test(communityStyle.directive) && /invent the user's experience/.test(communityStyle.directive), "Community Spark cannot turn compression into praise, summary, or fabricated authority");
 
 // ---- X_SCORE_SYSTEM: observed relationship context ----
 const XS = m.X_SCORE_SYSTEM;
@@ -83,6 +88,7 @@ ok(/ADDITIVE .it's not just X, it's Y. is a different construction and is banned
 
 // ---- reply angles still wired (the draft-panel steer chips) ----
 ok(Array.isArray(m.REPLY_ANGLES) && m.REPLY_ANGLES.length > 0 && m.REPLY_ANGLES.every((a) => a.id && a.directive), "REPLY_ANGLES are present and well-formed");
+ok(Array.isArray(m.REPLY_STYLES) && m.REPLY_STYLES.length === 1 && m.REPLY_STYLES.every((style) => style.id && style.directive), "reply delivery styles are explicit, bounded, and well-formed");
 
 console.log(fail === 0 ? `\n✓ prompts: ${pass} assertions passed` : `\n✗ prompts: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

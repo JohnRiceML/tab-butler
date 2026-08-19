@@ -135,7 +135,7 @@ export function providerRetryAt(value: string | null | undefined, now: number, f
  * re-classification. Bounded by total bytes (search/timeline blobs are ~350KB) with
  * oldest-first eviction, so the cache can never grow past the local-storage quota.
  * Pure + unit-tested here (scripts/test-twttr-cache.mjs); the IO lives in the governor. */
-export interface CacheEntry { at: number; exp: number; bytes: number; data: unknown; }
+export interface CacheEntry { at: number; exp: number; bytes: number; data: unknown; reuse?: number; }
 export type TwttrCache = Record<string, CacheEntry>;
 export const TWTTR_CACHE_MAX_BYTES = 6 * 1024 * 1024; // enough for one 15-search deep hunt at observed estimates, still below Chrome's default local quota
 export const TWTTR_CACHE_MAX_ENTRY = 1024 * 1024;     // never cache a single response bigger than this (defensive; no real response is)
@@ -152,7 +152,9 @@ export function pruneCache(cache: TwttrCache, now: number, maxBytes = TWTTR_CACH
   const live = Object.entries(cache).filter(([, e]) => e && now < e.exp);
   let total = live.reduce((a, [, e]) => a + (e.bytes || 0), 0);
   if (total > maxBytes) {
-    live.sort((a, b) => a[1].at - b[1].at); // oldest first
+    // Keep broad discovery searches—the reusable front door of a Fresh hunt—before disposable
+    // per-author reads, then evict oldest within the same reuse class.
+    live.sort((a, b) => (a[1].reuse ?? 0) - (b[1].reuse ?? 0) || a[1].at - b[1].at);
     while (total > maxBytes && live.length) { total -= live.shift()![1].bytes || 0; }
   }
   const out: TwttrCache = {};

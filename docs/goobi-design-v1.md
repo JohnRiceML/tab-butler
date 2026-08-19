@@ -36,7 +36,7 @@ This is the spine. Thresholds are Goobi product pressure points, not X limits (`
 | **You then PAUSE while at caution/easeoff** (`setPaused(true)`) | **Proud / relieved** | `love` → settle to `sleep` | THE anti-dark-pattern keystone: the happiest pace-related reaction is earned by *stopping*, not replying. |
 
 ### B. Replies sent today + streak — `replyLog.daily` / `repliesToday()` / `recordSentReply`
-Counted after a successful Like + insert attempt, explicit posted/replied confirmation, or provider verification. Copy/open alone does not count. A reply attempt is a *small* positive, deliberately quieter than a tidy-up or a pause, so Goobi never reads as "feed me more replies."
+Counted after explicit posted/replied confirmation or provider verification. Copy/open alone does not count. A confirmed reply is a *small* positive, deliberately quieter than a tidy-up or a pause, so Goobi never reads as "feed me more replies."
 
 | Real signal & threshold | Goobi mood | Animation key(s) | Why |
 |---|---|---|---|

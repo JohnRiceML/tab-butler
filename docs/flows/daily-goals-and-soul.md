@@ -6,7 +6,7 @@
 
 The scorecard sits directly below the main workspace tabs and is always visible while the dock is open. Each goal is configurable in the side panel; `0` turns it off. Defaults are deliberately moderate: **10 verified replies, 1 post, and 2 unique people DM'd**. Input caps (30 / 5 / 5) and the existing reply/DM safety gates prevent a volume goal from becoming spam coaching.
 
-- **Replies** count successful Like + insert attempts immediately (shown as pending until matched), plus replies matched through RapidAPI or explicitly marked replied. Copy/open drafts do not count until confirmed.
+- **Replies** count only replies matched through RapidAPI or explicitly marked as posted/replied. Copy/open drafts do not count until confirmed.
 - **Posts** use today's X-detected originals when available, falling back to posts explicitly marked shipped in Ideas. The larger count is used, not their sum, so the same post is not double-counted.
 - **DM people** counts unique handles with an outbound message the user explicitly marked sent on the local calendar day. Goobi cannot inspect or verify the X inbox.
 

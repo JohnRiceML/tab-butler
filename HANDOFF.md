@@ -75,10 +75,12 @@ extension commit, and result in the handoff/release notes.
 4. Confirm feed scanning produces explainable reply spots.
 5. Confirm a visible `Replying to @you` post is labeled **Comment on your post**.
 6. Draft a reply and verify the voice/steer controls regenerate the same context.
-7. With **Like + insert reply** enabled, verify the selected post is liked, its empty
-   composer is filled, Goobi closes, and both activity UIs update. Goobi must not submit.
-8. Disable the setting and verify copy + open retains the manual confirmation screen.
-9. Verify an occupied composer is never overwritten.
+7. For a visible feed post, verify the reply action copies the draft, smoothly scrolls
+   that exact post into view, and temporarily outlines it; it must not click Reply, like,
+   touch the composer, or count it.
+8. For an off-page result, verify **Copy & open exact post** opens the matching status
+   page without opening or filling its composer.
+9. Paste and post manually, then verify **Mark as posted** updates both activity UIs.
 10. Open X notifications and confirm direct comments and mentions are labeled separately.
 11. Exercise pause/resume, the Goobi playground, and one tab-manager group/archive/undo cycle.
 12. Remove stored keys and confirm future provider calls stop.

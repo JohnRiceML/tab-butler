@@ -265,6 +265,21 @@ Rules:
 Return only the DM text.`;
 
 export interface ReplyAngle { id: string; label: string; directive: string; }
+export type ReplyStyleId = "community-spark";
+export interface ReplyStyle { id: ReplyStyleId; label: string; description: string; directive: string; }
+
+/** A reply style changes the delivery, not the substantive angle. Community Spark can therefore
+ * compress a value, ask, connect, support, or joke reply without erasing that post-specific move. */
+export const REPLY_STYLES: ReplyStyle[] = [{
+  id: "community-spark",
+  label: "Community spark",
+  description: "Short, sharp, specific to this post",
+  directive: `Style: COMMUNITY SPARK. Think deeply, then write lightly. Internally identify the exact claim, its most interesting non obvious implication, and the one human response that would improve this thread. When an exact anchor or useful reply move is supplied, build around it rather than summarizing the whole post.
+
+Output one compact reply, usually 55 to 170 characters and never more than two short sentences. Lead with a compressed observation, precise extension, surprising contrast, or natural bit of wit that proves you understood the post. Clever means economical insight, not a forced joke, vague wordplay, or a performance.
+
+Build community by leaving the author or a knowledgeable peer an easy, worthwhile way to continue. A narrow genuine invitation is welcome only when one specific answer would deepen the thread; a strong self contained observation can be enough. Never flatter, summarize, lecture, stack multiple points, bait engagement, manufacture familiarity, or invent the user's experience.`,
+}];
 
 /** Optional steer the user picks in the draft panel. Appended to the draft
  *  request — each reinforces (never overrides) the anti-AI-tell and

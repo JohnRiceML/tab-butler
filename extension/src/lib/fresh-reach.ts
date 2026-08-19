@@ -16,6 +16,8 @@ export const FRESH_REACH_MAX_REPLIES = 29;
 export const FRESH_REACH_BREAKOUT_MAX_REPLIES = 49;
 export const FRESH_REACH_MAJOR_MAX_REPLIES = 79;
 export const FRESH_REACH_MAJOR_EARLY_MS = 20 * 60_000;
+/** Reply competition changes quickly; older cached snapshots may seed the radar but not a live opening. */
+export const FRESH_REACH_MAX_OBSERVATION_AGE_MS = 6 * 60_000;
 /** A cold manual hunt spends at most 24 author reads; together with one Latest and three Top
  * discovery reads that is 28 provider calls. Cache reuse and the governor/provider headers still
  * own the actual request rate and monthly boundary. */
@@ -26,6 +28,9 @@ export const FRESH_REACH_CONTENT_CANDIDATES = 36;
 /** Explicitly pinned massive accounts get bounded, rotating coverage without consuming the hunt. */
 export const FRESH_REACH_WATCHLIST_MAX = 12;
 export const FRESH_REACH_WATCHLIST_LANES = 4;
+/** Keep several evidence-backed high-distribution accounts in every deep hunt. These are not
+ * fame slots: each account still needs observed public distribution or prior opening yield. */
+export const FRESH_REACH_MASSIVE_EXPLORATION_LANES = 3;
 export const FRESH_REACH_SHORTLIST_MAX = 10;
 export const FRESH_REACH_SHORTLIST_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const FRESH_REACH_EVIDENCE_HALF_LIFE_MS = 14 * 24 * 60 * 60_000;
@@ -58,6 +63,20 @@ export interface FreshReachOpeningInput {
   momentum?: number;
 }
 
+export interface FreshReachOpeningHistory {
+  /** Recent IDs are only a bounded dedupe ledger; `total` is the lifetime success count. */
+  postIds: string[];
+  total: number;
+  added: boolean;
+}
+
+export interface FreshReachTimedEvidence {
+  value?: number;
+  observedAt?: number;
+}
+
+export type FreshReachCounterComponents = Record<string, number>;
+
 export type FreshReachOpeningBand = "exceptional" | "strong" | "qualified";
 
 export interface FreshReachPost {
@@ -65,6 +84,7 @@ export interface FreshReachPost {
   author: string;
   text: string;
   postedAt?: number;
+  observedAt?: number;
   followers?: number;
   likes?: number;
   replies?: number;
@@ -141,6 +161,93 @@ export function decayFreshReachEvidence(value: number | undefined, observedAt: n
   if (value == null) return undefined;
   if (!observedAt || observedAt >= now) return clamp(value);
   return clamp(value * Math.pow(0.5, (now - observedAt) / FRESH_REACH_EVIDENCE_HALF_LIFE_MS));
+}
+
+/** The same half-life for unbounded public counts such as peak views and engagements. */
+export function decayFreshReachMetric(value: number | undefined, observedAt: number | undefined, now: number): number | undefined {
+  const clean = cleanMetric(value);
+  if (clean == null) return undefined;
+  if (!observedAt || observedAt >= now) return clean;
+  return clean * Math.pow(0.5, (now - observedAt) / FRESH_REACH_EVIDENCE_HALF_LIFE_MS);
+}
+
+/**
+ * Keep the observation whose value is strongest *now*. Values and timestamps move together, so a
+ * weak new sighting cannot re-age an old viral peak. A recent lower observation can replace an old
+ * peak once the older evidence has decayed below it.
+ */
+export function strongestFreshReachEvidence(
+  first: FreshReachTimedEvidence,
+  second: FreshReachTimedEvidence,
+  now: number,
+): FreshReachTimedEvidence {
+  const firstNow = decayFreshReachMetric(first.value, first.observedAt, now);
+  const secondNow = decayFreshReachMetric(second.value, second.observedAt, now);
+  if (firstNow == null) return secondNow == null ? {} : { ...second };
+  if (secondNow == null) return { ...first };
+  if (secondNow > firstNow || (secondNow === firstNow && (second.observedAt ?? 0) > (first.observedAt ?? 0))) return { ...second };
+  return { ...first };
+}
+
+/**
+ * Credit one newly-qualified opening without tying the lifetime numerator to the bounded ID list.
+ * Existing installs migrate safely by treating the larger of the stored count and known IDs as the
+ * baseline. Cached/replayed posts can call this helper without double-counting the same ID.
+ */
+export function recordFreshReachOpening(
+  recentPostIds: readonly string[] | undefined,
+  storedTotal: number | undefined,
+  postId: string,
+  maxRecent = 20,
+): FreshReachOpeningHistory {
+  const ids = [...new Set((recentPostIds ?? []).filter(Boolean))];
+  const baseline = Math.max(ids.length, Math.max(0, Math.floor(storedTotal ?? 0)));
+  if (!postId || ids.includes(postId)) return { postIds: ids.slice(-Math.max(0, maxRecent)), total: baseline, added: false };
+  return {
+    postIds: [...ids, postId].slice(-Math.max(0, maxRecent)),
+    total: baseline + 1,
+    added: true,
+  };
+}
+
+/** Seed a grow-only counter from a legacy scalar; the shared legacy component merges by max. */
+export function seedFreshReachCounter(
+  components: FreshReachCounterComponents | undefined,
+  legacyTotal = 0,
+): FreshReachCounterComponents {
+  const out: FreshReachCounterComponents = {};
+  for (const [actor, value] of Object.entries(components ?? {})) {
+    if (actor && Number.isFinite(value) && value >= 0) out[actor] = Math.floor(value);
+  }
+  if (legacyTotal > 0 && !Object.keys(out).length) out.legacy = Math.floor(legacyTotal);
+  return out;
+}
+
+/** Merge independent tab/session components without losing simultaneous increments. */
+export function mergeFreshReachCounters(
+  first: FreshReachCounterComponents | undefined,
+  second: FreshReachCounterComponents | undefined,
+  firstLegacy = 0,
+  secondLegacy = 0,
+): FreshReachCounterComponents {
+  const out = seedFreshReachCounter(first, firstLegacy);
+  for (const [actor, value] of Object.entries(seedFreshReachCounter(second, secondLegacy))) out[actor] = Math.max(out[actor] ?? 0, value);
+  return out;
+}
+
+export function incrementFreshReachCounter(
+  components: FreshReachCounterComponents | undefined,
+  actor: string,
+  legacyTotal = 0,
+): FreshReachCounterComponents {
+  const out = seedFreshReachCounter(components, legacyTotal);
+  const key = actor || "local";
+  out[key] = (out[key] ?? 0) + 1;
+  return out;
+}
+
+export function freshReachCounterTotal(components: FreshReachCounterComponents | undefined): number {
+  return Object.values(components ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? Math.floor(value) : 0), 0);
 }
 
 export interface FreshReachShortlistAccount {
@@ -272,6 +379,25 @@ function logProgress(value: number | undefined, floor: number, exceptional: numb
 }
 
 /**
+ * Absolute distribution power observed on an account's saved posts. This deliberately complements
+ * per-follower rates: a huge account can have a modest percentage rate while still creating an
+ * unusually valuable early-reply surface. Missing values remain unknown instead of becoming proof
+ * of weak performance.
+ */
+export function freshReachAbsoluteDistribution(
+  peakViews: number | undefined,
+  peakEngagements: number | undefined,
+): number | undefined {
+  const views = cleanMetric(peakViews);
+  const engagements = cleanMetric(peakEngagements);
+  const viewScore = views == null ? undefined : logProgress(views, 5_000, 1_000_000);
+  const engagementScore = engagements == null ? undefined : logProgress(engagements, 100, 50_000);
+  if (viewScore == null && engagementScore == null) return undefined;
+  if (viewScore != null && engagementScore != null) return clamp(0.62 * viewScore + 0.38 * engagementScore);
+  return clamp(viewScore ?? engagementScore ?? 0);
+}
+
+/**
  * Build a first-snapshot distribution signal from public post metrics. The two normalized views
  * (absolute pace and share of the author's audience) keep this useful for both practical and huge
  * accounts. Missing metrics remain neutral; they are never fabricated as zero-performance proof.
@@ -339,6 +465,12 @@ function checkDue(lastAt: number | undefined, now: number): number {
   return 1;
 }
 
+function openingYieldScore(account: Pick<FreshReachAccount, "checks" | "strongOpenings">): number {
+  return account.checks
+    ? clamp((account.strongOpenings ?? 0) / Math.max(1, account.checks) * 2)
+    : 0.4;
+}
+
 /**
  * Audience opportunity for Fresh Reach. Unlike the narrower Targets workspace, this deliberately
  * permits massive accounts: a just-posted, nearly empty thread can be a real opening. The score
@@ -385,25 +517,27 @@ export function pickFreshReachAccounts<T extends FreshReachAccount>(
     const engagement = account.engagementRate == null
       ? 0.4
       : clamp((Math.log10(Math.max(0.0001, account.engagementRate)) + 4) / 2);
-    const distribution = account.distributionScore == null
-      ? (account.peakViews == null ? 0.4 : logProgress(account.peakViews, 5_000, 1_000_000))
-      : clamp(account.distributionScore);
-    const yieldRate = account.checks
-      ? clamp((account.strongOpenings ?? 0) / Math.max(1, account.checks) * 2)
-      : 0.4;
+    const distribution = account.distributionScore == null ? 0.4 : clamp(account.distributionScore);
+    // Separate absolute scale from normalized/velocity evidence. This is the signal that lets an
+    // Elon/MKBHD-style account outrank a merely large account when its posts actually travel.
+    const absoluteDistribution = freshReachAbsoluteDistribution(account.peakViews, account.peakEngagements) ?? 0.4;
+    const yieldRate = openingYieldScore(account);
     const measured = account.measuredValue == null ? 0.4 : clamp((account.measuredValue - 0.9) / 0.25);
     const replyViews = account.shortlisted
       ? 0.55 + 0.45 * logProgress(account.replyViewScore, 100, 50_000)
       : 0;
-    const base = 0.22 * audience
-      + 0.12 * engagement
-      + 0.23 * distribution
-      + 0.13 * yieldRate
-      + 0.07 * measured
-      + 0.1 * (account.activeInLatest ? 1 : 0)
-      + 0.08 * (account.tracked ? 1 : 0)
-      + 0.05 * audienceFit
-      + 0.18 * replyViews;
+    // The weights sum to one. Public distribution (normalized + absolute) dominates raw audience
+    // size, while the user's own measured outcomes remain the strongest personalized input.
+    const base = 0.08 * audience
+      + 0.06 * engagement
+      + 0.22 * distribution
+      + 0.22 * absoluteDistribution
+      + 0.1 * yieldRate
+      + 0.05 * measured
+      + 0.06 * (account.activeInLatest ? 1 : 0)
+      + 0.04 * (account.tracked ? 1 : 0)
+      + 0.02 * audienceFit
+      + 0.15 * replyViews;
     // A just-paid query cannot reveal anything newer until its 12-minute cache expires. Prefer a
     // different qualified account when one exists, without making a small pool go empty.
     const dueFactor = 0.55 + 0.45 * checkDue(account.lastCheckedAt, now);
@@ -444,10 +578,14 @@ export function pickFreshReachAccounts<T extends FreshReachAccount>(
   // Fame alone is not evidence that a paid direct check is worth displacing a stronger practical
   // account. Reserve exploration only for observed distribution/yield; a flat massive account can
   // still enter later on spare capacity through the normal priority fill.
-  addFirst(due, (candidate) => candidate.massive && !candidate.account.shortlisted && !candidate.account.watchlisted
-    && replyReservationEligible(candidate)
-    && ((candidate.account.distributionScore ?? 0) >= 0.58 || (candidate.account.strongOpenings ?? 0) > 0
-      || (!!candidate.account.activeInLatest && ((candidate.account.peakViews ?? 0) >= 5_000 || (candidate.account.peakEngagements ?? 0) >= 100))));
+  for (let lane = 0; lane < FRESH_REACH_MASSIVE_EXPLORATION_LANES; lane++) {
+    addFirst(due, (candidate) => candidate.massive && !candidate.account.shortlisted && !candidate.account.watchlisted
+      && replyReservationEligible(candidate)
+      && ((candidate.account.distributionScore ?? 0) >= 0.58
+        || (freshReachAbsoluteDistribution(candidate.account.peakViews, candidate.account.peakEngagements) ?? 0) >= 0.45
+        || ((candidate.account.strongOpenings ?? 0) > 0 && openingYieldScore(candidate.account) >= 0.4)
+        || (!!candidate.account.activeInLatest && ((candidate.account.peakViews ?? 0) >= 5_000 || (candidate.account.peakEngagements ?? 0) >= 100))));
+  }
   // The remaining signals already contribute to `priority`; reserving each one separately can let
   // weak categorical rows consume most of a small check budget. Fill by score, preferring authors
   // the user has not replied to in the last day, then use repeats only if capacity would go unused.
@@ -465,6 +603,7 @@ export function freshReachCandidate<T extends FreshReachPost>(
   lastAuthorReplyAt?: number,
 ): FreshReachCandidate<T> | null {
   if (!post.id || !post.author || !post.text || post.isReply || !post.postedAt || !myFollowers) return null;
+  if (post.observedAt != null && now - post.observedAt > FRESH_REACH_MAX_OBSERVATION_AGE_MS) return null;
   const ageMs = now - post.postedAt;
   if (ageMs < -5 * 60_000 || ageMs > FRESH_REACH_MAX_AGE_MS) return null;
   const reach = freshReachAudienceFit(post.followers, myFollowers);
@@ -488,12 +627,17 @@ export function freshReachCandidate<T extends FreshReachPost>(
   const kind: FreshReachOpportunityKind = majorEarly ? "major-early" : breakout ? "breakout" : "early-fit";
   const timing = freshness(Math.max(0, ageMs));
   const room = threadRoom(post.replies);
-  const opportunity = clamp((kind === "breakout"
-    ? 0.38 * timing + 0.24 * room + 0.1 * reach + 0.28 * signals.distributionScore
+  const earlyFitOpportunity = 0.52 * timing + 0.32 * room + 0.16 * reach;
+  const breakoutOpportunity = 0.38 * timing + 0.24 * room + 0.1 * reach + 0.28 * signals.distributionScore;
+  const majorOpportunity = 0.48 * timing + 0.3 * room + 0.07 * reach + 0.15 * signals.distributionScore;
+  const rawOpportunity = kind === "breakout"
+    // Crossing the breakout evidence threshold must never make an already-open ordinary thread
+    // rank lower. The breakout formula still owns the widened 30–49-reply lane.
+    ? (post.replies <= FRESH_REACH_MAX_REPLIES ? Math.max(earlyFitOpportunity, breakoutOpportunity) : breakoutOpportunity)
     : kind === "major-early"
-      ? 0.48 * timing + 0.3 * room + 0.07 * reach + 0.15 * signals.distributionScore
-      : 0.52 * timing + 0.32 * room + 0.16 * reach)
-    * repeatFactor(lastAuthorReplyAt, now));
+      ? (post.replies <= FRESH_REACH_MAX_REPLIES ? Math.max(earlyFitOpportunity, majorOpportunity) : majorOpportunity)
+      : earlyFitOpportunity;
+  const opportunity = clamp(rawOpportunity * repeatFactor(lastAuthorReplyAt, now));
 
   return {
     post,
@@ -533,4 +677,33 @@ export function pickFreshReachCandidates<T extends FreshReachPost>(
       || (b.post.postedAt ?? 0) - (a.post.postedAt ?? 0)
       || a.post.author.localeCompare(b.post.author))
     .slice(0, Math.max(0, max));
+}
+
+/**
+ * Recall set for the content model. Reserve one third of the bounded batch for practical accounts
+ * and one third for massive accounts, then fill the remainder globally. This prevents either
+ * audience class from monopolizing all 36 model slots before contribution quality is known.
+ */
+export function pickFreshReachContentCandidates<T extends FreshReachPost>(
+  posts: readonly T[],
+  myFollowers: number,
+  now: number,
+  lastReplyByAuthor: Record<string, number> = {},
+  max = FRESH_REACH_CONTENT_CANDIDATES,
+  perAuthor = 2,
+): FreshReachCandidate<T>[] {
+  const limit = Math.max(0, max);
+  if (!limit) return [];
+  const ranked = pickFreshReachCandidates(posts, myFollowers, now, lastReplyByAuthor, posts.length, perAuthor);
+  const massive = ranked.filter((candidate) => isMassiveFreshReachAccount(candidate.post.followers, myFollowers, candidate.sizeMultiple));
+  const practical = ranked.filter((candidate) => !isMassiveFreshReachAccount(candidate.post.followers, myFollowers, candidate.sizeMultiple));
+  const reserved = Math.floor(limit / 3);
+  const selected = new Map<string, FreshReachCandidate<T>>();
+  const add = (candidate: FreshReachCandidate<T>): void => { if (selected.size < limit) selected.set(candidate.post.id, candidate); };
+  for (const candidate of practical.slice(0, reserved)) add(candidate);
+  for (const candidate of massive.slice(0, reserved)) add(candidate);
+  for (const candidate of ranked) add(candidate);
+  return [...selected.values()].sort((a, b) => b.opportunity - a.opportunity
+    || (b.post.postedAt ?? 0) - (a.post.postedAt ?? 0)
+    || a.post.author.localeCompare(b.post.author));
 }

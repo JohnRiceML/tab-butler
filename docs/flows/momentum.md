@@ -18,7 +18,7 @@ It shows a single colored progress bar with a mood label ("Cold start" → "Warm
 **Trigger / render.** The strip is built inside `x-copilot.ts:renderDock` (the `mom` block, ~lines 3057–3086), re-run on every dock render. It composes a `MomentumInput` and calls `computeMomentum` from `lib/momentum.ts`, then paints `m.score` (bar width), `m.color`, `m.label`, `m.cue`; `state === "peak"` adds a box-shadow glow.
 
 **Inputs (all local, no API for the score itself):**
-- `repliesToday()` — `replyLog.daily[dayKey(now)]` (successful Like + insert attempts and explicitly confirmed copy/open replies today; resets at local midnight).
+- `repliesToday()` — `replyLog.daily[dayKey(now)]` (provider-matched or explicitly confirmed replies today; resets at local midnight).
 - `postedToday()` — count of `ideaQueue` items with `status === "posted"` and `postedAt` dated today.
 - `replyStreak()` — consecutive days (anchored on today, or yesterday if today is still empty) with ≥1 reply, from `replyLog.daily`.
 - `minsSinceLast` — minutes since the max of last reply time (`replyLog.times`) and last post (`ideaQueue[].postedAt`); `9999` if never.
