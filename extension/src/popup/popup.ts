@@ -1,4 +1,6 @@
 import { CONFIG } from "../lib/config";
+import { shouldShowXOnboarding } from "../lib/x-onboarding";
+import { renderXOnboarding, handleXOnboardingAction } from "./x-onboarding";
 import { archivableTabs, idleMinutes, normalizeUrl } from "../lib/heuristics";
 import { recall, type RankedResult } from "../lib/claude-client";
 import { REPLY_ANGLES } from "../lib/prompts";
@@ -7,11 +9,14 @@ import { mountGoobi, type GoobiHandle } from "../lib/goobi";
 import { parseUser, pickVoiceSamples, buildVoiceProfile } from "../lib/twttr";
 import { DEFAULT_DAILY_GOALS, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
 import { normalizeSoul, SOUL_TEMPLATE } from "../lib/soul";
+import { JEV_CONSENT_VERSION, type JevObservation } from "../lib/jev-shadow";
 import { activeProfileChange, declareProfileChange, invalidateProfileChange, mergeGrowthStores, PROFILE_CHANGE_MIN_OBSERVED_DAYS, PROFILE_CHANGE_VARIABLES, PROFILE_CHANGE_WINDOW_DAYS, profileChangeLabel, readProfileChange, settleProfileChanges, summarizeGrowthWindow, type GrowthStore, type ProfileChangeVariable } from "../lib/growth-loop";
 import { buildOutcomeDashboard, type OutcomeDashboardVM } from "../lib/outcome-dashboard";
 import { LEARN_MULT_MAX, N_MIN_OUT, type LearnReply } from "../lib/learn-stats";
 import { buildPersonalPostingModel, isPersonalPostingModel, postingModelIsActive, type PersonalPostingModel, type PostingPatternStat } from "../lib/posting-analytics";
 import type { AdviceResult, Message, ProductItem } from "../lib/types";
+import { LI_CONSENT_VERSION } from "../lib/linkedin-policy";
+import { linkedInStrategyConfigured, normalizeLinkedInStrategy, type LinkedInStrategyV1 } from "../lib/linkedin-strategy";
 
 const IS_EXT = typeof chrome !== "undefined" && !!chrome.tabs;
 
@@ -121,9 +126,15 @@ interface ViewData {
   hasKey: boolean;
   xConsent: boolean;
   xEnabled: boolean;
+  liConsent: boolean;
+  liEnabled: boolean;
+  liActivity: { pending: number; today: number; total: number; recent: { author: string; at: number }[] };
   xNiche: string;
   xVoice: string;
+  liVoice: string;
+  liStrategy: LinkedInStrategyV1;
   xSoul: string;
+  jev: { selected: boolean; fastAnalysis: boolean; hasKey: boolean; enabled: boolean; observations: JevObservation[] };
   dailyGoals: DailyGoals;
   products: ProductItem[];
   xDefaultAngle: string;
@@ -165,6 +176,49 @@ function computeReplyStats(daily: Record<string, number>, total: number): ViewDa
   return { today: daily[dayKeyOf(now)] || 0, week, total: total || 0, days };
 }
 
+/** LinkedIn completion is an explicit user mark, not a platform verification.
+ *  Keep this receipt separate from X pace, goals, and measured outcomes. */
+function computeLinkedInActivity(value: unknown): ViewData["liActivity"] {
+  const rawEntries = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as { entries?: unknown[] }).entries)
+      ? (value as { entries: unknown[] }).entries
+      : [];
+  const seen = new Set<string>();
+  const entries: { author: string; at: number }[] = [];
+  for (const candidate of rawEntries) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const row = candidate as { postId?: unknown; author?: unknown; postedAt?: unknown };
+    const at = Number(row.postedAt);
+    if (!Number.isFinite(at) || at <= 0 || Number.isNaN(new Date(at).getTime())) continue;
+    const postId = typeof row.postId === "string" ? row.postId.trim() : "";
+    if (postId && seen.has(postId)) continue;
+    if (postId) seen.add(postId);
+    const author = typeof row.author === "string" && row.author.trim() ? row.author.trim() : "LinkedIn member";
+    entries.push({ author, at });
+  }
+  entries.sort((left, right) => right.at - left.at);
+  const object = value && typeof value === "object" ? value as { total?: unknown; pending?: unknown[] } : undefined;
+  const pendingIds = new Set<string>();
+  for (const candidate of Array.isArray(object?.pending) ? object.pending : []) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const row = candidate as { postId?: unknown; copiedAt?: unknown; lastCopiedAt?: unknown };
+    const postId = typeof row.postId === "string" ? row.postId.trim() : "";
+    const at = Number(row.lastCopiedAt ?? row.copiedAt);
+    if (!postId || seen.has(postId) || pendingIds.has(postId) || !Number.isFinite(at) || at <= 0 || Number.isNaN(new Date(at).getTime())) continue;
+    pendingIds.add(postId);
+  }
+  const declared = Number(object?.total);
+  const total = Math.max(entries.length, Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : 0);
+  const todayKey = dayKeyOf(Date.now());
+  return {
+    pending: pendingIds.size,
+    today: entries.filter((entry) => dayKeyOf(entry.at) === todayKey).length,
+    total,
+    recent: entries.slice(0, 3),
+  };
+}
+
 const MOCK: ViewData = {
   smart: true,
   pressure: { label: "System pressure: Normal", color: "var(--green)" },
@@ -180,9 +234,15 @@ const MOCK: ViewData = {
   hasKey: false,
   xConsent: false,
   xEnabled: false,
+  liConsent: false,
+  liEnabled: false,
+  liActivity: { pending: 0, today: 0, total: 0, recent: [] },
   xNiche: "",
   xVoice: "",
+  liVoice: "",
+  liStrategy: normalizeLinkedInStrategy(undefined),
   xSoul: "",
+  jev: { selected: false, fastAnalysis: false, hasKey: false, enabled: false, observations: [] },
   dailyGoals: DEFAULT_DAILY_GOALS,
   products: [],
   xDefaultAngle: "",
@@ -243,7 +303,8 @@ async function getData(): Promise<ViewData> {
     : freePct > 12 ? { label: "System pressure: Warning", color: "var(--amber)" }
     : { label: "System pressure: High", color: "var(--red)" };
 
-  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_PACE_RESET_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_LEARN_LOOP_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY, CONFIG.X_POSTING_MODEL_KEY]);
+  const store = await chrome.storage.local.get([CONFIG.ARCHIVE_KEY, CONFIG.SMART_ENABLED_KEY, CONFIG.AUTO_DEDUPE_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.LI_COPILOT_KEY, CONFIG.LI_DATA_CONSENT_KEY, CONFIG.LI_COMMENT_LOG_KEY, CONFIG.LI_VOICE_KEY, CONFIG.LI_STRATEGY_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_DAILY_GOALS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_DEFAULT_ANGLE_KEY, CONFIG.X_DEFAULT_PRODUCT_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_PREMIUM_KEY, CONFIG.X_REPLY_LOG_KEY, CONFIG.X_PACE_RESET_KEY, CONFIG.X_LEARN_STATS_KEY, CONFIG.X_LEARN_LOOP_KEY, CONFIG.X_SUPPORTERS_KEY, CONFIG.X_PROFILE_KEY, CONFIG.X_MY_POSTS_KEY, CONFIG.X_AUTHOR_REACH_KEY, CONFIG.X_HEAVY_HITTERS_KEY, CONFIG.X_POSTING_MODEL_KEY]);
+  const jevStore = await chrome.storage.local.get([CONFIG.ANALYSIS_PROVIDER_KEY, CONFIG.JEV_ANALYSIS_CONSENT_KEY, CONFIG.TYPESAFE_KEY_KEY, CONFIG.JEV_REVIEW_MODE_KEY, CONFIG.JEV_REVIEW_CONSENT_KEY, CONFIG.JEV_REVIEW_LOG_KEY]);
   const productsArr = (store[CONFIG.X_PRODUCTS_KEY] as ProductItem[]) || [];
   const archive = store[CONFIG.ARCHIVE_KEY] as unknown[] | undefined;
   const rawLog = store[CONFIG.X_REPLY_LOG_KEY] as { ownerHandle?: string; daily?: Record<string, number>; total?: number; times?: number[]; sent?: { at: number; author?: string; snippet?: string; score?: number; lane?: ReplyPaceLane; outcome?: { likes?: number; replies?: number; authorReplied?: boolean; frozen?: boolean } }[] } | undefined;
@@ -290,9 +351,17 @@ async function getData(): Promise<ViewData> {
     hasKey: Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]),
     xConsent: store[CONFIG.X_DATA_CONSENT_KEY] === "v1",
     xEnabled: store[CONFIG.X_DATA_CONSENT_KEY] === "v1" && Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]) && store[CONFIG.X_COPILOT_KEY] !== false,
+    liConsent: store[CONFIG.LI_DATA_CONSENT_KEY] === LI_CONSENT_VERSION,
+    liEnabled: store[CONFIG.LI_DATA_CONSENT_KEY] === LI_CONSENT_VERSION && Boolean(store[CONFIG.ANTHROPIC_KEY_KEY]) && (Boolean(String(store[CONFIG.X_NICHE_KEY] || "").trim()) || linkedInStrategyConfigured(store[CONFIG.LI_STRATEGY_KEY])) && store[CONFIG.LI_COPILOT_KEY] === true,
+    liActivity: computeLinkedInActivity(store[CONFIG.LI_COMMENT_LOG_KEY]),
     xNiche: (store[CONFIG.X_NICHE_KEY] as string) || "",
     xVoice: (store[CONFIG.X_VOICE_KEY] as string) || "",
+    liVoice: (store[CONFIG.LI_VOICE_KEY] as string) || "",
+    liStrategy: normalizeLinkedInStrategy(store[CONFIG.LI_STRATEGY_KEY]),
     xSoul: normalizeSoul(store[CONFIG.X_SOUL_KEY]),
+    jev: { selected: jevStore[CONFIG.ANALYSIS_PROVIDER_KEY] === "jev", fastAnalysis: jevStore[CONFIG.ANALYSIS_PROVIDER_KEY] === "jev" && jevStore[CONFIG.JEV_ANALYSIS_CONSENT_KEY] === "v1", hasKey: Boolean(jevStore[CONFIG.TYPESAFE_KEY_KEY]),
+      enabled: jevStore[CONFIG.JEV_REVIEW_MODE_KEY] === "shadow" && jevStore[CONFIG.JEV_REVIEW_CONSENT_KEY] === JEV_CONSENT_VERSION,
+      observations: Array.isArray(jevStore[CONFIG.JEV_REVIEW_LOG_KEY]) ? jevStore[CONFIG.JEV_REVIEW_LOG_KEY].slice(-50) : [] },
     dailyGoals: normalizeDailyGoals(store[CONFIG.X_DAILY_GOALS_KEY]),
     products: productsArr.length ? productsArr : (store[CONFIG.X_PRODUCT_KEY] ? [{ name: "", blurb: store[CONFIG.X_PRODUCT_KEY] as string }] : []),
     xDefaultAngle: (store[CONFIG.X_DEFAULT_ANGLE_KEY] as string) || "",
@@ -665,6 +734,39 @@ function personalPostingModelHTML(d: ViewData): string {
   </div>`;
 }
 
+function linkedInActivityTime(at: number): string {
+  const date = new Date(at);
+  const today = new Date();
+  if (dayKeyOf(at) === dayKeyOf(today.getTime())) {
+    return `Today, ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  }
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  if (dayKeyOf(at) === dayKeyOf(yesterday.getTime())) {
+    return `Yesterday, ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  }
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** A local LinkedIn receipt only. It deliberately makes no platform-verification claim. */
+function linkedInActivityHTML(activity: ViewData["liActivity"]): string {
+  const recent = activity.recent.length
+    ? `<div style="margin-top:8px" aria-label="Recent LinkedIn comments">${activity.recent.map((entry) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:10.5px"><span class="trunc" style="color:var(--t1)">${esc(entry.author)}</span><time class="dim" datetime="${new Date(entry.at).toISOString()}" style="white-space:nowrap">${esc(linkedInActivityTime(entry.at))}</time></div>`).join("")}</div>`
+    : `<div class="dim" style="font-size:10.5px;margin-top:8px">No LinkedIn comments recorded yet.</div>`;
+  return `<div style="margin-top:10px;border:.5px solid rgba(67,137,202,.3);border-radius:10px;padding:9px 10px;background:rgba(7,18,31,.25)" aria-label="LinkedIn activity receipt">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+      <span class="name" style="font-size:11.5px">LinkedIn activity receipt</span>
+      <span class="field-hint">local receipt · not platform verified</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="flex:1;background:var(--row);border-radius:8px;padding:7px 8px"><b style="font-size:17px;color:var(--t1)">${activity.pending}</b><div class="dim" style="font-size:9.5px;margin-top:2px">in review</div></div>
+      <div style="flex:1;background:var(--row);border-radius:8px;padding:7px 8px"><b style="font-size:17px;color:var(--t1)">${activity.today}</b><div class="dim" style="font-size:9.5px;margin-top:2px">commented today</div></div>
+      <div style="flex:1;background:var(--row);border-radius:8px;padding:7px 8px"><b style="font-size:17px;color:var(--t1)">${activity.total}</b><div class="dim" style="font-size:9.5px;margin-top:2px">commented total</div></div>
+    </div>
+    ${recent}
+    <div class="dim" style="font-size:9.5px;line-height:1.4;margin-top:7px">“Copy &amp; review” immediately records Commented and removes the opportunity. This is a local workflow shortcut, not proof that LinkedIn received the comment. Undo is available in the LinkedIn dock.</div>
+  </div>`;
+}
+
 function render(d: ViewData): string {
   if (playground) return renderPlayground(d);
   const all = d.groups;
@@ -676,7 +778,13 @@ function render(d: ViewData): string {
   const expandRow = all.length > 3
     ? `<button class="btn" data-action="${expanded ? "collapse" : "expand"}" style="width:100%;margin-top:8px">${expanded ? "Collapse" : `Expand · view all ${all.length} groups`}</button>`
     : "";
-  const setupReady = d.hasKey && d.xConsent && !!d.xNiche.trim();
+  const analysisReady = !d.jev.selected || (d.jev.fastAnalysis && d.jev.hasKey);
+  const providersReady = d.hasKey && analysisReady;
+  const setupReady = providersReady && d.xConsent && !!d.xNiche.trim();
+  const liStrategyConfigured = Boolean(d.liStrategy.vertical || d.liStrategy.reputationThesis || d.liStrategy.targetAudiences.length || d.liStrategy.targetContexts.length || d.liStrategy.contributionLanes.length || d.liStrategy.avoidTopics.length);
+  const liProfileReady = liStrategyConfigured || Boolean(d.xNiche.trim());
+  const liSetupReady = providersReady && d.liConsent && liProfileReady;
+  const readyPlatforms = [d.xEnabled && setupReady ? "X" : "", d.liEnabled && liSetupReady ? "LinkedIn" : ""].filter(Boolean);
   const providerObservedAge = d.twttrMeter?.providerObservedAt != null ? Math.max(0, Date.now() - d.twttrMeter.providerObservedAt) : undefined;
   const providerObservedLabel = providerObservedAge == null ? "" : providerObservedAge < 60 * 60_000
     ? `${Math.max(1, Math.round(providerObservedAge / 60_000))}m ago`
@@ -688,13 +796,13 @@ function render(d: ViewData): string {
     : 0;
   return `
   <header class="row-flex between">
-    <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Replies scored against X's real ranking code — never posted for you.</div></div></div>
-    <span class="pill"><span class="dot" style="background:${d.xEnabled && setupReady ? "var(--green)" : "var(--t3)"}"></span>${!d.xEnabled ? "X copilot off" : setupReady ? "Ready for X" : "Finish setup"}</span>
+    <div class="row-flex gap10"><button class="sq" id="goobi-face" data-action="open-playground" aria-label="Open Goobi's playground" title="Open Goobi's playground">${ICON.layout}</button><div class="wordmark"><div class="brand">Goobi</div><div class="tagline">Find the conversation. Draft the contribution. You post.</div></div></div>
+    <span class="pill"><span class="dot" style="background:${readyPlatforms.length ? "var(--green)" : "var(--t3)"}"></span>${readyPlatforms.length ? `Ready for ${readyPlatforms.join(" + ")}` : "Finish setup"}</span>
   </header>
 
   <div class="vtabs" role="tablist" aria-label="Goobi tools">
     <button class="vtab${activeTab === "tabs" ? " on" : ""}" id="tab-tabs" role="tab" aria-selected="${activeTab === "tabs"}" aria-controls="view-tabs" data-action="switch-tab" data-tab="tabs">Tab tools</button>
-    <button class="vtab${activeTab === "x" ? " on" : ""}" id="tab-x" role="tab" aria-selected="${activeTab === "x"}" aria-controls="view-x" data-action="switch-tab" data-tab="x">X replies</button>
+    <button class="vtab${activeTab === "x" ? " on" : ""}" id="tab-x" role="tab" aria-selected="${activeTab === "x"}" aria-controls="view-x" data-action="switch-tab" data-tab="x">Conversations</button>
   </div>
 
   <div id="view-tabs" role="tabpanel" aria-labelledby="tab-tabs"${activeTab === "tabs" ? "" : " hidden"}>
@@ -731,53 +839,151 @@ function render(d: ViewData): string {
   </div>
 
   <div id="view-x" role="tabpanel" aria-labelledby="tab-x"${activeTab === "x" ? "" : " hidden"}>
+  <div class="actions" style="margin-top:12px"><button class="act" data-action="x-onboarding-reopen">Guided X setup</button></div>
   <div class="sec"><h2>X reply copilot</h2><label class="switch" title="${d.xConsent ? "Turn the X copilot on or off" : "Review and accept the data disclosure first"}"><input type="checkbox" id="xon" aria-label="X reply copilot" ${d.xEnabled ? "checked" : ""} ${d.xConsent ? "" : "disabled"}/><span class="track"><span class="knob"></span></span></label></div>
   <div class="setup">
-    <div class="setup-title">${setupReady ? "You're ready to find a good conversation" : "Set up your reply copilot"}</div>
-    <div class="setup-sub">${setupReady ? "Open x.com, then open Goobi to find and draft worthwhile replies. You always review and post yourself. Scoring separates content fit from observed timing and relationship signals; public X ranking code informs directional priors, not claimed live weights." : d.hasKey ? "Tell Goobi which conversations matter to you. Voice examples are helpful, but optional." : "First, connect Claude for scoring and drafting. Your key stays in this browser and calls Anthropic directly."}</div>
-    ${setupReady ? `<ul class="dim" style="font-size:10.5px;margin:6px 0 2px;padding-left:16px;line-height:1.5"><li>Uses public X ranking signals as directional context; live weights remain private.</li><li>Measures whether its advice worked on YOUR account: ✓ settled measurement vs ✦ prior, always labeled.</li><li>Drafts in your voice; you always review and post. Never auto-posts.</li></ul>` : ""}
-    ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text and author handles are sent to Anthropic automatically as you scroll so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md. Optional X-data features send handles and search queries to RapidAPI. An imported analytics CSV is parsed locally and its raw rows are discarded; only aggregate pattern/length evidence is sent to Claude when you click Ideas or draft with Community Spark enabled (the default; it can be turned off in the draft panel). Activity, drafts, DM notes, goals, SOUL.md, growth history, and the aggregate model stay in Chrome local storage; Goobi has no analytics or production server.<label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
-    ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Anthropic key stored</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Anthropic API key</label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Save key</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
+    <div class="setup-title">${setupReady ? "Your X copilot is ready" : "Find a conversation worth joining"}</div>
+    <div class="setup-sub">${setupReady ? "Open X, choose a conversation, and ask Claude for a reply. You review, copy, and post it yourself." : !analysisReady ? d.jev.fastAnalysis ? "Add your TypeSafe key below to reconnect Jev analysis." : "Review and accept Jev data use below to resume feed analysis." : "Connect Claude for drafts, add Jev for feed analysis, and tell Goobi what interests you. Keys stay in this browser."}</div>
     <div class="setup-steps">
-      <div class="setup-step${d.hasKey && d.xConsent ? " done" : ""}">${d.hasKey && d.xConsent ? "✓" : "1"} Connect + agree</div>
+      <div class="setup-step${providersReady && d.xConsent ? " done" : ""}">${providersReady && d.xConsent ? "✓" : "1"} Connect providers</div>
       <div class="setup-step${d.xNiche.trim() ? " done" : ""}">${d.xNiche.trim() ? "✓" : "2"} Set your focus</div>
-      <div class="setup-step${d.xVoice.trim() || d.xSoul.trim() ? " done" : ""}">${d.xVoice.trim() || d.xSoul.trim() ? "✓" : "3"} Voice + soul <span aria-hidden="true">·</span> optional</div>
+      <div class="setup-step">3 Open X</div>
     </div>
+    ${setupReady ? `<div class="actions" style="margin-top:12px"><button class="btn primary" data-action="open-url" data-url="https://x.com/home">Open X</button>${d.xEnabled ? "" : `<span class="field-hint">Turn on the X copilot above to see suggestions.</span>`}</div>` : ""}
   </div>
-  <details class="fold profile-fold"${setupReady ? "" : " open"}>
-    <summary>${setupReady ? "Edit focus, voice &amp; SOUL.md" : "Complete your profile"} <span class="field-hint">${d.xSoul.trim() ? "creative brief saved" : "voice and soul are optional"}</span></summary>
+  <details class="fold" id="jev-analysis-settings"${d.jev.fastAnalysis && d.jev.hasKey ? "" : " open"}>
+    <summary>1 · Jev analysis <span class="field-hint">${d.jev.selected ? !d.jev.fastAnalysis ? "review data use" : d.jev.hasKey ? "connected · Claude drafts" : "key needed" : "recommended · opt in"}</span></summary>
+    <div class="list"><div class="li" style="display:block">
+      <div class="data-disclosure"><b>Jev finds conversations. Claude writes your replies.</b> Enable Jev to analyze your feed with TypeSafe. Analysis sends visible X/LinkedIn post text, quoted context, displayed author details, your shared focus, and LinkedIn thesis to TypeSafe while the copilot scans. Jev selects opportunities; Claude writes comments when you click Draft. Jev errors stay visible; there is no automatic Claude fallback. This toggle does not send SOUL.md, personal facts, drafts, voice, or own-post history to Jev.
+        <label class="data-consent"><input id="jevanalysis" type="checkbox" ${d.jev.fastAnalysis ? "checked" : ""}/> <span>Use Jev only for analysis. I agree to this TypeSafe data use.</span></label>
+      </div>
+      <label class="field" for="jevkey">TypeSafe API key <span class="field-hint">${d.jev.hasKey ? "— saved locally" : ""}</span></label>
+      <input class="control" id="jevkey" type="password" autocomplete="off" placeholder="${d.jev.hasKey ? "Leave blank to keep saved key" : "Paste your TypeSafe key"}"/>
+      <details class="fold" id="jev-review-settings"><summary>Optional draft review <span class="field-hint">${d.jev.enabled ? "on" : "off"}</span></summary>
+      <p>Optional comment review is separate. Jev checks requested X replies and LinkedIn comments for unsupported experience, conflicts with your POV, and empty contributions. Observation mode records potential issues without changing or blocking drafts. Its judgments can be wrong.</p>
+      <div class="data-disclosure" style="margin-top:10px">When enabled, each requested comment draft sends the selected post/context, final draft, SOUL.md, supplied personal facts (including a LinkedIn Real detail when provided), and bounded own-post history to TypeSafe. Comment review does not send ambient feed scans, DMs, voice samples, or browser history. Goobi keeps only the latest 50 review summaries locally, with no post, draft, or personal-detail text. Review may add up to four seconds; provider failures leave the draft unchanged.
+        <label class="data-consent"><input id="jevconsent" type="checkbox" ${d.jev.enabled ? "checked" : ""}/> <span>I agree to this TypeSafe data use and want observation mode enabled.</span></label>
+      </div>
+      <div class="field-hint" style="margin-top:8px">${d.jev.observations.length ? `${d.jev.observations.filter(o => o.status === "reviewed").length} completed · ${d.jev.observations.filter(o => o.status === "reviewed" && o.flags?.length).length} with potential issues · ${d.jev.observations.filter(o => o.status === "unavailable").length} unavailable. These are model observations, not verified mistakes.` : "No reviews recorded yet."}</div>
+      ${d.jev.observations.slice(-5).reverse().map(o => `<div class="field-hint" style="margin-top:5px">${o.platform === "linkedin" ? "LinkedIn" : "X"} · ${Number.isFinite(o.at) ? esc(new Date(o.at).toLocaleString()) : "Unknown time"} · ${o.status === "reviewed" ? `${Math.max(0, Math.round(o.latencyMs || 0))} ms · ${o.flags?.length ? esc(o.flags.join(", ")) : "No high confidence flags"}` : `Unavailable (${esc(o.error || "unknown")})`}</div>`).join("")}
+      <button class="act" data-action="clear-jev-reviews" style="margin-top:8px">Clear summaries</button>
+      </details>
+      <div class="actions" style="margin-top:10px"><button class="btn primary" data-action="save-jev">Save Jev settings</button>${d.jev.hasKey ? `<button class="act" data-action="remove-jev">Disconnect Jev</button>` : ""}</div>
+      <div class="field-hint" style="margin-top:6px">${d.jev.selected ? analysisReady ? "Feed analysis uses Jev. Claude is still required for drafts." : "Jev is selected, but analysis is paused until its key and consent are saved." : "Claude is selected for analysis and drafts. Jev starts only after you agree and save."}</div>
+    </div></div>
+  </details>
+
+  <details class="fold" id="claude-setup"${d.hasKey && d.xConsent ? "" : " open"}>
+    <summary>Claude drafts + X data use <span class="field-hint">${d.hasKey && d.xConsent ? "connected" : "required"}</span></summary>
+    <div class="list"><div class="li" style="display:block">
+    ${d.xConsent ? "" : `<div class="data-disclosure"><b>Before Goobi reads X</b>While the copilot is on, public post text, author handles, your saved focus, and saved product names/descriptions are sent to Anthropic automatically as you scroll. With separately enabled Jev fast analysis, post/context, author details, and focus go to TypeSafe instead; products are excluded so Goobi can score reply opportunities. Reply drafts and Ideas send the selected public content plus your voice, SOUL.md, and context only when you click; DMs send the selected voice and conversation context, not SOUL.md.<details class="fold"><summary>Optional tools and local storage</summary>Optional X-data features send handles and search queries to RapidAPI. An imported analytics CSV is parsed locally and its raw rows are discarded; only aggregate pattern/length evidence is sent to Claude when you click Ideas or draft with Community Spark enabled (the default; it can be turned off in the draft panel). Activity, drafts, DM notes, goals, SOUL.md, growth history, and the aggregate model stay in Chrome local storage; Goobi has no analytics or production server.</details><label class="data-consent"><input type="checkbox" id="xdataconsent"/> <span>I agree to this data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-x-data" style="margin-top:9px">Agree and enable</button>` : ""}</div>`}
+    ${d.hasKey ? `<div class="ready-line"><span class="ready-check">✓ Claude connected for drafts</span><button class="act danger" data-action="clear-key">Remove key</button></div>` : `<label class="field" for="xkeyinput" style="margin-top:12px">Claude for drafts <span class="field-hint">— Anthropic API key</span></label><div class="input-action"><input class="control" id="xkeyinput" type="password" placeholder="sk-ant-..." autocomplete="off" aria-describedby="xkeyhelp"/><button class="btn primary" data-action="save-x-key">Connect Claude + enable X</button></div><div class="field-hint" id="xkeyhelp" style="display:block;margin-top:6px">Stored locally in Chrome. Goobi never sends it to its own server.</div>`}
+    </div></div>
+  </details>
+
+  <details class="fold profile-fold" id="shared-conversation-profile"${setupReady ? "" : " open"}>
+    <summary>2 · Set your focus <span class="field-hint">${d.xNiche.trim() ? "saved" : "which conversations matter to you?"}</span></summary>
   <div class="list">
     <div class="li" style="display:block">
-      <label class="field" for="xniche">Your focus <span class="field-hint">— topics and conversations to find</span></label>
+      <label class="field" for="xniche">Your topics <span class="field-hint">— also available to LinkedIn if you enable it</span></label>
       <textarea class="control" id="xniche" rows="2" placeholder="AI SaaS, indie founders, practical build lessons…">${esc(d.xNiche)}</textarea>
     </div>
+    <details class="fold" id="conversation-voice"><summary>Voice and creative brief <span class="field-hint">optional</span></summary>
     <div class="li" style="display:block">
-      <label class="field" for="xvoice">Your reply voice <span class="field-hint">— optional tone notes or 2–3 examples</span></label>
+      <label class="field" for="xvoice">Shared conversation voice <span class="field-hint">— cross-platform fallback style</span></label>
       <textarea class="control" id="xvoice" rows="3" placeholder="Paste replies you're proud of, or describe your tone…">${esc(d.xVoice)}</textarea>
     </div>
     <div class="li" style="display:block">
-      <label class="field" for="xsoul">Your SOUL.md <span class="field-hint">— what you believe, know, return to, and refuse to sound like</span></label>
+      <label class="field" for="xsoul">Shared SOUL.md <span class="field-hint">— your digital brain: beliefs, stories, lessons, and approved language</span></label>
       <textarea class="control soul-control" id="xsoul" rows="9" maxlength="6000" spellcheck="true" placeholder="# What I believe&#10;- Specific beats polished&#10;&#10;# What I have earned the right to talk about&#10;- …">${esc(d.xSoul)}</textarea>
-      <div class="soul-foot"><span>Voice controls style. SOUL.md supplies your point of view and creative boundaries.</span><button class="act" data-action="soul-template">${d.xSoul.trim() ? "Replace with template" : "Start with template"}</button></div>
+      <div class="soul-foot"><span>Voice controls style. Save the ideas you want to be known for, real stories, and phrases you stand behind. Goobi adapts them into drafts for your review. Keep tentative ideas labeled; replace template prompts with your own material.</span><button class="act" data-action="soul-template">${d.xSoul.trim() ? "Replace with template" : "Start with template"}</button></div>
     </div>
+    </details>
+    <div class="li"><button class="btn primary" data-action="save-x">Save focus and voice</button></div>
+  </div>
+  </details>
+
+  <details class="fold" id="linkedin-setup">
+    <summary>Add LinkedIn <span class="field-hint">${d.liEnabled ? "enabled" : "optional"}</span></summary>
+  <div class="sec"><h2>LinkedIn comment copilot</h2><label class="switch" title="${!d.liConsent ? "Review and accept the LinkedIn data disclosure first" : !liProfileReady ? "Set the LinkedIn comment thesis or shared focus before turning on LinkedIn" : "Turn the LinkedIn copilot on or off"}"><input type="checkbox" id="lion" aria-label="LinkedIn comment copilot" ${d.liEnabled ? "checked" : ""} ${d.liConsent ? "" : "disabled"}/><span class="track"><span class="knob"></span></span></label></div>
+  <div class="setup" style="background:linear-gradient(145deg,rgba(10,102,194,.14),rgba(214,154,92,.035));border-color:rgba(67,137,202,.35)">
+    <div class="setup-title" style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;background:#0a66c2;color:white;font:700 13px system-ui">in</span>${liSetupReady ? "LinkedIn is ready" : !liProfileReady ? "Set your LinkedIn thesis" : "Add LinkedIn comments"}</div>
+    <div class="setup-sub">${liSetupReady ? "Open LinkedIn to find worthwhile professional conversations. Goobi drafts from your LinkedIn voice first, copies comments, and leaves every Comment control and composer untouched." : !liProfileReady ? "Define who matters, which posts are worth joining, and what you can add—or use the shared focus as a fallback." : d.hasKey ? "LinkedIn uses its comment thesis, shared focus/SOUL when available, and optional comment voice. Its consent and activity ledger stay separate from X." : "Connect Claude here or in the X setup above. Your key stays in this browser and calls Anthropic directly."}</div>
+    ${d.liConsent ? `<div class="ready-line"><span class="ready-check">✓ LinkedIn data use accepted</span><span class="field-hint">draft + copy only</span></div>` : `<div class="data-disclosure"><b>Before Goobi reads LinkedIn</b>While this copilot is on, post text visible in your LinkedIn feed, the displayed author name, bounded visible headline/person-or-company/connection-label context, your saved focus, and your LinkedIn comment thesis are sent to Anthropic automatically as you scroll (or TypeSafe when you separately enable Jev fast analysis) so Goobi can score post fit, person fit, and a truthful contribution. When you request a draft, the selected feed post, the same author context and thesis, Goobi's fit guidance, your shared focus, shared voice, LinkedIn voice, SOUL.md, and steer are sent to Anthropic; redrafting also sends your edited draft. If you add a Real detail, it is sent only for that draft and is not stored. Saved thesis and LinkedIn voice stay in Chrome local storage. Clicking Copy &amp; review immediately records a local Commented activity mark and removes the opportunity; Goobi cannot verify that LinkedIn received the comment, and Undo remains available. LinkedIn activity stays in its own Chrome local ledger. Goobi does not fetch profiles, read messages, click Comment, fill a composer, submit, react, connect, or follow.<label class="data-consent"><input type="checkbox" id="lidataconsent"/> <span>I agree to this LinkedIn data use.</span></label>${d.hasKey ? `<button class="btn primary" data-action="accept-li-data" style="margin-top:9px">${liProfileReady ? "Agree and enable" : "Agree + set thesis"}</button>` : `<label class="field" for="likeyinput" style="margin-top:10px">Anthropic API key</label><div class="input-action"><input class="control" id="likeyinput" type="password" placeholder="sk-ant-..." autocomplete="off"/><button class="btn primary" data-action="save-li-key">${liProfileReady ? "Connect + enable" : "Connect + set thesis"}</button></div>`}</div>`}
+    <div class="ready-line"><span class="${liProfileReady ? "ready-check" : "field-hint"}">${liStrategyConfigured ? "✓ LinkedIn thesis set" : d.xNiche.trim() ? "✓ Shared focus available as fallback" : "LinkedIn thesis or shared focus required"}</span><button class="${liProfileReady ? "act" : "btn primary"}" data-action="focus-li-strategy" aria-controls="linkedin-comment-thesis">${liStrategyConfigured ? "Edit thesis" : "Set LinkedIn thesis"}</button></div>
+    ${linkedInActivityHTML(d.liActivity)}
+  </div>
+
+  <details class="fold profile-fold" id="linkedin-comment-thesis"${liStrategyConfigured ? "" : " open"}>
+    <summary>LinkedIn comment thesis <span class="field-hint">${liStrategyConfigured ? "person + post strategy saved" : "decide who and what deserves attention"}</span></summary>
+    <div class="list">
+      <div class="li" style="display:block">
+        <label class="field" for="listrategyvertical">Your professional arena</label>
+        <input class="control" id="listrategyvertical" maxlength="120" value="${esc(d.liStrategy.vertical)}" placeholder="AI SaaS products for small B2B teams"/>
+      </div>
+      <div class="li" style="display:block">
+        <label class="field" for="listrategyreputation">What should people remember you for?</label>
+        <textarea class="control" id="listrategyreputation" rows="2" maxlength="240" placeholder="Practical builder judgment: implementation details, tradeoffs, and lessons from shipping.">${esc(d.liStrategy.reputationThesis)}</textarea>
+      </div>
+      <div class="li" style="display:block">
+        <label class="field" for="listrategyaudiences">People or organizations worth meeting <span class="field-hint">— one audience per line</span></label>
+        <textarea class="control" id="listrategyaudiences" rows="4" placeholder="AI SaaS founders&#10;Product and engineering leaders&#10;B2B operators working on adoption">${esc(d.liStrategy.targetAudiences.join("\n"))}</textarea>
+        <div class="field-hint" style="margin-top:6px">Goobi only treats a role as known when the visible post supports it. It never fetches the profile.</div>
+      </div>
+      <div class="li" style="display:block">
+        <label class="field" for="listrategycontexts">Posts worth joining <span class="field-hint">— one situation per line</span></label>
+        <textarea class="control" id="listrategycontexts" rows="4" placeholder="Build breakdowns and postmortems&#10;Activation, retention, or pricing experiments&#10;Customer workflow friction">${esc(d.liStrategy.targetContexts.join("\n"))}</textarea>
+      </div>
+      <div class="li" style="display:block">
+        <label class="field" for="listrategylanes">Ways you can contribute credibly <span class="field-hint">— one per line</span></label>
+        <textarea class="control" id="listrategylanes" rows="4" placeholder="Add an implementation detail&#10;Name a boundary condition&#10;Ask one decision-relevant question">${esc(d.liStrategy.contributionLanes.join("\n"))}</textarea>
+      </div>
+      <div class="li" style="display:block">
+        <label class="field" for="listrategyavoid">Stay out of <span class="field-hint">— exclusions always win</span></label>
+        <textarea class="control" id="listrategyavoid" rows="3" placeholder="Generic announcements&#10;Politics or culture-war threads&#10;Claims outside my expertise">${esc(d.liStrategy.avoidTopics.join("\n"))}</textarea>
+      </div>
+      <div class="li" style="display:block">
+        <div class="field">Protect relationship variety</div>
+        <div class="goal-inputs">
+          <label><span>Cooldown hours</span><input class="control" id="listrategycooldown" type="number" min="24" max="336" value="${d.liStrategy.relationship.sameAuthorCooldownHours}"/></label>
+          <label><span>Max / 7 days</span><input class="control" id="listrategymax7" type="number" min="1" max="7" value="${d.liStrategy.relationship.maxSameAuthor7d}"/></label>
+          <label><span>Max / 30 days</span><input class="control" id="listrategymax30" type="number" min="1" max="20" value="${d.liStrategy.relationship.maxSameAuthor30d}"/></label>
+        </div>
+        <label class="data-consent" style="margin-top:8px"><input type="checkbox" id="listrategyoneauthor" ${d.liStrategy.relationship.oneActivePostPerAuthor ? "checked" : ""}/> <span>Show one best active post per author</span></label>
+        <div style="display:flex;gap:8px;margin-top:10px"><button class="btn primary" data-action="save-li-strategy">Save LinkedIn thesis</button>${liStrategyConfigured ? `<button class="btn" data-action="clear-li-strategy">Clear thesis</button>` : ""}</div>
+      </div>
+    </div>
+  </details>
+
+  <details class="fold"><summary>LinkedIn comment voice <span class="field-hint">optional</span></summary><div class="list">
     <div class="li" style="display:block">
-      <div class="field">Daily goals <span class="field-hint">— zero turns a goal off</span></div>
+      <label class="field" for="livoice">LinkedIn comment voice <span class="field-hint">— optional · takes priority on LinkedIn</span></label>
+      <textarea class="control" id="livoice" rows="4" maxlength="2400" spellcheck="true" placeholder="Describe how you want to sound here, or paste 2–5 LinkedIn comments you are proud of…">${esc(d.liVoice)}</textarea>
+      <div class="field-hint" style="margin-top:6px">Used as style evidence only, never as proof that you have a job, client, result, or experience mentioned in an example. Stored locally and sent only when you request a LinkedIn draft.</div>
+    </div>
+    <div class="li"><button class="btn primary" data-action="save-x">Save voice</button></div>
+  </div></details>
+  </details>
+
+  <details class="fold" id="x-extra-tools">
+    <summary>Extra X tools <span class="field-hint">goals, products, data and progress</span></summary>
+    <details class="fold"><summary>Daily goals <span class="field-hint">optional</span></summary><div class="list">
+    <div class="li" style="display:block">
+      <div class="field">X daily goals <span class="field-hint">— X only · zero turns a goal off</span></div>
       <div class="goal-inputs">
         <label><span>Replies</span><input class="control" id="xgoalreplies" type="number" min="0" max="30" inputmode="numeric" value="${d.dailyGoals.replies}"/></label>
         <label><span>Posts</span><input class="control" id="xgoalposts" type="number" min="0" max="5" inputmode="numeric" value="${d.dailyGoals.posts}"/></label>
         <label><span>DM people</span><input class="control" id="xgoaldms" type="number" min="0" max="5" inputmode="numeric" value="${d.dailyGoals.dms}"/></label>
       </div>
       <div class="field-hint" style="margin-top:7px">The X dock counts verified replies, detected/marked posts, and unique people you explicitly mark as DM'd. Safety limits still win over goals.</div>
-      <button class="btn primary" data-action="save-x" style="margin-top:10px">${setupReady ? "Save changes" : "Save profile"}</button>
+      <button class="btn primary" data-action="save-x" style="margin-top:10px">Save goals</button>
     </div>
-  </div>
-  </details>
-
+    </div></details>
   <details class="fold">
-    <summary>Optional personalization <span class="field-hint">products &amp; draft defaults</span></summary>
+    <summary>X reply personalization <span class="field-hint">X-only products &amp; draft defaults</span></summary>
     <div class="list">
     <div class="li" style="display:block">
-      <div class="field">Your products <span class="field-hint">— name, link &amp; a one-liner each</span></div>
+      <div class="field">X products <span class="field-hint">— X only · name, link &amp; a one-liner each</span></div>
       <div id="prodrows">${(d.products.length ? d.products : [undefined]).map((p) => productRow(p)).join("")}</div>
       <button class="btn" data-action="add-product" style="padding:6px 11px;font-size:12px">+ Add product</button>
       <div class="field-hint" style="margin-top:6px">On a “drop your product” post, the copilot tags the best-fit product and drafts with it.</div>
@@ -799,7 +1005,7 @@ function render(d: ViewData): string {
   </details>
 
   <details class="fold"${d.postingModel ? " open" : ""}>
-    <summary>Personal posting model <span class="field-hint">${d.postingModel ? `${d.postingModel.rows.toLocaleString()} rows · ${postingModelIsActive(d.postingModel, d.xMyHandle) ? "active" : "paused"}` : "your CSV · local aggregates only"}</span></summary>
+    <summary>X personal posting model <span class="field-hint">${d.postingModel ? `${d.postingModel.rows.toLocaleString()} rows · ${postingModelIsActive(d.postingModel, d.xMyHandle) ? "active" : "paused"}` : "your X CSV · local aggregates only"}</span></summary>
     <div class="list">${personalPostingModelHTML(d)}</div>
   </details>
 
@@ -839,26 +1045,28 @@ function render(d: ViewData): string {
   </details>
 
   <details class="fold"${d.safety.level !== "healthy" ? " open" : ""}>
-    <summary>Progress &amp; account safety <span class="field-hint">${d.replyStats.week} replies this week · ${esc(d.safety.label)}</span></summary>
+    <summary>X progress &amp; account safety <span class="field-hint">${d.replyStats.week} replies this week · ${esc(d.safety.label)}</span></summary>
     <div class="list">${replyShowcaseHTML(d.replyStats)}${accountSafetyHTML(d.safety)}</div>
   </details>
 
   <details class="fold">
-    <summary>Profile experiment <span class="field-hint">one change · ${PROFILE_CHANGE_WINDOW_DAYS} days before vs after</span></summary>
+    <summary>X profile experiment <span class="field-hint">one change · ${PROFILE_CHANGE_WINDOW_DAYS} days before vs after</span></summary>
     <div class="list">${profileExperimentHTML(d)}</div>
   </details>
 
   <details class="fold">
-    <summary>Measured outcomes <span class="field-hint">${d.outcomes.state !== "ready" ? "still learning · min-N gated" : d.outcomes.settled > 0 ? `angles · sources · lanes · accounts · timing, from ${d.outcomes.settled} settled ${d.outcomes.settled === 1 ? "reply" : "replies"}` : "replies mapped · settled outcomes pending"}</span></summary>
+    <summary>X measured outcomes <span class="field-hint">${d.outcomes.state !== "ready" ? "still learning · min-N gated" : d.outcomes.settled > 0 ? `angles · sources · lanes · accounts · timing, from ${d.outcomes.settled} settled ${d.outcomes.settled === 1 ? "reply" : "replies"}` : "replies mapped · settled outcomes pending"}</span></summary>
     <div class="list">${measuredOutcomesHTML(d.outcomes)}</div>
   </details>
 
   <div class="dim" style="font-size:10.5px;margin:6px 2px 2px">Honesty gate: every learning panel stays silent below its minimum sample size — Goobi shows nothing rather than guessing.</div>
   <details class="fold">
-    <summary>Data diagnostics <span class="field-hint">why learning panels may be quiet</span></summary>
+    <summary>X data diagnostics <span class="field-hint">why X learning panels may be quiet</span></summary>
     <div class="list">${signalHealthHTML(d.signals)}</div>
   </details>
-  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, timeline text is sent to Claude to score &amp; draft. Reply actions are copy-only: Goobi never clicks Reply, fills X's composer, likes, submits, or posts for you.</div></div>
+  <div class="actions"><button class="btn primary" data-action="save-x">Save extra settings</button></div>
+  </details>
+  <div class="note" style="margin-top:6px">${ICON.lock}<div>On x.com, ${d.jev.selected ? analysisReady ? "Jev analyzes timeline text; Claude writes requested comments" : "Jev analysis is paused until you finish its setup; Claude writes requested comments" : "Claude analyzes timeline text and writes requested comments"}. Reply actions are copy-only: Goobi never clicks Reply, fills X's composer, likes, submits, or posts for you.</div></div>
   </div>`;
 }
 
@@ -885,7 +1093,19 @@ function send<T>(msg: Message): Promise<T> {
   return chrome.runtime.sendMessage(msg) as Promise<T>;
 }
 
+let onboardingDismissed = false;
+let onboardingActionPending = false;
+
 async function refresh() {
+  if (IS_EXT && !onboardingDismissed && !playground) {
+    const store = await chrome.storage.local.get(null);
+    if (shouldShowXOnboarding(store)) {
+      app.innerHTML = renderXOnboarding(store);
+      const face = document.getElementById("onboarding-goobi");
+      if (face) mountGoobi(face).setMood("idle");
+      return;
+    }
+  }
   const d = await getData();
   app.innerHTML = render(d);
   if (playground) {
@@ -995,6 +1215,34 @@ async function resolveMyFollowers(handle: string): Promise<void> {
 }
 
 async function dispatch(el: HTMLElement) {
+  const onboardingAction = el.dataset.action || "";
+  if (onboardingAction.startsWith("x-onboarding-")) {
+    if (onboardingActionPending) return;
+    if (onboardingAction === "x-onboarding-exit") {
+      onboardingDismissed = true;
+      await refresh();
+      return;
+    }
+    onboardingActionPending = true;
+    try {
+      const result = await handleXOnboardingAction(onboardingAction, document);
+      if (!result.handled || result.error) return;
+      onboardingDismissed = false;
+      await refresh();
+      if (result.launchX) {
+        await chrome.tabs.create({ url: "https://x.com/home" });
+        toast("Goobi is ready. Browse X and open the Goobi dock to draft your first reply.");
+      } else {
+        const heading = app.querySelector<HTMLElement>("h1");
+        if (heading) { heading.tabIndex = -1; heading.focus(); }
+      }
+    } catch {
+      const error = document.getElementById("x-onboarding-error");
+      if (error) { error.textContent = "Could not save setup. Please try again."; error.hidden = false; }
+      else toast("Could not finish setup. Reopen Guided X setup to continue.");
+    } finally { onboardingActionPending = false; }
+    return;
+  }
   const id = el.dataset.id ? Number(el.dataset.id) : undefined;
   try {
     switch (el.dataset.action) {
@@ -1057,6 +1305,37 @@ async function dispatch(el: HTMLElement) {
         renderRecs(lastRecs);
         break;
       }
+      case "save-jev": {
+        const key = (document.getElementById("jevkey") as HTMLInputElement | null)?.value.trim();
+        const fastAnalysis = (document.getElementById("jevanalysis") as HTMLInputElement | null)?.checked === true;
+        const enabled = (document.getElementById("jevconsent") as HTMLInputElement | null)?.checked === true;
+        const stored = await chrome.storage.local.get(CONFIG.TYPESAFE_KEY_KEY);
+        if ((enabled || fastAnalysis) && !key && !stored[CONFIG.TYPESAFE_KEY_KEY]) { toast("Add your TypeSafe key to enable Jev."); return; }
+        await chrome.storage.local.set({
+          ...(key ? { [CONFIG.TYPESAFE_KEY_KEY]: key } : {}),
+          [CONFIG.ANALYSIS_PROVIDER_KEY]: fastAnalysis ? "jev" : "claude",
+          [CONFIG.JEV_ANALYSIS_CONSENT_KEY]: fastAnalysis ? "v1" : "",
+          [CONFIG.JEV_REVIEW_MODE_KEY]: enabled ? "shadow" : "off",
+          [CONFIG.JEV_REVIEW_CONSENT_KEY]: enabled ? JEV_CONSENT_VERSION : "",
+        });
+        await refresh();
+        toast(fastAnalysis ? "Jev analyzes opportunities. Claude writes comments." : "Claude analyzes opportunities and writes comments.");
+        break;
+      }
+      case "clear-jev-reviews": {
+        await chrome.storage.local.remove(CONFIG.JEV_REVIEW_LOG_KEY);
+        await refresh();
+        toast("Review summaries cleared.");
+        break;
+      }
+      case "remove-jev": {
+        // Keep an explicit empty value so local seeding cannot reconnect this key.
+        await chrome.storage.local.set({ [CONFIG.ANALYSIS_PROVIDER_KEY]: "claude", [CONFIG.JEV_ANALYSIS_CONSENT_KEY]: "", [CONFIG.JEV_REVIEW_MODE_KEY]: "off", [CONFIG.JEV_REVIEW_CONSENT_KEY]: "", [CONFIG.TYPESAFE_KEY_KEY]: "" });
+        await chrome.storage.local.remove(CONFIG.JEV_REVIEW_LOG_KEY);
+        await refresh();
+        toast("Jev disconnected.");
+        break;
+      }
       case "save-key": {
         const input = document.getElementById("keyinput") as HTMLInputElement | null;
         const val = input?.value.trim();
@@ -1064,6 +1343,20 @@ async function dispatch(el: HTMLElement) {
         await chrome.storage.local.set({ [CONFIG.ANTHROPIC_KEY_KEY]: val });
         await refresh();
         toast("Key saved — Smart now calls Anthropic directly.");
+        break;
+      }
+      case "save-li-key": {
+        const input = document.getElementById("likeyinput") as HTMLInputElement | null;
+        const val = input?.value.trim();
+        if (!val) { toast("Paste your Anthropic key first."); return; }
+        const consent = document.getElementById("lidataconsent") as HTMLInputElement | null;
+        const gate = await chrome.storage.local.get([CONFIG.LI_DATA_CONSENT_KEY, CONFIG.X_NICHE_KEY, CONFIG.LI_STRATEGY_KEY]);
+        const alreadyConsented = gate[CONFIG.LI_DATA_CONSENT_KEY] === LI_CONSENT_VERSION;
+        if (!alreadyConsented && !consent?.checked) { toast("Review the LinkedIn data disclosure and agree before connecting Claude."); return; }
+        const hasProfile = Boolean(String(gate[CONFIG.X_NICHE_KEY] || "").trim()) || linkedInStrategyConfigured(gate[CONFIG.LI_STRATEGY_KEY]);
+        await chrome.storage.local.set({ [CONFIG.ANTHROPIC_KEY_KEY]: val, [CONFIG.LI_DATA_CONSENT_KEY]: LI_CONSENT_VERSION, [CONFIG.LI_COPILOT_KEY]: hasProfile });
+        await refresh();
+        toast(hasProfile ? "LinkedIn connected and ready." : "Key and consent saved. LinkedIn stays off — set your comment thesis next.");
         break;
       }
       case "save-x-key": {
@@ -1086,11 +1379,43 @@ async function dispatch(el: HTMLElement) {
         toast("X data use accepted — reload X to start Goobi.");
         break;
       }
+      case "accept-li-data": {
+        const consent = document.getElementById("lidataconsent") as HTMLInputElement | null;
+        if (!consent?.checked) { toast("Check the agreement box first."); return; }
+        const profile = await chrome.storage.local.get([CONFIG.X_NICHE_KEY, CONFIG.LI_STRATEGY_KEY]);
+        const hasProfile = Boolean(String(profile[CONFIG.X_NICHE_KEY] || "").trim()) || linkedInStrategyConfigured(profile[CONFIG.LI_STRATEGY_KEY]);
+        await chrome.storage.local.set({ [CONFIG.LI_DATA_CONSENT_KEY]: LI_CONSENT_VERSION, [CONFIG.LI_COPILOT_KEY]: hasProfile });
+        await refresh();
+        toast(hasProfile ? "LinkedIn data use accepted — the copilot is ready." : "LinkedIn data use accepted. The copilot stays off — set your comment thesis next.");
+        break;
+      }
+      case "focus-shared-profile": {
+        const profile = document.getElementById("shared-conversation-profile") as HTMLDetailsElement | null;
+        if (profile) profile.open = true;
+        const focus = document.getElementById("xniche") as HTMLTextAreaElement | null;
+        if (focus) {
+          focus.focus();
+          focus.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        }
+        break;
+      }
+      case "focus-li-strategy": {
+        const setup = document.getElementById("linkedin-setup") as HTMLDetailsElement | null;
+        if (setup) setup.open = true;
+        const profile = document.getElementById("linkedin-comment-thesis") as HTMLDetailsElement | null;
+        if (profile) profile.open = true;
+        const arena = document.getElementById("listrategyvertical") as HTMLInputElement | null;
+        if (arena) {
+          arena.focus();
+          arena.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        }
+        break;
+      }
       case "clear-key": {
         await chrome.storage.local.remove([CONFIG.ANTHROPIC_KEY_KEY, CONFIG.SMART_ENABLED_KEY]);
-        await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: false });
+        await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: false, [CONFIG.LI_COPILOT_KEY]: false });
         await refresh();
-        toast("Key removed — reload X to stop the copilot on open pages.");
+        toast("Key removed — Smart mode and both copilots are now off.");
         break;
       }
       case "reset-pace": {
@@ -1177,6 +1502,33 @@ async function dispatch(el: HTMLElement) {
         (document.getElementById("xanalyticscsv") as HTMLInputElement | null)?.click();
         break;
       }
+      case "save-li-strategy": {
+        const value = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null)?.value ?? "";
+        const strategy = normalizeLinkedInStrategy({
+          vertical: value("listrategyvertical"),
+          reputationThesis: value("listrategyreputation"),
+          targetAudiences: value("listrategyaudiences"),
+          targetContexts: value("listrategycontexts"),
+          contributionLanes: value("listrategylanes"),
+          avoidTopics: value("listrategyavoid"),
+          relationship: {
+            sameAuthorCooldownHours: value("listrategycooldown"),
+            maxSameAuthor7d: value("listrategymax7"),
+            maxSameAuthor30d: value("listrategymax30"),
+            oneActivePostPerAuthor: (document.getElementById("listrategyoneauthor") as HTMLInputElement | null)?.checked !== false,
+          },
+        });
+        await chrome.storage.local.set({ [CONFIG.LI_STRATEGY_KEY]: strategy });
+        await refresh();
+        toast("LinkedIn comment thesis saved. Visible opportunities will be rescored for person and post fit.");
+        break;
+      }
+      case "clear-li-strategy": {
+        await chrome.storage.local.remove(CONFIG.LI_STRATEGY_KEY);
+        await refresh();
+        toast("LinkedIn comment thesis cleared. Shared focus remains available as a fallback.");
+        break;
+      }
       case "clear-posting-model": {
         if (!window.confirm("Clear the aggregate personal posting model? You can rebuild it later by importing the CSV again.")) break;
         await chrome.storage.local.remove(CONFIG.X_POSTING_MODEL_KEY);
@@ -1188,6 +1540,7 @@ async function dispatch(el: HTMLElement) {
       case "save-x": {
         const niche = (document.getElementById("xniche") as HTMLTextAreaElement | null)?.value ?? "";
         const voice = (document.getElementById("xvoice") as HTMLTextAreaElement | null)?.value ?? "";
+        const liVoice = ((document.getElementById("livoice") as HTMLTextAreaElement | null)?.value ?? "").trim().slice(0, 2_400);
         const soul = normalizeSoul((document.getElementById("xsoul") as HTMLTextAreaElement | null)?.value ?? "");
         const dailyGoals = normalizeDailyGoals({
           replies: (document.getElementById("xgoalreplies") as HTMLInputElement | null)?.value,
@@ -1199,15 +1552,16 @@ async function dispatch(el: HTMLElement) {
         const typedKey = ((document.getElementById("twttrkey") as HTMLInputElement | null)?.value ?? "").trim();
         const myHandle = ((document.getElementById("xmyhandle") as HTMLInputElement | null)?.value ?? "").trim().replace(/^@+/, "");
         const premium = (document.getElementById("xpremium") as HTMLSelectElement | null)?.value ?? "";
-        const prev = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.TWTTR_KEY_KEY]);
+        const prev = await chrome.storage.local.get([CONFIG.X_MY_HANDLE_KEY, CONFIG.TWTTR_KEY_KEY, CONFIG.LI_STRATEGY_KEY]);
         const prevHandle = ((prev[CONFIG.X_MY_HANDLE_KEY] as string) || "").toLowerCase();
         const storedKey = (prev[CONFIG.TWTTR_KEY_KEY] as string) || "";
-        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.X_SOUL_KEY]: soul, [CONFIG.X_DAILY_GOALS_KEY]: dailyGoals, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle, [CONFIG.X_PREMIUM_KEY]: premium };
+        const set: Record<string, unknown> = { [CONFIG.X_NICHE_KEY]: niche, [CONFIG.X_VOICE_KEY]: voice, [CONFIG.LI_VOICE_KEY]: liVoice, [CONFIG.X_SOUL_KEY]: soul, [CONFIG.X_DAILY_GOALS_KEY]: dailyGoals, [CONFIG.X_DEFAULT_ANGLE_KEY]: defAngle, [CONFIG.X_DEFAULT_PRODUCT_KEY]: defProduct, [CONFIG.X_MY_HANDLE_KEY]: myHandle, [CONFIG.X_PREMIUM_KEY]: premium };
+        if (!niche.trim() && !linkedInStrategyConfigured(prev[CONFIG.LI_STRATEGY_KEY])) set[CONFIG.LI_COPILOT_KEY] = false;
         if (typedKey) set[CONFIG.TWTTR_KEY_KEY] = typedKey; // the key field isn't pre-filled, so only overwrite when a new one is typed
         if (!myHandle || myHandle.toLowerCase() !== prevHandle) set[CONFIG.X_MY_FOLLOWERS_KEY] = 0; // drop a stale follower base for a new/cleared handle
         await chrome.storage.local.set(set);
         const products = await saveProducts();
-        toast(`Copilot settings saved${products.length ? ` (${products.length} product${products.length === 1 ? "" : "s"})` : ""}.`);
+        toast(`${niche.trim() ? "Conversation settings saved" : linkedInStrategyConfigured(prev[CONFIG.LI_STRATEGY_KEY]) ? "Settings saved. LinkedIn uses its comment thesis" : "Settings saved. LinkedIn stays off until you add a comment thesis"}${products.length ? ` (${products.length} X product${products.length === 1 ? "" : "s"})` : ""}.`);
         if (myHandle && (typedKey || storedKey)) void resolveMyFollowers(myHandle); // best-effort, sizes the reach sweet-spot
         await refresh(); // re-render so the product favicon previews update
         break;
@@ -1246,7 +1600,13 @@ async function dispatch(el: HTMLElement) {
           if (!samples.length) { toast(`@${user.handle} (${user.followers.toLocaleString()} followers): no recent replies to learn from. Reply to a few posts, then retry.`); return; }
           const voice = buildVoiceProfile(user.handle, samples);
           const ta = document.getElementById("xvoice") as HTMLTextAreaElement | null;
-          if (ta) { ta.value = voice; ta.scrollIntoView({ block: "center" }); }
+          if (ta) {
+            const profile = document.getElementById("shared-conversation-profile") as HTMLDetailsElement | null;
+            const voiceSettings = document.getElementById("conversation-voice") as HTMLDetailsElement | null;
+            if (profile) profile.open = true;
+            if (voiceSettings) voiceSettings.open = true;
+            ta.value = voice; ta.scrollIntoView({ block: "center" });
+          }
           await chrome.storage.local.set({ [CONFIG.X_VOICE_KEY]: voice });
           toast(`Learned your voice from ${samples.length} repl${samples.length === 1 ? "y" : "ies"} by @${user.handle}. Review the voice box, then Save.`);
         } catch {
@@ -1368,6 +1728,24 @@ async function onChange(e: Event) {
     }
     await chrome.storage.local.set({ [CONFIG.X_COPILOT_KEY]: target.checked });
     toast(target.checked ? "X copilot on — reload x.com to apply." : "X copilot off — reload x.com.");
+  } else if (target.id === "lion") {
+    if (target.checked) {
+      const gate = await chrome.storage.local.get([CONFIG.LI_DATA_CONSENT_KEY, CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_NICHE_KEY, CONFIG.LI_STRATEGY_KEY]);
+      if (gate[CONFIG.LI_DATA_CONSENT_KEY] !== LI_CONSENT_VERSION) {
+        target.checked = false; toast("Review and accept the LinkedIn data disclosure first."); return;
+      }
+      if (!gate[CONFIG.ANTHROPIC_KEY_KEY]) {
+        target.checked = false; toast("Add your Anthropic key before turning on the LinkedIn copilot."); return;
+      }
+      if (!String(gate[CONFIG.X_NICHE_KEY] || "").trim() && !linkedInStrategyConfigured(gate[CONFIG.LI_STRATEGY_KEY])) {
+        target.checked = false;
+        await chrome.storage.local.set({ [CONFIG.LI_COPILOT_KEY]: false });
+        toast("Set your LinkedIn comment thesis or shared focus before turning on the LinkedIn copilot.");
+        return;
+      }
+    }
+    await chrome.storage.local.set({ [CONFIG.LI_COPILOT_KEY]: target.checked });
+    toast(target.checked ? "LinkedIn copilot on." : "LinkedIn copilot off.");
   }
 }
 
@@ -1396,12 +1774,12 @@ app.addEventListener("input", onInput);
 app.addEventListener("change", onChange);
 app.addEventListener("keydown", onKeydown);
 
-// The side panel can stay open while the x.com content script confirms a reply.
-// Re-read the shared ledger so totals, pace, and Goobi's state update immediately.
+// The side panel can stay open while either content script confirms activity.
+// Re-read the relevant ledger so totals and Goobi's state update immediately.
 if (IS_EXT) {
   let replyRefreshTimer: number | undefined;
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || (!changes[CONFIG.X_REPLY_LOG_KEY] && !changes[CONFIG.X_PACE_RESET_KEY])) return;
+    if (area !== "local" || (!changes[CONFIG.X_REPLY_LOG_KEY] && !changes[CONFIG.LI_COMMENT_LOG_KEY] && !changes[CONFIG.X_PACE_RESET_KEY])) return;
     if (replyRefreshTimer) clearTimeout(replyRefreshTimer);
     replyRefreshTimer = window.setTimeout(() => { replyRefreshTimer = undefined; void refresh(); }, 60);
   });

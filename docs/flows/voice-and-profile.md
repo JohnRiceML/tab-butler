@@ -16,7 +16,7 @@ This is the one place you describe yourself so every draft sounds like *you* and
 6. **The profile coach** (renders in the dock's insights panel): visit your OWN profile once with Goobi on and it harvests the conversion surface at $0 (pinned post id + bio length, DOM-only, guarded against half-loaded pages). `profile-check.ts` then reports measured findings — "your pinned post ranks #4 of your last 15 by views — your #1 isn't pinned", empty/thin bio — because replies earn the profile CLICK but the profile converts it into the FOLLOW, and that surface was previously untouched by the product. Silent without a harvest; never guesses.
 7. Paste a **RapidAPI key** (twitter241 provider) to enable reach-aware ranking + voice-learning; a monthly usage meter shows if a key is stored.
 8. Type your **X handle** and click **"Learn my voice."** A toast streams progress ("Reading @handle's recent replies…"); on success the **voice** textarea is filled with your real replies and scrolled into view.
-9. Edit the voice box if desired. Fill **SOUL.md** directly or use the starter template; voice controls style, while SOUL.md controls point of view and boundaries.
+9. Edit the voice box if desired. Fill **SOUL.md** directly or use the starter template; voice controls style, while SOUL.md is your curated digital brain. Capture beliefs, what you want to be known for, real stories and lessons, approved phrasing, and boundaries. Keep tentative ideas labeled. Goobi revisits your core ideas through fresh applications; you remain the source of the thinking and review every draft.
 10. Set daily goals for verified Replies, Posts, and unique people DM'd (`0` disables one), then click **Save changes**.
 
 ## Settings survive reinstalls: the local seed file
@@ -38,6 +38,17 @@ A plain extension **reload keeps everything** (`chrome.storage.local` persists).
 **How this feeds other flows:** `xNiche` decides what is relevant; `xVoice` controls style; `xSoulMd` supplies the user-authored point of view for explicit reply/post generation; products/defaults steer applicable drafts. SOUL.md is not used as evidence and is not sent for DM drafts. `xDailyGoals` powers the cross-workspace daily scorecard. `xMyHandle` + `xMyFollowers` size the reach sweet spot and power account-scoped data.
 
 ## What is honest about it / limits
+
+### Continuity between posts and comments
+
+X reply drafts and LinkedIn comment drafts now receive a separate **AUTHOR CONTINUITY** block from `xMyPosts`, scoped to the saved `xMyHandle`. This uses the original-post cache already collected by the X copilot; drafting does not trigger a new history fetch. The broker supplies the history itself and rejects webpage-supplied biography. A handle mismatch produces no history.
+
+The context includes up to ten complete posts within 6,000 text characters, prioritizing the two newest posts and topic overlap, then displaying them newest first with publication dates where available. Cache capture time is labeled separately. Older cached history remains useful evidence of past experience, but is never presented as a complete or necessarily current record. Voice samples remain style-only. Original posts supply dated self-reports and stated positions; explicit current user corrections can supersede them. Merely mentioning a tool does not establish hands-on use, and testing does not imply production experience.
+
+Both system prompts check experience and stance against this history, SOUL.md, and explicit user details. A deterministic guard additionally catches common unsupported claims of inexperience, such as “I haven't tried it.” Unrelated product details cannot disable that guard. It requires an explicit matching assertion in current user evidence; older posts do not establish present inexperience. X gets one targeted repair; LinkedIn uses its existing single repair pass. Repeated failure returns a readable error instead of the generated text. History/account updates cancel in-flight work using superseded context.
+
+This is bounded continuity, not a complete long-term memory or a semantic proof checker. Nuanced stance contradictions still rely on the model's interpretation. Posts not yet captured are unavailable, and an empty cache means unknown experience. The zero-cost regression suite tests account isolation, chronology, context limits, original posts reaching both real drafting paths, and the GPT-6 testing/inexperience failure with mocked provider responses; it does not establish live model quality.
+
 - **Voice is MEASURED, not invented:** the profile is built only from replies the API confirms the user authored (`authorId === userId`), with a guard that drops trivial one-word/emoji samples so the drafter learns real prose. The prompt explicitly says "Do not copy them verbatim."
 - **Followers/replies are a third-party PROXY:** all X data comes from twitter241 on RapidAPI, *not* X's official API — the UI states this plainly ("Programmatic X data access is outside X's API terms, so opt in knowingly. Stays off until you add a key."). `following` is left `undefined` (not 0) when absent so reciprocity logic stays neutral rather than treating the user as a broadcaster.
 - **Copy-only keystone:** the X-tab footer states that Goobi never clicks Reply, fills X's composer, likes, submits, or posts. The user pastes drafts manually.

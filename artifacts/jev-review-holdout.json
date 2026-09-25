@@ -1,0 +1,1896 @@
+{
+  "kind": "jev-comment-review-evaluation",
+  "generatedAt": "2026-09-21T23:22:34.595Z",
+  "model": "jev-1.13.0",
+  "note": "Fictional hand-authored fixtures. Labels are hidden from the API. Small fixture agreement is not production accuracy or calibrated confidence. No user account content was sent.",
+  "summary": {
+    "requested": 40,
+    "completed": 40,
+    "errors": 0,
+    "exactLabelMatches": 38,
+    "labelChecks": 68,
+    "labelMismatches": 2,
+    "inputTokens": 43756,
+    "estimatedCostUsd": 0.0018377520000000002,
+    "p50Ms": 144,
+    "p95Ms": 261
+  },
+  "rows": [
+    {
+      "id": "conditional-exception",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 295,
+        "inputTokens": 1111,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.99,
+              "no_stance": 0.01
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.96,
+            "probabilities": {
+              "paraphrase": 0.01,
+              "praise_only": 0,
+              "unclear": 0.01,
+              "adds_value": 0.98
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "conditional-exception",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 261,
+        "inputTokens": 1111,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_stance": 0.01,
+              "contradicts": 0,
+              "aligned": 0.99,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.99,
+            "probabilities": {
+              "paraphrase": 0.01,
+              "praise_only": 0,
+              "adds_value": 0.99,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-real-test",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 184,
+        "inputTokens": 1120,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.77,
+            "probabilities": {
+              "no_claim": 0.02,
+              "unclear": 0,
+              "unsupported": 0.15,
+              "supported": 0.83
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.61,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.71,
+              "no_stance": 0.29
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.7,
+            "probabilities": {
+              "adds_value": 0.77,
+              "praise_only": 0,
+              "paraphrase": 0.23,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-real-test",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 165,
+        "inputTokens": 1120,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.87,
+            "probabilities": {
+              "supported": 0.9,
+              "no_claim": 0.01,
+              "unclear": 0,
+              "unsupported": 0.09
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.77,
+            "probabilities": {
+              "aligned": 0.83,
+              "unclear": 0,
+              "contradicts": 0,
+              "no_stance": 0.17
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.68,
+            "probabilities": {
+              "adds_value": 0.76,
+              "paraphrase": 0.24,
+              "unclear": 0,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-exaggeration",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 166,
+        "inputTokens": 1116,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.96,
+            "probabilities": {
+              "unclear": 0.01,
+              "supported": 0,
+              "no_claim": 0.02,
+              "unsupported": 0.97
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.93,
+            "probabilities": {
+              "unclear": 0.01,
+              "contradicts": 0.01,
+              "no_stance": 0.95,
+              "aligned": 0.03
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.5,
+            "probabilities": {
+              "unclear": 0.35,
+              "praise_only": 0,
+              "adds_value": 0.63,
+              "paraphrase": 0.02
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "history-exaggeration",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 169,
+        "inputTokens": 1116,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.97,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0.01,
+              "unsupported": 0.98,
+              "no_claim": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.9,
+            "probabilities": {
+              "unclear": 0.02,
+              "contradicts": 0.02,
+              "aligned": 0.04,
+              "no_stance": 0.92
+            }
+          },
+          "contribution": {
+            "choice": "unclear",
+            "confidence": 0.36,
+            "probabilities": {
+              "paraphrase": 0.02,
+              "unclear": 0.52,
+              "praise_only": 0.01,
+              "adds_value": 0.45
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "borrowed-experience",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 121,
+        "inputTokens": 1075,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.98,
+            "probabilities": {
+              "unsupported": 0.99,
+              "no_claim": 0.01,
+              "supported": 0,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "contradicts": 0,
+              "no_stance": 0.99,
+              "aligned": 0.01,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 0.27,
+            "probabilities": {
+              "paraphrase": 0.33,
+              "adds_value": 0.21,
+              "unclear": 0,
+              "praise_only": 0.46
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "borrowed-experience",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 170,
+        "inputTokens": 1075,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.98,
+            "probabilities": {
+              "unsupported": 0.99,
+              "no_claim": 0.01,
+              "supported": 0,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "contradicts": 0,
+              "aligned": 0.01,
+              "no_stance": 0.99,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "paraphrase",
+            "confidence": 0.27,
+            "probabilities": {
+              "praise_only": 0.4,
+              "paraphrase": 0.46,
+              "adds_value": 0.14,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "specific-support",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 120,
+        "inputTokens": 1080,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.01,
+              "no_stance": 0.99
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "unclear": 0,
+              "praise_only": 0,
+              "adds_value": 1
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "specific-support",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 133,
+        "inputTokens": 1080,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01,
+              "supported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "no_stance": 0.99,
+              "aligned": 0.01,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "praise_only": 0,
+              "unclear": 0,
+              "adds_value": 1
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "no-brand-shoehorn",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 217,
+        "inputTokens": 1095,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0.01,
+              "no_claim": 0.99
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.84,
+            "probabilities": {
+              "aligned": 0.1,
+              "unclear": 0.02,
+              "no_stance": 0.88,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.92,
+            "probabilities": {
+              "unclear": 0,
+              "paraphrase": 0.06,
+              "adds_value": 0.94,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "no-brand-shoehorn",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 148,
+        "inputTokens": 1095,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.98,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0.01,
+              "no_claim": 0.99
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.82,
+            "probabilities": {
+              "no_stance": 0.87,
+              "aligned": 0.1,
+              "unclear": 0.03,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.93,
+            "probabilities": {
+              "paraphrase": 0.05,
+              "unclear": 0,
+              "adds_value": 0.95,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "faithful-paraphrase",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 136,
+        "inputTokens": 1096,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.17,
+            "probabilities": {
+              "no_claim": 0.38,
+              "supported": 0.3,
+              "unclear": 0.01,
+              "unsupported": 0.31
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.87,
+            "probabilities": {
+              "aligned": 0.09,
+              "contradicts": 0,
+              "unclear": 0,
+              "no_stance": 0.91
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.86,
+            "probabilities": {
+              "praise_only": 0,
+              "paraphrase": 0.1,
+              "unclear": 0,
+              "adds_value": 0.9
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": [
+        {
+          "dimension": "evidence",
+          "expected": "supported",
+          "actual": "no_claim"
+        }
+      ]
+    },
+    {
+      "id": "faithful-paraphrase",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 167,
+        "inputTokens": 1096,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.42,
+            "probabilities": {
+              "supported": 0.56,
+              "unclear": 0.02,
+              "unsupported": 0.31,
+              "no_claim": 0.11
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.86,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.1,
+              "no_stance": 0.9
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.8,
+            "probabilities": {
+              "praise_only": 0,
+              "unclear": 0.01,
+              "adds_value": 0.85,
+              "paraphrase": 0.14
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "question-not-claim",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 153,
+        "inputTokens": 1083,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "supported": 0,
+              "unsupported": 0,
+              "unclear": 0,
+              "no_claim": 1
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.95,
+            "probabilities": {
+              "aligned": 0.03,
+              "unclear": 0,
+              "contradicts": 0,
+              "no_stance": 0.97
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "paraphrase": 0,
+              "praise_only": 0,
+              "adds_value": 1
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "question-not-claim",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 123,
+        "inputTokens": 1083,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "supported": 0,
+              "no_claim": 1,
+              "unclear": 0,
+              "unsupported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.97,
+            "probabilities": {
+              "aligned": 0.02,
+              "unclear": 0,
+              "contradicts": 0,
+              "no_stance": 0.98
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "adds_value": 1,
+              "paraphrase": 0,
+              "unclear": 0,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "opinion-not-biography",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 119,
+        "inputTokens": 1085,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "no_claim": 1,
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.91,
+            "probabilities": {
+              "unclear": 0,
+              "aligned": 0.02,
+              "no_stance": 0.93,
+              "contradicts": 0.04
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "praise_only": 0,
+              "unclear": 0,
+              "adds_value": 1
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "opinion-not-biography",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 104,
+        "inputTokens": 1085,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "unsupported": 0,
+              "supported": 0,
+              "no_claim": 1
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.96,
+            "probabilities": {
+              "unclear": 0,
+              "aligned": 0.01,
+              "no_stance": 0.97,
+              "contradicts": 0.02
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "paraphrase": 0,
+              "praise_only": 0,
+              "adds_value": 1
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "praise-synonyms",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 144,
+        "inputTokens": 1078,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_claim": 0.99,
+              "unclear": 0,
+              "supported": 0,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.97,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.03,
+              "no_stance": 0.97
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "unclear": 0,
+              "adds_value": 0,
+              "praise_only": 1
+            }
+          }
+        }
+      },
+      "flags": [
+        "empty-praise"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "praise-synonyms",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 0,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 121,
+        "inputTokens": 1078,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unsupported": 0.01,
+              "unclear": 0,
+              "no_claim": 0.99
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.98,
+            "probabilities": {
+              "aligned": 0.02,
+              "contradicts": 0,
+              "no_stance": 0.98,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 1,
+            "probabilities": {
+              "praise_only": 1,
+              "unclear": 0,
+              "paraphrase": 0,
+              "adds_value": 0
+            }
+          }
+        }
+      },
+      "flags": [
+        "empty-praise"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "conditional-exception",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 132,
+        "inputTokens": 1111,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_claim": 0.99,
+              "unclear": 0,
+              "supported": 0,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.99,
+              "no_stance": 0.01
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.97,
+            "probabilities": {
+              "paraphrase": 0.01,
+              "unclear": 0.01,
+              "adds_value": 0.98,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "conditional-exception",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 162,
+        "inputTokens": 1111,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_claim": 0.99,
+              "supported": 0,
+              "unsupported": 0.01,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.99,
+            "probabilities": {
+              "contradicts": 0,
+              "no_stance": 0.01,
+              "aligned": 0.99,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.99,
+            "probabilities": {
+              "paraphrase": 0.01,
+              "praise_only": 0,
+              "adds_value": 0.99,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-real-test",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 131,
+        "inputTokens": 1120,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.77,
+            "probabilities": {
+              "unsupported": 0.15,
+              "no_claim": 0.02,
+              "unclear": 0,
+              "supported": 0.83
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.67,
+            "probabilities": {
+              "aligned": 0.75,
+              "no_stance": 0.25,
+              "unclear": 0,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.67,
+            "probabilities": {
+              "praise_only": 0,
+              "adds_value": 0.75,
+              "paraphrase": 0.25,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-real-test",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 179,
+        "inputTokens": 1120,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.86,
+            "probabilities": {
+              "supported": 0.89,
+              "unclear": 0,
+              "unsupported": 0.1,
+              "no_claim": 0.01
+            }
+          },
+          "stance": {
+            "choice": "aligned",
+            "confidence": 0.78,
+            "probabilities": {
+              "contradicts": 0,
+              "aligned": 0.84,
+              "unclear": 0,
+              "no_stance": 0.16
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.61,
+            "probabilities": {
+              "adds_value": 0.71,
+              "paraphrase": 0.29,
+              "unclear": 0,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "history-exaggeration",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 142,
+        "inputTokens": 1116,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.96,
+            "probabilities": {
+              "unsupported": 0.97,
+              "no_claim": 0.02,
+              "supported": 0,
+              "unclear": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.91,
+            "probabilities": {
+              "contradicts": 0.01,
+              "no_stance": 0.93,
+              "aligned": 0.04,
+              "unclear": 0.02
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.36,
+            "probabilities": {
+              "paraphrase": 0.02,
+              "adds_value": 0.53,
+              "unclear": 0.45,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "history-exaggeration",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 267,
+        "inputTokens": 1116,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.97,
+            "probabilities": {
+              "no_claim": 0.01,
+              "unsupported": 0.98,
+              "unclear": 0.01,
+              "supported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.92,
+            "probabilities": {
+              "no_stance": 0.95,
+              "contradicts": 0.01,
+              "unclear": 0.02,
+              "aligned": 0.02
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.36,
+            "probabilities": {
+              "paraphrase": 0.02,
+              "adds_value": 0.52,
+              "praise_only": 0.01,
+              "unclear": 0.45
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "borrowed-experience",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 103,
+        "inputTokens": 1075,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.98,
+            "probabilities": {
+              "unsupported": 0.99,
+              "supported": 0,
+              "no_claim": 0.01,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.01,
+              "no_stance": 0.99
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 0.28,
+            "probabilities": {
+              "praise_only": 0.46,
+              "adds_value": 0.18,
+              "paraphrase": 0.36,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "borrowed-experience",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 162,
+        "inputTokens": 1075,
+        "answers": {
+          "evidence": {
+            "choice": "unsupported",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 1,
+              "no_claim": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_stance": 0.99,
+              "aligned": 0.01,
+              "unclear": 0,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 0.28,
+            "probabilities": {
+              "paraphrase": 0.43,
+              "unclear": 0,
+              "adds_value": 0.11,
+              "praise_only": 0.46
+            }
+          }
+        }
+      },
+      "flags": [
+        "unsupported-experience"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "specific-support",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 150,
+        "inputTokens": 1080,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_stance": 0.99,
+              "contradicts": 0,
+              "aligned": 0.01,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "praise_only": 0,
+              "adds_value": 1,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "specific-support",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 94,
+        "inputTokens": 1080,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.98,
+            "probabilities": {
+              "unclear": 0,
+              "unsupported": 0.01,
+              "no_claim": 0.99,
+              "supported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.99,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "no_stance": 0.99,
+              "aligned": 0.01
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "praise_only": 0,
+              "adds_value": 1,
+              "paraphrase": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "no-brand-shoehorn",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 139,
+        "inputTokens": 1095,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0.01,
+              "no_claim": 0.99
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.89,
+            "probabilities": {
+              "unclear": 0.02,
+              "contradicts": 0,
+              "aligned": 0.07,
+              "no_stance": 0.91
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.92,
+            "probabilities": {
+              "praise_only": 0,
+              "unclear": 0,
+              "adds_value": 0.94,
+              "paraphrase": 0.06
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "no-brand-shoehorn",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 118,
+        "inputTokens": 1095,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.98,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "no_claim": 0.99,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.8,
+            "probabilities": {
+              "unclear": 0.03,
+              "no_stance": 0.85,
+              "aligned": 0.12,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.91,
+            "probabilities": {
+              "unclear": 0,
+              "praise_only": 0,
+              "paraphrase": 0.06,
+              "adds_value": 0.9400000000000001
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "faithful-paraphrase",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 140,
+        "inputTokens": 1096,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.18,
+            "probabilities": {
+              "no_claim": 0.39,
+              "unclear": 0.01,
+              "unsupported": 0.33,
+              "supported": 0.27
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.89,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.08,
+              "no_stance": 0.92
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.87,
+            "probabilities": {
+              "praise_only": 0,
+              "unclear": 0,
+              "adds_value": 0.91,
+              "paraphrase": 0.09
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": [
+        {
+          "dimension": "evidence",
+          "expected": "supported",
+          "actual": "no_claim"
+        }
+      ]
+    },
+    {
+      "id": "faithful-paraphrase",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 115,
+        "inputTokens": 1096,
+        "answers": {
+          "evidence": {
+            "choice": "supported",
+            "confidence": 0.45,
+            "probabilities": {
+              "no_claim": 0.1,
+              "supported": 0.59,
+              "unclear": 0.02,
+              "unsupported": 0.29
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.84,
+            "probabilities": {
+              "contradicts": 0,
+              "aligned": 0.12,
+              "no_stance": 0.88,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 0.84,
+            "probabilities": {
+              "paraphrase": 0.11,
+              "adds_value": 0.89,
+              "unclear": 0,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "question-not-claim",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 157,
+        "inputTokens": 1083,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "no_claim": 1,
+              "unsupported": 0,
+              "supported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.95,
+            "probabilities": {
+              "unclear": 0,
+              "aligned": 0.03,
+              "no_stance": 0.97,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "unclear": 0,
+              "adds_value": 1,
+              "praise_only": 0,
+              "paraphrase": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "question-not-claim",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 168,
+        "inputTokens": 1083,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "no_claim": 1,
+              "unclear": 0,
+              "supported": 0,
+              "unsupported": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.98,
+            "probabilities": {
+              "unclear": 0,
+              "no_stance": 0.98,
+              "aligned": 0.02,
+              "contradicts": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "unclear": 0,
+              "adds_value": 1,
+              "praise_only": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "opinion-not-biography",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 116,
+        "inputTokens": 1085,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0,
+              "no_claim": 1
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.94,
+            "probabilities": {
+              "aligned": 0.02,
+              "contradicts": 0.03,
+              "no_stance": 0.95,
+              "unclear": 0
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "praise_only": 0,
+              "adds_value": 1,
+              "paraphrase": 0,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "opinion-not-biography",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 139,
+        "inputTokens": 1085,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 1,
+            "probabilities": {
+              "unsupported": 0,
+              "supported": 0,
+              "no_claim": 1,
+              "unclear": 0
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.93,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0.03,
+              "aligned": 0.02,
+              "no_stance": 0.95
+            }
+          },
+          "contribution": {
+            "choice": "adds_value",
+            "confidence": 1,
+            "probabilities": {
+              "paraphrase": 0,
+              "adds_value": 1,
+              "praise_only": 0,
+              "unclear": 0
+            }
+          }
+        }
+      },
+      "flags": [],
+      "mismatches": []
+    },
+    {
+      "id": "praise-synonyms",
+      "split": "holdout",
+      "platform": "x",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 131,
+        "inputTokens": 1078,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.98,
+            "probabilities": {
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0.01,
+              "no_claim": 0.99
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.97,
+            "probabilities": {
+              "unclear": 0,
+              "contradicts": 0,
+              "aligned": 0.03,
+              "no_stance": 0.97
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 1,
+            "probabilities": {
+              "praise_only": 1,
+              "unclear": 0,
+              "adds_value": 0,
+              "paraphrase": 0
+            }
+          }
+        }
+      },
+      "flags": [
+        "empty-praise"
+      ],
+      "mismatches": []
+    },
+    {
+      "id": "praise-synonyms",
+      "split": "holdout",
+      "platform": "linkedin",
+      "repeat": 1,
+      "review": {
+        "version": "v1",
+        "model": "jev-1.13.0",
+        "latencyMs": 150,
+        "inputTokens": 1078,
+        "answers": {
+          "evidence": {
+            "choice": "no_claim",
+            "confidence": 0.99,
+            "probabilities": {
+              "no_claim": 0.99,
+              "supported": 0,
+              "unclear": 0,
+              "unsupported": 0.01
+            }
+          },
+          "stance": {
+            "choice": "no_stance",
+            "confidence": 0.98,
+            "probabilities": {
+              "contradicts": 0,
+              "aligned": 0.02,
+              "unclear": 0,
+              "no_stance": 0.98
+            }
+          },
+          "contribution": {
+            "choice": "praise_only",
+            "confidence": 1,
+            "probabilities": {
+              "adds_value": 0,
+              "paraphrase": 0,
+              "unclear": 0,
+              "praise_only": 1
+            }
+          }
+        }
+      },
+      "flags": [
+        "empty-praise"
+      ],
+      "mismatches": []
+    }
+  ]
+}

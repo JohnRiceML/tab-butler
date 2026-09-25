@@ -2,7 +2,7 @@
   "name": "tab-butler-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "Goobi — MV3 X reply copilot and local-first tab manager with an opt-in Claude layer.",
+  "description": "Goobi — MV3 X reply and LinkedIn comment copilots with a local-first tab manager and opt-in Claude layer.",
   "type": "module",
   "engines": {
     "node": ">=20"

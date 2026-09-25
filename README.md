@@ -1,7 +1,12 @@
 # Goobi
 
-A draft-only **X/Twitter reply copilot** with a cute pixel pet — plus the
-local-first **tab manager** it grew out of. Made smart by Claude (BYO key).
+A draft-only **X/Twitter reply and LinkedIn comment copilot** with a cute pixel pet — plus the
+local-first **tab manager** it grew out of. The recommended setup uses **Jev to find
+conversations and Claude to draft replies**, with your own API keys.
+
+Start with one loop: browse X, choose a reply spot, draft, then copy and post yourself.
+Replies and Comments are the main views; search, post ideas, DMs, and growth tools
+remain available from **More tools**. No RapidAPI key is needed for the basic feed flow.
 
 **What makes it different:** scoring and coaching are grounded in **X's
 open-sourced ranking code** (checked claim-by-claim against
@@ -14,8 +19,15 @@ size rather than guessing.
 
 A public, standalone version of that algorithm read — how X's For You ranking works as of the May 2026 open-source release, with per-claim provenance — lives at [docs/public/how-x-ranks-2026.md](docs/public/how-x-ranks-2026.md).
 
-- **Finds posts worth replying to** — scores your timeline with Claude, marks the
+- **Finds posts worth replying to** — scores your timeline with Claude by default, marks the
   good ones in-feed with an explainable growth lane, and ranks them in an always-on dock.
+- **Finds LinkedIn comment opportunities** — a separate, focused feed radar evaluates
+  person fit, post fit, and whether you have a truthful contribution; incomplete, generic, and high-risk fits fail closed. It drafts a
+  specific comment from LinkedIn-first voice notes, shared voice, and an optional non-stored real detail,
+  shows the post author's local profile image, and copies it for manual review. **Copy & review**
+  immediately labels the item **Commented**, records a local activity mark, and removes it from
+  the queue; Undo is available. This shortcut is not platform verification. It never clicks Comment, fills a composer, reacts, connects,
+  follows, or submits on your behalf.
 - **Brings warm comments to the top** — a first-class Comments queue prioritizes
   recent people who replied to or mentioned you, with reply-history matching and
   a manual done control. Cold Target discovery stays available one level down.
@@ -32,10 +44,18 @@ A public, standalone version of that algorithm read — how X's For You ranking 
   live candidate is pinned as **Best observed reach opening now**, using content fit × live
   opportunity with only a bounded measured-momentum lift—not simply the biggest account.
   Premium is conversation context, never a promised For You or impressions boost.
-- **Keeps today's work visible** — a top-level scorecard tracks verified replies,
+- **Keeps today's work available** — expand today's pace details for a scorecard of verified replies,
   posts, and unique people you marked as DM'd against your own conservative goals.
 - **Writes from your `SOUL.md`** — a local, user-owned creative brief supplies beliefs,
   earned experience, recurring themes, and boundaries while learned voice controls style.
+- **Offers Jev-only fast analysis** — one toggle switches X and LinkedIn opportunity
+  analysis to Jev while Claude continues writing comments. Jev selects source excerpts
+  and predefined contribution directions, with brief rubric reasons and no automatic
+  Claude fallback. Enable it in the recommended Jev setup under **Conversations**.
+- **Optionally reviews comments with Jev** — a separately enabled TypeSafe reviewer checks
+  requested X and LinkedIn drafts for unsupported experience, POV conflicts, and empty
+  contributions. Observation mode records potential issues without altering drafts. See
+  [the evaluation and setup notes](docs/flows/jev-comment-review.md).
 - **Plans thoughtful DMs** — a per-account relationship workspace for sponsor,
   backlink, connection, co-marketing, customer, and partner conversations. Public
   API context helps you research; Goobi drafts and tracks only what you mark.
@@ -74,8 +94,9 @@ docs/         Architecture, system map, mascot reference
 
 ## Download and run
 
-Prerequisites: Git, Chrome or Edge, and Node.js 20 or newer. The extension uses
-your own Anthropic API key for Claude features; RapidAPI enrichment is optional.
+Prerequisites: Git, Chrome or Edge, and Node.js 20 or newer. For the recommended
+setup, bring a TypeSafe API key for Jev analysis and an Anthropic API key for Claude
+drafting. Claude-only analysis remains available. RapidAPI enrichment is optional.
 
 ```bash
 git clone https://github.com/JohnRiceML/tab-butler.git
@@ -94,12 +115,23 @@ To install the verified build:
 2. Turn on **Developer mode**.
 3. Click **Load unpacked**.
 4. Select the generated `extension/dist/` folder.
-5. Click Goobi's toolbar icon to open the side panel, accept the X data disclosure,
-   add your Anthropic key, and set your niche.
-6. Open or refresh `x.com`. Existing X tabs must be refreshed after every extension rebuild.
+5. Follow the welcome guide: choose Jev + Claude (recommended) or Claude-only,
+   add your own provider keys, and accept the relevant data disclosures. API usage
+   is billed by your providers; a chat subscription is not an API key.
+6. Set and save your focus. Voice notes are optional. Saved steps resume if you
+   close setup; **Conversations → Guided X setup** reopens it any time.
+7. Review the first-reply walkthrough and choose **Enable Goobi + open X**. Browse
+   a few posts, open Goobi, and use **Scan this page** to refresh reply spots. Request
+   a draft and copy it for manual posting. LinkedIn can be enabled separately.
 
-The tab-manager features work without an API key. X scoring and drafting stay off
-until the disclosure is accepted and an Anthropic key is stored.
+See [the first-run guide](docs/flows/x-onboarding.md) for setup, resumption, and the
+first-reply checklist. Keys are saved locally; setup does not make paid test calls.
+
+The tab-manager features work without an API key. X scoring/drafting and LinkedIn
+scoring/drafting each stay off until their own disclosure is accepted and an Anthropic key is stored.
+Selecting Jev changes analysis for both enabled social copilots and requires its
+separate consent and TypeSafe key. Existing provider choices are preserved; nothing
+switches providers merely by updating. Refresh existing social tabs after every rebuild.
 
 ## Extension development
 
@@ -118,8 +150,9 @@ npm run build        # esbuild → dist/
 npm run check:dist   # validate the generated unpacked package
 ```
 
-> New host/extension permissions need a full **remove + re-add** of the unpacked
-> extension — a reload won't grant them.
+> After an update, check the extension's permissions and grant any browser-requested
+> additions. Avoid uninstalling an existing setup just to update it: uninstalling can
+> erase its local settings and activity.
 
 ## Tests
 
@@ -155,6 +188,11 @@ Local-first + BYO-key, but the two surfaces differ:
   a reply. Author handles also go to the Twttr (RapidAPI) provider for follower
   counts. Your saved SOUL.md is sent only when you explicitly request a reply draft,
   Post ideas, or an idea rewrite; it is not sent for ambient scoring or DMs.
+- **LinkedIn copilot** sends feed post text visible to you, displayed author names, bounded visible headline/person-or-company/connection-label context, your user-written LinkedIn comment thesis, and shared focus when set to Claude for enabled ambient scoring. It does not fetch profiles. The selected post plus the same thesis/author context, shared focus when set, shared and
+  LinkedIn-specific voice, SOUL.md, its fit guidance, steer, and any transient Real detail are sent only
+  when you request a comment draft; redrafting also sends your edited draft. Real detail is not stored.
+  Its activity ledger is separate from X, and it does not
+  read LinkedIn messages.
 - **DM workspace** stores the people, notes, drafts, and manually recorded conversation
   context you add in Chrome local storage. That person's selected context goes to Claude
   only when you explicitly click Draft. Goobi does not read the native X inbox or send DMs.
@@ -165,14 +203,14 @@ Local-first + BYO-key, but the two surfaces differ:
 
 Claude is gated behind an explicit opt-in / a set key; keys live in `chrome.storage`
 / the service worker, never bundled or on-page. The Chrome Web Store limited-use
-disclosures + a posted privacy policy must cover the X post text. See the
+disclosures + a posted privacy policy must cover public post text from both social surfaces. See the
 [architecture doc](docs/ARCHITECTURE.md) § Privacy and the
 [changelog](CHANGELOG.md) § Before store submission.
 
 ## Status
 
-v1, actively iterated. The X copilot (scan → score → badge → draft, five-mode dock,
-Goobi + playground, account safety, profile/reply/post/DM learning loops) and the tab
-manager + CLI all work. Not yet wired: the managed proxy tier (parked and excluded
+v1, actively iterated. The full X copilot (scan → score → badge → draft, five-mode dock,
+Goobi + playground, account safety, profile/reply/post/DM learning loops), focused
+LinkedIn comment copilot, and tab manager + CLI all work. Not yet wired: the managed proxy tier (parked and excluded
 from the shipping extension) and a few store-prep items, including the public privacy policy. See
 [CHANGELOG.md](CHANGELOG.md).

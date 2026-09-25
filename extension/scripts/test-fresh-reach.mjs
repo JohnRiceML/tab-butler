@@ -217,12 +217,12 @@ const keep = m.freshReachShortlist([
   settled({ author: "provisional", outcome: { views: 10_000, frozen: false, tweetId: "reply-5" } }),
   settled({ author: "manual_only", confirmation: "manual", outcome: { views: 10_000, frozen: true } }),
   settled({ author: "wrong_source", source: "target", outcome: { views: 10_000, frozen: true, tweetId: "reply-6" } }),
-], MY);
+], MY, 10, NOW);
 ok(keep.some((x) => x.handle === "winner" && x.outcomes === 2 && x.averageReplyViews === 1_000 && x.confidence === "repeat signal"), "repeat settled reply views create a measured massive-account keep-list row");
 ok(keep[0]?.handle === "one_spike" && keep[0].bestReplyViews === 5_000, "the keep-list orders accounts by shrunk reply-view performance");
 ok(!keep.some((x) => ["flat", "provisional", "manual_only", "wrong_source"].includes(x.handle)), "flat, provisional, unverified, and non-Fresh records cannot become winners");
-ok(m.freshReachShortlist([settled({ author: "practical", followers: 8_000, freshReach: { kind: "early-fit", sizeMultiple: 8 } })], MY).length === 0, "the massive keep-list does not absorb practical accounts");
-ok(m.freshReachShortlist(Array.from({ length: 12 }, (_, i) => settled({ author: `winner_${i}`, outcome: { views: 1_000, frozen: true, tweetId: `reply-${i}` } })), MY).length === 10, "the measured keep-list is capped at ten accounts");
+ok(m.freshReachShortlist([settled({ author: "practical", followers: 8_000, freshReach: { kind: "early-fit", sizeMultiple: 8 } })], MY, 10, NOW).length === 0, "the massive keep-list does not absorb practical accounts");
+ok(m.freshReachShortlist(Array.from({ length: 12 }, (_, i) => settled({ author: `winner_${i}`, outcome: { views: 1_000, frozen: true, tweetId: `reply-${i}` } })), MY, 10, NOW).length === 10, "the measured keep-list is capped at ten accounts");
 ok(m.freshReachShortlist([settled({ at: NOW - m.FRESH_REACH_SHORTLIST_RETENTION_MS - 1 })], MY, 10, NOW).length === 0, "the keep-list forgets outcomes older than thirty days");
 ok(m.isMassiveFreshReachAccount(2_000_000, MY) && !m.isMassiveFreshReachAccount(8_000, MY), "massive-account classification is shared by post selection and the keep-list");
 ok((m.decayFreshReachEvidence(0.8, NOW - m.FRESH_REACH_EVIDENCE_HALF_LIFE_MS, NOW) - 0.4) < 0.0001, "public distribution evidence halves after fourteen days instead of becoming permanent");

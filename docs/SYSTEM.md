@@ -5,8 +5,8 @@ The canonical map of the Goobi extension. Update this when code moves.
 > **Want to know how a FEATURE works (not just where it lives)?** → the **[flow docs center](flows/README.md)**. For the standing x-algorithm intelligence watch (the open-sourced ranker repo + the drop checklist), see **[INTEL.md](INTEL.md)**. One doc per user-facing flow (reply spots, post ideas, targets, momentum, the learning + reciprocity panels, account safety, the X-data API, voice/profile, Goobi) — each is the end-to-end pipeline + the honesty limits + the gotchas. SYSTEM.md (this file) is the file map; `flows/` is the how-it-works map.
 
 > **Two products in one tree.** Goobi began as **Tab Butler** (a local-first tab
-> manager) and pivoted to an **X/Twitter reply copilot** with a pet mascot. Both
-> ship in the same MV3 extension. The X copilot is the central pillar today; the
+> manager) and pivoted to social conversation copilots with a pet mascot. The full
+> X/Twitter reply surface and focused LinkedIn comment surface ship together; the
 > tab-manager code (grouping, idle-archive) is still wired in and runs. Internal
 > identifiers, the `cli/`, and the package names still say "tab-butler" — see
 > [CHANGELOG.md](../CHANGELOG.md) "Rename relics".
@@ -28,7 +28,7 @@ node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band
 ```
 
 - **Sources** are `.ts`/`.html` under `extension/src/{background,content,popup,lib}`.
-  esbuild bundles them to `dist/{service-worker,x-copilot,popup}.js` + copies
+  esbuild bundles them to `dist/{service-worker,x-copilot,linkedin-copilot,popup}.js` + copies
   `popup.html`/`manifest.json`. The manifest references the **compiled** names — don't
   hunt for `x-copilot.js` in `src/`.
 - `tsconfig` is `strict: true` but **not** `noUnusedLocals` — dead code compiles clean,
@@ -41,8 +41,10 @@ node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band
 | Surface | Entry | Runs where |
 |---|---|---|
 | **X reply copilot** (the product) | `src/content/x-copilot.ts` → `dist/x-copilot.js` | content script on `x.com` / `twitter.com`, top frame only |
+| **LinkedIn comment copilot** | `src/content/linkedin-copilot.ts` → `dist/linkedin-copilot.js` | content script on `www.linkedin.com`, top frame only |
 | **Service worker** (Claude + Twttr broker, tab features) | `src/background/service-worker.ts` | MV3 background, ES module |
 | **Side panel** (settings, voice, products, account-safety, Goobi playground) | `src/popup/popup.ts` + `popup.html` | `chrome.sidePanel`, opens on the toolbar icon |
+| **Guided X setup** | `src/popup/x-onboarding.ts` + `src/lib/x-onboarding.ts` | first-install welcome tab and resumable side-panel guide; progress at `xOnboarding` |
 | **CLI** (separate product) | `cli/tab-butler.mjs` | terminal — `ls`/`kill`/`clean` for localhost dev servers. Not part of the extension. |
 
 ## The X-copilot data flow
@@ -50,7 +52,7 @@ node scripts/eval-post-ideas.mjs   # Post-ideas exemplar-quality + virality-band
 ```
 scroll → MutationObserver → requestScan (rAF-coalesced) → scan()
   → collect article[data-testid="tweet"] (skip ads / own / no-text / dedup via seen + inFlight + dataset.tbx)
-  → flush() batches ≤12 → SW {type: SCORE_POSTS} → Claude (Haiku)
+  → flush() batches ≤12 → SW {type: SCORE_POSTS} → governed Claude request
        → {score, reason, category, anchor, replyMove, replyBrief, risk}
   → score ≥ 0.6 (THRESHOLD) → Opp (opps map + seen cache)
        → badge() the post in-feed (growth lane pill → expandable evidence/actions; green "✓ Replied" once recorded)
@@ -69,7 +71,7 @@ clicks Reply, fills X's reply composer, submits a reply, or posts.**
 
 ## File map
 
-### `src/content/x-copilot.ts` — the on-page copilot (the big one, ~2k lines)
+### `src/content/x-copilot.ts` — the on-page copilot (the big one, ~7.5k lines)
 One injected script. Sections, by responsibility:
 - **scan → score → badge** — `scan` / `requestScan` / `scheduleFlush` / `flush`; per-session caps (`MAX_SCORE_CALLS`, `THRESHOLD`).
 - **X DOM extraction** — `statusInfo`, `outerText`/`quotedText` (quote-tweet-resilient), `displayName`, `isVerified`, `avatarUrl`, `engagement`/`snapStats`.
@@ -91,16 +93,25 @@ One injected script. Sections, by responsibility:
 - **discovery + routing** — `findSpots("niche"|"fresh-reach")` (recent niche search; Fresh Reach pairs a focused Top lens with up to two guaranteed-distinct rotating exploration lenses, merges decaying public distribution evidence into a persistent 30-day/400-account radar, supports a private max-12 massive watchlist, derives a max-10 massive-account keep-list from settled reply views, runs up to 24 due per-handle checks six-wide with four bounded watchlist lanes plus measured-winner/evidence-backed exploration coverage, keeps up to 36/two-per-author candidates through three content-scoring batches, then selects the best strict live/content opening per author), `urlPoll` (SPA navigation).
 
 ### `src/background/service-worker.ts` — broker
-Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `DRAFT_DM`, `POST_IDEAS`, `POST_IDEA_REWRITE`, `TWTTR_GET`, `GET_FAVICONS`, `GET_TWTTR_METER`, voice/recall, tab ops). Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
+Routes X messages (`SCORE_POSTS`, `DRAFT_REPLY`, ...), dedicated LinkedIn messages (`LI_SCORE_POSTS`, `LI_DRAFT_COMMENT`, `LI_START_COMMENT_REVIEW`, `LI_DISMISS_COMMENT_REVIEW`, `LI_MARK_POSTED`, `LI_UNDO_POSTED`), voice/recall, and tab operations. The LinkedIn path independently checks the exact sender route, consent, enablement, key/focus readiness, and bounded payload before any Claude call. Copy & review uses the idempotent mark path immediately; legacy review and exact undo mutations remain serialized across tabs. Holds the Twttr governor and the tab-manager features (idle-archive alarm, grouping).
 
 ### `src/lib/` — pure-ish modules
 | File | Role | Test |
 |---|---|---|
-| `claude-client.ts` | All shipping Claude calls: `scorePosts`, `draftReply` (+ angle/style/steer), `draftDm`, `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Models: Haiku (score/classify), Sonnet (draft/ideas/DM). BYO-key direct; the parked proxy is excluded from the extension. | — |
+| `claude-client.ts` | All shipping Claude calls: `scorePosts`, dedicated `draftLinkedInComment` (LinkedIn-first voice + one diagnostic repair), `draftReply` (+ angle/style/steer), `draftDm`, `generatePostIdeas`, `classify`, `advise`, `isSmartEnabled`. Current calls use the shared Sonnet model/fallback configured in this module. BYO-key direct; the parked proxy is excluded from the extension. | `test-claude-request-governor` |
+| `claude-request-governor.ts` | Shared worker request capacity, bounded waiting, transport/body deadlines, cancellation, and provider cooldown. See [commenting reliability](flows/commenting-reliability.md) for limits. | `test-claude-request-governor` |
+| `x-policy.ts` | X sender/consent policy and bounded score/draft payload validation, preserving global discovery indices and explicit no-product selection. Worker integration cancels stale context across both platforms. | `test-x-policy`, `test-comment-broker` |
+| `x-contribution.ts` | One automatic X contribution gate across feed, discovery, targets, and queue sorting. Requires source-grounded guidance and risk assessment; keeps manual choices distinct from recommendations. | `test-x-contribution`, `test-x-selection-queue`, `test-comment-selection-benchmark` |
+| `contribution-evidence.ts` | Shared anchor matching, whole-word excerpt limits, substantial source-copy detection, and narrow absence-of-personal-proof diagnostics. Establishes textual grounding, not factual truth. | `test-contribution-evidence`, `test-comment-selection-benchmark` |
 | `prompts.ts` | System prompts + `REPLY_ANGLES` (the 6-value category enum, by convention) + the orthogonal `REPLY_STYLES` delivery contract. | `test-prompts` (invariant guard) |
-| `text-clean.ts` | Deterministic draft cleaners under the prompt rules — `stripDashes` (no em/en dash, no hyphenated compounds; links shielded) + `stripEmphasisQuotes` (unwraps scare/emphasis quotes, preserving apostrophes + possessives) + `cleanDraft` (the combined net). Applied by claude-client to BOTH reply drafts and post ideas. | `test-text-clean` |
+| `text-clean.ts` | Deterministic draft cleaners under the prompt rules. The LinkedIn cleaner removes every dash and quotation mark while preserving normal apostrophes and paragraphs. | `test-text-clean` |
+| `linkedin-comment-quality.ts` | High-precision LinkedIn comment diagnostics and retry brief. It flags clear clichés, performative wrappers/closers, pitches, hashtags, question overload, and excess length without rewriting prose. | `test-linkedin-comment-quality` |
+| `linkedin-strategy.ts` | Bounded local LinkedIn comment thesis and model-facing formatter: professional arena, target audiences/post contexts, contribution lanes, exclusions, and relationship rules. | `test-linkedin-strategy` |
+| `linkedin-opportunity-ranking.ts` | Fail-closed person/post/contribution eligibility, repeat-author spacing, one-author queue diversity, and deterministic ranking. | `test-linkedin-opportunity-ranking` |
 | `posting-analytics.ts` | Pure X account-content CSV parser + aggregate owner model. Separates originals/replies, shrinks rates to the account baseline, sample-gates reusable structures/length bands, and emits raw-text-free prompt guidance. | `test-posting-analytics` |
 | `types.ts` | The message union + shared types. `XScore.category` is a bare `string` — the enum lives only in the prompt + the `catId` runtime guard. | — |
+| `linkedin-policy.ts` | Canonical LinkedIn consent version, supported route allowlist, broker gate, and strict bounded score/draft payload sanitizers. | `test-linkedin-policy` |
+| `linkedin-state.ts` | Canonical v2 manual-comment receipt with v1 migration, serialized mutation helpers, bounded retention, exact undo, and stale-write tombstones. | `test-linkedin-state` |
 | `twttr.ts` | Parse RapidAPI (`twitter241`) responses: `parseUser`, `pickDiscoveryTweets`, `pickOwnPosts` (text, idea de-dupe), `pickOwnPostsWithStats` (keeps real `views`/engagement → the momentum views readout). | `test-twttr` |
 | `twttr-scheduler.ts` | Pure shared-queue policy: adaptive provider-window rate, even dispatch spacing, bounded intent priority/fairness, and concurrency constants. | `test-twttr-scheduler`, `test-twttr-governor-load` |
 | `twttr-governor.ts` | The only thing that calls the provider: adaptive shared queue, provider backpressure/circuit, budget meter, timeout, coalescing, and storage-backed response cache. | `test-twttr-governor-load`, `test-twttr-cache` |
@@ -132,7 +143,7 @@ Routes messages (`SCORE_POSTS`, `DRAFT_REPLY`, `DRAFT_DM`, `POST_IDEAS`, `POST_I
 `popup.ts` + `popup.html`: BYO-key + smart toggle, voice capture (`/user-replies` learning), products, niche, the local aggregate-only analytics CSV importer/model receipt, account-safety panel, follower count, the tab list, and the **side-panel Goobi playground** (its own copy, distinct from the dock's).
 
 ## Storage keys (`CONFIG`)
-Two domains. **Tab**: `SCAN_ALARM`, archive/group keys. **X copilot**: `X_COPILOT_KEY` (on/off), `X_DATA_CONSENT_KEY` (versioned disclosure acceptance required before boot), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_IDEAS_KEY`, `X_MY_POSTS_KEY` (own-posts cache: idea de-dupe + momentum views), `X_LEARN_STATS_KEY` (engagement learning loop: own-post trend + scan gates), `X_POSTING_MODEL_KEY` (one aggregate-only owner-scoped import; never raw CSV rows), per-owner `X_GROWTH_LOOP_KEY:<handle>` records (account-level strategy experiments), `X_SUPPORTERS_KEY` (reciprocity: who engages with me, harvested from the notifications DOM), `X_TARGETS_KEY` ("Target accounts" list: big in-reach accounts to comment on early), per-owner `X_DM_WORKSPACE_KEY:<handle>` records, `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
+Three domains. **Tab**: `SCAN_ALARM`, archive/group keys. **LinkedIn copilot**: separate `LI_COPILOT_KEY`, versioned `LI_DATA_CONSENT_KEY`, `LI_PAUSED_KEY`, `LI_VOICE_KEY`, `LI_STRATEGY_KEY`, and `LI_COMMENT_LOG_KEY`; the local thesis controls people/post/contribution fit and relationship spacing, while the v3 ledger separates legacy metadata-only pending reviews from local Commented marks. A normalized visible author path may be retained only as a spacing key. Copy & review creates the mark immediately, and exact Undo can restore the opportunity. LinkedIn shares focus/SOUL and uses shared voice only beneath its optional LinkedIn style notes. It does not store transient Real detail, products, avatar URLs, draft text, or X activity. **X copilot**: `X_COPILOT_KEY` (on/off), `X_DATA_CONSENT_KEY` (versioned disclosure acceptance required before boot), `X_VOICE_KEY`, `X_PRODUCTS_KEY` (+ legacy `X_PRODUCT_KEY`), `X_NICHE_KEY`, `X_DEFAULT_ANGLE_KEY`/`X_DEFAULT_PRODUCT_KEY`, `X_MY_FOLLOWERS_KEY`, `X_PAUSED_KEY`, `X_REPLY_LOG_KEY`, `X_IDEAS_KEY`, `X_MY_POSTS_KEY` (own-posts cache: idea de-dupe + momentum views), `X_LEARN_STATS_KEY` (engagement learning loop: own-post trend + scan gates), `X_POSTING_MODEL_KEY` (one aggregate-only owner-scoped import; never raw CSV rows), per-owner `X_GROWTH_LOOP_KEY:<handle>` records (account-level strategy experiments), `X_SUPPORTERS_KEY` (reciprocity: who engages with me, harvested from the notifications DOM), `X_TARGETS_KEY` ("Target accounts" list: big in-reach accounts to comment on early), per-owner `X_DM_WORKSPACE_KEY:<handle>` records, `X_GOOBI_SEEN_KEY`, `X_GOOBI_FED_KEY`, `TWTTR_KEY_KEY`. Dev `.env`/key entry is BYO — keys live in `chrome.storage`/the SW, never bundled or put on-page.
 
 ## Conventions & gotchas
 - **Closed shadow roots.** The dock and draft panel mount on hosts appended to

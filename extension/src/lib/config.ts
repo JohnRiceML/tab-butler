@@ -20,7 +20,14 @@ export const CONFIG = {
   UNDO_KEY: "lastArchiveBatch", // ArchivedTab[] from the most recent archive pass
   AUTO_DEDUPE_KEY: "autoDedupe", // background duplicate-tab merge (default on)
   ANTHROPIC_KEY_KEY: "anthropicKey", // BYO key — shipping Claude features call Anthropic directly
+  TYPESAFE_KEY_KEY: "typesafeKey", // optional Jev reviewer; never exposed to content scripts
+  ANALYSIS_PROVIDER_KEY: "analysisProvider", // "claude" (default) or "jev"; comment writing stays Claude
+  JEV_ANALYSIS_CONSENT_KEY: "jevAnalysisConsent", // separate v1 opt-in for ambient feed analysis
+  JEV_REVIEW_MODE_KEY: "jevReviewMode", // "off" (default) or "shadow"; never gates drafts
+  JEV_REVIEW_CONSENT_KEY: "jevReviewConsent", // separate v1 disclosure for TypeSafe
+  JEV_REVIEW_LOG_KEY: "jevReviewLog", // bounded metadata only; no post/draft/profile text
   X_COPILOT_KEY: "xCopilotEnabled", // X reply copilot on/off (on only after versioned consent)
+  X_ONBOARDING_KEY: "xOnboarding", // versioned setup progress only; credentials use their existing keys
   X_DATA_CONSENT_KEY: "xDataConsentV1", // explicit disclosure acceptance before X content can be sent to Claude
   X_PAUSED_KEY: "xPaused", // temporary pause — halts scanning/surfacing/API + the on-page actions until resumed
   X_NICHE_KEY: "xNiche", // what posts are worth replying to
@@ -39,7 +46,7 @@ export const CONFIG = {
   X_REPLY_LOG_KEY: "xReplyLog", // cross-session reply-reputation log (rate + repeat-author + duplicate-reply guards)
   X_PACE_RESET_KEY: "xPaceResetAt", // user-set baseline for Goobi's local adaptive pace pressure; never deletes reply history or resets X
   X_IDEAS_KEY: "xIdeas", // persisted post-ideas drafts queue (working + shipped), survives reloads
-  X_MY_POSTS_KEY: "xMyPosts", // cached: the user's own recent original posts (for idea de-dupe + voice), ~24h TTL
+  X_MY_POSTS_KEY: "xMyPosts", // cached: the user's own recent original posts (for idea de-dupe, voice, and dated comment continuity), ~24h refresh
   X_GOOBI_SEEN_KEY: "goobiLastSeen", // last time you actively used Goobi (powers the neglect / welcome-back beat)
   X_GOOBI_FED_KEY: "goobiFed", // playground: which replies Goobi has eaten (ids) + lifetime total, so fed treats don't reappear
   X_LEARN_STATS_KEY: "xLearnStats", // engagement learning loop: own-post trend snaps + cached rest_id + daily-scan gates (per-account aggregates are derived live from the reply log)
@@ -58,6 +65,16 @@ export const CONFIG = {
   X_GROWTH_LOOP_KEY: "xGrowthLoop", // account-scoped 14-day strategy experiments + daily follower/post snapshots
   X_POSTING_MODEL_KEY: "xPostingModelV1", // aggregate-only, owner-scoped model built locally from an imported X account-content CSV
   X_DEBUG_KEY: "xDebug", // dev-only: exposes window.__goobiExport() to dump the learning data (reply log + trend snaps) for backtesting. No effect on the product.
+
+  // LinkedIn feed copilot. It reuses focus/SOUL and cross-platform voice as fallback,
+  // adds an optional LinkedIn-specific style layer, and keeps consent/runtime/activity
+  // separate so LinkedIn comments can never contaminate X learning.
+  LI_COPILOT_KEY: "liCopilotEnabled",
+  LI_DATA_CONSENT_KEY: "liDataConsentV5",
+  LI_VOICE_KEY: "liVoiceV1", // user-authored LinkedIn tone notes or approved examples, style evidence only
+  LI_STRATEGY_KEY: "liStrategyV1", // explicit people/post/contribution thesis; never inferred from private profiles
+  LI_PAUSED_KEY: "liPaused",
+  LI_COMMENT_LOG_KEY: "liCommentLogV1",
 } as const;
 
 /**

@@ -106,11 +106,11 @@ const FIXTURES = [
   },
 ];
 
-async function anthropic(model, system, user, maxTokens, temperature) {
+async function anthropic(model, system, user, maxTokens) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }], ...(temperature != null ? { temperature } : {}) }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, thinking: { type: "disabled" }, system, messages: [{ role: "user", content: user }] }),
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const data = await res.json();
@@ -150,9 +150,9 @@ const DIMS = ["antiGeneric", "voiceMatch", "variety", "hookCraft", "sourceHonest
 const ok = [];
 for (const f of FIXTURES) {
   try {
-    const gen = parseJson(await anthropic("claude-sonnet-4-6", POST_IDEAS_SYSTEM, buildUser(f), 2200)); // mirrors generatePostIdeas (temperature unset — 0.7 measured worse)
+    const gen = parseJson(await anthropic("claude-sonnet-5", POST_IDEAS_SYSTEM, buildUser(f), 2200));
     const ideas = (gen.ideas || []).slice(0, 6).filter((d) => d.text);
-    const v = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SYSTEM, judgeUser(f, ideas), 600));
+    const v = parseJson(await anthropic("claude-sonnet-5", JUDGE_SYSTEM, judgeUser(f, ideas), 600));
     ok.push({ f, ideas, v });
     console.log(`\n● ${f.name} — ${ideas.length} ideas`);
     console.log(`  ${DIMS.map((d) => `${d} ${v[d] ?? "?"}`).join(" · ")}`);
@@ -170,7 +170,7 @@ if (ok.length) {
   // κ-stability: re-judge one fixture; deltas are only trustworthy if the judge is stable.
   try {
     const first = ok[0];
-    const v2 = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SYSTEM, judgeUser(first.f, first.ideas), 600));
+    const v2 = parseJson(await anthropic("claude-sonnet-5", JUDGE_SYSTEM, judgeUser(first.f, first.ideas), 600));
     const drift = Math.max(...DIMS.map((d) => Math.abs((Number(first.v[d]) || 0) - (Number(v2[d]) || 0))));
     console.log(`  judge stability (re-scored "${first.f.name}"): max drift ${drift} ${drift <= 1 ? "(stable)" : "(noisy — treat small deltas with caution)"}`);
   } catch { /* stability check is best-effort */ }

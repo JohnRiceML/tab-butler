@@ -1,6 +1,9 @@
 {
   "_readme": "Copy this file to goobi.local.json (same folder), fill it in, run `npm run build`, then load/reload dist/. On a FRESH install (remove + re-add — which wipes extension storage) Goobi seeds every EMPTY setting from this file; it never overwrites values you've since edited in the side panel, so the panel stays the source of truth. goobi.local.json is GITIGNORED because it holds real keys in plaintext — keep it on this machine only, never commit or share it, and rotate any key that leaks.",
   "anthropicKey": "sk-ant-...",
+  "typesafeKey": "",
+  "jevReviewMode": "off",
+  "jevReviewConsent": "",
   "rapidApiKey": "your x-rapidapi-key (twitter241 provider)",
   "handle": "yourhandle",
   "followers": 0,

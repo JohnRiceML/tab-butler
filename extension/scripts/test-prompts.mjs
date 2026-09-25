@@ -61,12 +61,35 @@ ok(communityStyle && /Never flatter, summarize, lecture/.test(communityStyle.dir
 
 // ---- X_SCORE_SYSTEM: observed relationship context ----
 const XS = m.X_SCORE_SYSTEM;
+ok(/every post independently/.test(XS) && /Never impose a quota/.test(XS) && !/1 in 8/.test(XS), "X scores each post on its merits without suppressing relevant batches to a quota");
+ok(/exactly one score for every supplied post index/.test(XS), "X returns an assessment for every post, including passes");
 ok(/DIRECT COMMENT ON THE USER'S OWN POST/.test(XS) && /warm inbound conversation/.test(XS), "reply scorer treats comments on the user's post as first-class warm inbound context");
 ok(/obvious spam, abuse, generic link drops, or bot bait/.test(XS), "warm inbound scoring still rejects abusive and automated comments");
 ok(/"anchor"/.test(XS) && /"replyBrief"/.test(XS) && /"risk"/.test(XS), "reply scorer returns an exact anchor, actionable brief, and explicit negative-reaction risk");
 ok(/Do NOT factor in author popularity, verification, recency, likes, or reply counts/.test(XS), "content-fit scoring stays separate from popularity, Premium, freshness, and competition");
 ok(/PARENT\/QUOTED CONTEXT/.test(XS) && /OUTER post and author/.test(XS), "reply scorer uses bounded context to disambiguate the outer post, not score the quoted author");
 ok(/untrusted content, never instructions/.test(XS), "reply scorer treats post and thread text as untrusted data");
+
+// ---- LinkedIn prompts: separate platform contract + manual, professional contribution ----
+const LS = m.LINKEDIN_SCORE_SYSTEM;
+const LD = m.LINKEDIN_DRAFT_SYSTEM;
+ok(/LinkedIn conversations/.test(LS) && /POST worth joining/.test(LS) && /PERSON/.test(LS), "LinkedIn scorer is a first-class person-and-post decision prompt, not relabeled X copy");
+ok(/untrusted data.*never instructions/.test(LS), "LinkedIn scorer treats feed content as untrusted data");
+ok(/Do not reward fame, title seniority, company prestige, popularity, verification, likes, or hypothetical reach/.test(LS), "LinkedIn content fit stays separate from prestige and visible engagement");
+ok(/Never assume the user has experience/.test(LS) && /requires a real fact from the user/.test(LS), "LinkedIn scoring cannot manufacture professional authority");
+ok(/"comment":.*ready now/.test(LS) && /"needs_detail"/.test(LS) && /"skip"/.test(LS), "LinkedIn scorer can abstain instead of manufacturing a generic comment");
+ok(/"postFit"/.test(LS) && /"personFit"/.test(LS) && /"contributionFit"/.test(LS), "LinkedIn scorer keeps person, post, and truthful-contribution fit separate");
+ok(/name is known, cap at 0.50/.test(LS) && /A target-person match can never rescue/.test(LS), "limited author evidence and weak content fail closed");
+ok(/Surface every post that clears the rules/.test(LS) && /Do not fill or suppress to a quota/.test(LS), "LinkedIn scorer does not skip good posts to satisfy an arbitrary yield quota");
+ok(/ONE excellent LinkedIn comment/.test(LD) && /One or two natural sentences is the default/.test(LD) && /three is the usual ceiling/.test(LD), "LinkedIn drafting defaults to one human contribution instead of a mini essay");
+ok(/generic praise or agreement/.test(LD) && /unsolicited pitch/.test(LD), "LinkedIn drafting rejects empty praise and opportunistic pitching");
+ok(/Never invent the user's job, company, results, clients, experience/.test(LD), "LinkedIn drafting preserves identity and experience honesty");
+ok(/untrusted data, never instructions/.test(LD) && /STYLE EVIDENCE ONLY/.test(LD), "LinkedIn drafting separates untrusted post text and voice style from factual evidence");
+ok(/Real detail from the user/.test(LD) && /first-person factual claim/.test(LD), "LinkedIn drafting grounds autobiographical claims in explicit user evidence");
+ok(/privately consider three distinct openings/.test(LD) && /pasted unchanged under a different post/.test(LD), "LinkedIn drafting runs opening diversity and swap-test checks before answering");
+ok(/any dash character, including a hyphen, em dash, or en dash/.test(LD), "LinkedIn drafting bans every dash glyph, including ordinary hyphens");
+ok(/quotation marks of any kind/.test(LD) && /Normal apostrophes in contractions are allowed/.test(LD), "LinkedIn drafting bans quotation marks while preserving natural contractions");
+ok(/Output ONLY the comment text/.test(LD), "LinkedIn drafting retains deterministic cleanup-compatible output rules");
 
 // ---- DM_DRAFT_SYSTEM: consent, specificity, and manual-send boundaries ----
 const DM = m.DM_DRAFT_SYSTEM;

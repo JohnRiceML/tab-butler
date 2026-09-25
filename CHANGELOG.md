@@ -4,6 +4,93 @@ Notable changes + the phase-transition record. The day-to-day lives in git histo
 
 ## Unreleased
 
+- **Guided first-run X onboarding:** fresh installs open a resumable welcome guide
+  for provider choice, explicit data consent, keys, focus, and a first-reply walkthrough.
+  Jev analysis + Claude drafting is recommended, with a Claude-only path. Scanning
+  stays off until final enablement. Existing installs retain their settings and can
+  reopen the guide from Conversations; updates never open a welcome tab.
+
+- **Simpler X setup and daily flow:** Conversations starts with X and recommends Jev
+  analysis before connecting Claude for requested drafts. Provider and review consent
+  remain separate; existing choices are preserved. Voice, LinkedIn, optional review,
+  and advanced X settings use progressive disclosure. Replies and Comments are the
+  main dock views, with a basic Scan this page action and extra features under More
+  tools. Goals and search diagnostics expand on demand. Setup readiness accounts for
+  the selected analysis provider, and Jev scan failures show actionable messages.
+
+- **Jev-only analysis toggle:** optional fast opportunity analysis for X and LinkedIn,
+  with Claude retained for comment drafting. Isolated posts run with bounded concurrency;
+  Jev selects observed anchors and fixed contribution directions. Provider changes discard
+  stale scores and drafts. Separate analysis consent, explicit errors, and no Claude fallback.
+  Default remains Claude; optional Jev comment review is independently controlled.
+
+- **Jev comment reviewer (observation mode):** optional TypeSafe review of explicit X and
+  LinkedIn drafts checks support for personal claims, consistency with supplied POV, and
+  contribution beyond the post. A separate key and disclosure opt-in gate every request.
+  Drafts stay unchanged; only 50 metadata-only observations are retained locally. A bounded
+  live benchmark completed 76 fictional reviews with 115/118 expected dimension-label matches;
+  this is fixture agreement, not a production-accuracy claim. Timeouts, provider failures,
+  cancellation, consent, and both draft paths are covered by free regression tests.
+
+- **Contribution-first comment selection:** X now applies one source-grounded contribution gate
+  across feed, discovery, Fresh Reach, targets, and queue sorting; a high score cannot replace a
+  specific post anchor, useful reply direction, and clear risk assessment. Explicit overrides stay
+  available as Added by you. LinkedIn verifies anchors, ranks ready comments ahead of requests for
+  personal detail, and diversifies the queue without dropping useful candidates. Both draft paths
+  distinguish voice from factual proof and reject clear unsupported personal claims or substantial
+  verbatim echoes. A fictional, hand-labeled selection benchmark covers both platforms, with a separate
+  opt-in live review using the actual scorer/drafter. No live-quality or growth claim is implied.
+
+- **Commenting reliability across X and LinkedIn:** model requests now share a bounded queue,
+  abort stalled HTTP requests, respect provider cooldowns, and reject truncated or refused output.
+  Both commenting brokers validate sender, current consent, enablement, pause, and bounded inputs;
+  relevant settings changes cancel queued and active scoring/drafting. X drops stale discovery and
+  draft results. LinkedIn stops automatic retries after provider failure and preserves opportunities,
+  edited comments, and personal details on Retry scan. Behavioral tests cover the actual worker and
+  both content workflows. Manual review/posting and existing completion semantics are preserved.
+
+- **Consistent X feed scoring:** removed the one-in-8–10 acceptance quota so each post is judged independently. Manual Add reuses an unchanged assessment. Late text, quoted context, and direct-comment evidence invalidate earlier reads; recycled rows and stale rescan responses cannot receive the wrong assessment. Complete batch coverage, a per-post output allowance, and one bounded retry prevent scoring failures from silently losing feed posts.
+
+- **Strict LinkedIn punctuation:** comment drafting and deterministic cleanup now prohibit em dashes, en dashes, ordinary hyphens, and quotation marks. Normal apostrophes in contractions and possessives remain intact.
+
+- **LinkedIn person + post opportunity system:** added a user-written comment thesis for target audiences, worthwhile post situations, credible contribution lanes, exclusions, and relationship variety. Scoring now separates person fit, post fit, and truthful-contribution fit; incomplete or risky model output fails closed. Bounded visible headline/person-or-company/connection-label context supports evidence-based person fit without fetching profiles. The queue suppresses very recent repeat authors, applies local caps, keeps one best active post per author, and explains why the person, post, and contribution qualify. This disclosure change advances LinkedIn consent to v5.
+
+- **Focused LinkedIn comment copilot:** added a separately consented LinkedIn feed
+  surface with LinkedIn-specific scoring and drafting prompts, resilient feed-post
+  extraction, an isolated Goobi comment-opportunity radar, subtle in-feed markers,
+  draft/steer/copy controls, exact-post scroll highlighting, metadata-only in-review receipts,
+  one-click manual completion, and exact undo. The real pixel Goobi now uses a LinkedIn-blue
+  palette, and opportunity cards show local-only post-author portraits with safe initial
+  fallbacks. Dedicated LinkedIn broker messages now enforce
+  supported routes, current consent/enablement, focus/key readiness, bounded payloads,
+  and provider timeouts again in the service worker. It reuses the user's focus, voice,
+  and SOUL.md (not product context) while keeping concurrency-safe LinkedIn comment activity
+  in its own ledger. Pause preserves drafts/opportunities; dock refreshes preserve editor
+  focus, caret, and scroll. It never clicks Comment, touches a
+  composer, submits, reacts, connects, follows, or reads messages. X-only discovery,
+  analytics, outcome learning, and ranking-code claims are intentionally not ported.
+
+- **Human LinkedIn comment quality:** added a dedicated Sonnet drafting path with LinkedIn-first
+  voice notes, an optional non-stored Real detail for grounded personal claims, explicit style-versus-fact
+  boundaries, one-to-two-sentence defaults, prompt-injection resistance, and scorer-risk suppression for
+  generic/promotional/mismatched opportunities. A high-precision quality lint can request one targeted
+  repair for clichés, performative wrappers, pitches, hashtags, question overload, or excess length. The
+  LinkedIn cleaner preserves natural compounds and paragraph edits, and deterministic fixtures now guard
+  known-good human comments as well as known-bad AI-shaped output. This material data-use change bumps the
+  LinkedIn consent version so existing users review the updated disclosure.
+
+- **One-click LinkedIn completion:** **Copy & review** now immediately shows **Commented**, records
+  a local activity mark, and removes the opportunity. Exact Undo remains available. The UI and refreshed
+  consent disclosure states that this is a click-based workflow shortcut, not LinkedIn verification.
+
+- **LinkedIn clear controls:** added separate **Clear all ready** and **Clear all in review** actions.
+  Clearing suggestions is session-only; clearing copied receipts dismisses pending review metadata.
+  Neither action erases confirmed comment activity.
+
+- **Distribution secret guard:** production builds now remove the optional machine-local
+  `goobi.local.json` seed, and dist validation rejects it. Watch-mode development can still
+  copy the seed for local reloads.
+
 - **Reply handoff is now copy-only:** removed every reply-composer DOM insertion method, the
   scripted Like + insert path, its setting, and the cross-tab draft claim/fill protocol. For a
   visible feed post Goobi copies the draft, scrolls the exact matched article into view, and gives

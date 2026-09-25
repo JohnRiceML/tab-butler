@@ -1,6 +1,7 @@
 import { CONFIG } from "../lib/config";
+import { shouldShowXOnboarding } from "../lib/x-onboarding";
 import { archiveAndClose, undoLast } from "../lib/archive";
-import { advise, classify, draftDm, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
+import { advise, classify, draftDm, draftLinkedInComment, draftReply, generatePostIdeaRewrite, generatePostIdeas, isSmartEnabled, scorePosts } from "../lib/claude-client";
 import { archivableTabs, groupByDomain, normalizeUrl } from "../lib/heuristics";
 import { governedFetch, readMeter, type GovResult } from "../lib/twttr-governor";
 import { buildDraftContext } from "../lib/draft-context";
@@ -9,6 +10,12 @@ import { normalizeDailyGoals } from "../lib/daily-goals";
 import { dueReminderCount } from "../lib/schedule";
 import { replyPostUrl, statusIdFromPath } from "../lib/reply-handoff";
 import { isPersonalPostingModel, postingModelCommunityGuidance, postingModelIdeasGuidance } from "../lib/posting-analytics";
+import { LI_BROKER_PROTOCOL, LI_CONSENT_VERSION, canUseLinkedInBroker, hasSupportedLinkedInSenderUrl, isSupportedLinkedInUrl, sanitizeLinkedInDraftPayload, sanitizeLinkedInScorePayload } from "../lib/linkedin-policy";
+import { dismissCommentReview, markCommentPosted, normalizeCommentLog, startCommentReview, undoLatestComment, type CommentLog, type CommentLogEntry } from "../lib/linkedin-state";
+import { linkedInStrategyConfigured, linkedInStrategyPrompt, normalizeLinkedInStrategy, type LinkedInStrategyV1 } from "../lib/linkedin-strategy";
+import { canUseXBroker, hasSupportedXSenderUrl, sanitizeXDraftPayload, sanitizeXScorePayload } from "../lib/x-policy";
+import { findContributionAnchor } from "../lib/contribution-evidence";
+import { selectAuthorContinuity } from "../lib/author-continuity";
 import type { AdviceResult, ClassifyResult, GroupSuggestion, Message, ProductItem, RecommendationKind } from "../lib/types";
 
 const HEURISTIC_COLORS: chrome.tabGroups.ColorEnum[] = [
@@ -42,6 +49,7 @@ async function seedFromLocalFile(): Promise<void> {
   const K = CONFIG;
   const strMap: Array<[from: string, to: string]> = [
     ["anthropicKey", K.ANTHROPIC_KEY_KEY],
+    ["typesafeKey", K.TYPESAFE_KEY_KEY],
     ["rapidApiKey", K.TWTTR_KEY_KEY],
     ["handle", K.X_MY_HANDLE_KEY],
     ["niche", K.X_NICHE_KEY],
@@ -51,15 +59,20 @@ async function seedFromLocalFile(): Promise<void> {
     ["defaultProduct", K.X_DEFAULT_PRODUCT_KEY],
     ["premium", K.X_PREMIUM_KEY],
   ];
-  const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY, K.X_DAILY_GOALS_KEY]);
+  const cur = await chrome.storage.local.get([...strMap.map(([, to]) => to), K.X_MY_FOLLOWERS_KEY, K.X_PRODUCTS_KEY, K.X_DAILY_GOALS_KEY, K.JEV_REVIEW_MODE_KEY, K.JEV_REVIEW_CONSENT_KEY]);
   const set: Record<string, unknown> = {};
   for (const [from, to] of strMap) {
     const v = cfg[from];
-    if (typeof v === "string" && v.trim() && !(cur[to] as string | undefined)) {
+    if (typeof v === "string" && v.trim() && !(cur[to] as string | undefined) && (from !== "typesafeKey" || cur[to] === undefined)) {
       set[to] = from === "handle" ? v.trim().replace(/^@+/, "") : v.trim();
     }
   }
   const followers = cfg["followers"];
+  // Explicit local opt-in only; never undo a saved "off" preference.
+  if (cur[K.JEV_REVIEW_MODE_KEY] === undefined && cfg["jevReviewMode"] === "shadow" && cfg["jevReviewConsent"] === "v1") {
+    set[K.JEV_REVIEW_MODE_KEY] = "shadow";
+    set[K.JEV_REVIEW_CONSENT_KEY] = "v1";
+  }
   if (typeof followers === "number" && followers > 0 && !cur[K.X_MY_FOLLOWERS_KEY]) set[K.X_MY_FOLLOWERS_KEY] = Math.round(followers);
   const prods = cfg["products"];
   if (Array.isArray(prods) && !((cur[K.X_PRODUCTS_KEY] as ProductItem[] | undefined)?.length)) {
@@ -72,14 +85,21 @@ async function seedFromLocalFile(): Promise<void> {
   if (Object.keys(set).length) await chrome.storage.local.set(set);
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   chrome.alarms.create(CONFIG.SCAN_ALARM, {
     periodInMinutes: CONFIG.SCAN_PERIOD_MIN,
   });
   chrome.alarms.create(CONFIG.IDEA_REMIND_ALARM, {
     periodInMinutes: CONFIG.IDEA_REMIND_PERIOD_MIN,
   });
-  void seedFromLocalFile(); // fresh install (or reload): restore any empty settings from the local seed
+  void (async () => {
+    await seedFromLocalFile();
+    if (details.reason !== "install") return;
+    const store = await chrome.storage.local.get(null);
+    if (shouldShowXOnboarding(store)) {
+      await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?onboarding=1") });
+    }
+  })().catch(() => { /* Toolbar setup remains available if the welcome tab cannot open. */ });
 });
 chrome.runtime.onStartup.addListener(() => void seedFromLocalFile());
 
@@ -110,7 +130,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
  * no polling, no behavior change. In a dev build: poll the beacon (unpacked extensions serve
  * runtime.getURL resources from disk, so the fetch sees the new file without a reload), and on
  * a bump mark a pending flag + chrome.runtime.reload(); the FRESH worker sees the flag and
- * refreshes open X tabs, replacing the orphaned content script (whose global
+ * refreshes open X/LinkedIn tabs, replacing the orphaned content script (whose global
  * context-invalidated catch-all has already torn it down quietly). Together that removes both
  * manual dev steps: the chrome://extensions reload click AND the per-tab refresh. */
 const DEV_RELOAD_URL = chrome.runtime.getURL("dev-reload.json");
@@ -125,15 +145,15 @@ async function devReloadId(): Promise<number | null> {
   }
 }
 async function devHotReloadInit(): Promise<void> {
-  // Finish the previous cycle first: if the old worker queued a reload, refresh X tabs now so
+  // Finish the previous cycle first: if the old worker queued a reload, refresh social tabs now so
   // the new content script takes over. Runs before the beacon check so the flag can't strand.
   try {
     const flag = (await chrome.storage.local.get("devReloadPending")) as { devReloadPending?: boolean };
     if (flag.devReloadPending) {
       await chrome.storage.local.remove("devReloadPending");
-      const tabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
+      const tabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*", "https://www.linkedin.com/*"] });
       for (const t of tabs) if (t.id != null) void chrome.tabs.reload(t.id);
-      console.log(`[goobi dev] hot-reloaded; refreshed ${tabs.length} X tab(s)`);
+      console.log(`[goobi dev] hot-reloaded; refreshed ${tabs.length} X/LinkedIn tab(s)`);
     }
   } catch { /* storage/tabs unavailable — never let dev plumbing break the worker */ }
   const first = await devReloadId();
@@ -353,7 +373,176 @@ async function twttrFetch(path: string, query?: Record<string, string>, intent =
 
 /* ---------- popup messaging ---------- */
 
+function supportedLinkedInSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  if (sender.tab?.id == null || (sender.frameId !== undefined && sender.frameId !== 0)) return false;
+  // Chrome versions differ on whether a content-script message exposes the
+  // LinkedIn document URL or the extension script URL in sender.url. The tab
+  // snapshot may also briefly lag during SPA navigation. Accept either trusted
+  // sender snapshot when it is an exact supported LinkedIn surface.
+  const frameUrl = typeof sender.url === "string" && sender.url ? sender.url : undefined;
+  const tabUrl = typeof sender.tab.url === "string" ? sender.tab.url : undefined;
+  return hasSupportedLinkedInSenderUrl(frameUrl, tabUrl);
+}
+
+function supportedXSender(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && sender.tab?.id != null
+    && (sender.frameId === undefined || sender.frameId === 0)
+    && hasSupportedXSenderUrl(sender.url, sender.tab.url);
+}
+
+async function xBrokerProfile(sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
+  if (!supportedXSender(sender)) throw new Error("unsupported-x-sender");
+  const profile = await chrome.storage.local.get([
+    CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_COPILOT_KEY, CONFIG.X_PAUSED_KEY,
+    CONFIG.ANTHROPIC_KEY_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY,
+    CONFIG.X_SOUL_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY,
+    CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_MY_POSTS_KEY,
+  ]);
+  const key = profile[CONFIG.ANTHROPIC_KEY_KEY];
+  if (typeof key !== "string" || !key.trim()) throw new Error("no-key");
+  if (!canUseXBroker(profile[CONFIG.X_DATA_CONSENT_KEY], profile[CONFIG.X_COPILOT_KEY],
+    key, profile[CONFIG.X_PAUSED_KEY])) throw new Error("x-disabled");
+  return profile;
+}
+
+type CommentPlatform = "x" | "linkedin";
+const commentRequests: Record<CommentPlatform, Set<AbortController>> = { x: new Set(), linkedin: new Set() };
+const commentContextKeys: Record<CommentPlatform, Set<string>> = {
+  x: new Set([CONFIG.ANTHROPIC_KEY_KEY, CONFIG.TYPESAFE_KEY_KEY, CONFIG.ANALYSIS_PROVIDER_KEY, CONFIG.JEV_ANALYSIS_CONSENT_KEY, CONFIG.JEV_REVIEW_MODE_KEY, CONFIG.JEV_REVIEW_CONSENT_KEY, CONFIG.X_DATA_CONSENT_KEY, CONFIG.X_COPILOT_KEY,
+    CONFIG.X_PAUSED_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY,
+    CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_MY_POSTS_KEY]),
+  linkedin: new Set([CONFIG.ANTHROPIC_KEY_KEY, CONFIG.TYPESAFE_KEY_KEY, CONFIG.ANALYSIS_PROVIDER_KEY, CONFIG.JEV_ANALYSIS_CONSENT_KEY, CONFIG.JEV_REVIEW_MODE_KEY, CONFIG.JEV_REVIEW_CONSENT_KEY, CONFIG.LI_DATA_CONSENT_KEY, CONFIG.LI_COPILOT_KEY,
+    CONFIG.LI_PAUSED_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY,
+    CONFIG.LI_VOICE_KEY, CONFIG.LI_STRATEGY_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_MY_POSTS_KEY]),
+};
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  for (const platform of ["x", "linkedin"] as const) {
+    if (!Object.keys(changes).some((key) => commentContextKeys[platform].has(key))) continue;
+    for (const controller of commentRequests[platform]) controller.abort(new Error("social-context-changed"));
+  }
+});
+
+/** Register before reading settings, so context changes also cancel work waiting at the gate. */
+async function runCommentRequest<T>(platform: CommentPlatform, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  commentRequests[platform].add(controller);
+  try {
+    const result = await work(controller.signal);
+    if (controller.signal.aborted) throw new Error("social-context-changed");
+    return result;
+  } finally {
+    commentRequests[platform].delete(controller);
+  }
+}
+
+async function linkedInActivityAllowed(sender: chrome.runtime.MessageSender): Promise<boolean> {
+  if (!supportedLinkedInSender(sender)) return false;
+  const store = await chrome.storage.local.get([CONFIG.LI_DATA_CONSENT_KEY, CONFIG.LI_COPILOT_KEY]);
+  return store[CONFIG.LI_DATA_CONSENT_KEY] === LI_CONSENT_VERSION && store[CONFIG.LI_COPILOT_KEY] === true;
+}
+
+async function linkedInBrokerProfile(sender: chrome.runtime.MessageSender): Promise<{
+  ok: true;
+  niche: string;
+  voice: string;
+  linkedInVoice: string;
+  soul: string;
+  ownPosts: unknown;
+  ownHandle: unknown;
+  strategy: LinkedInStrategyV1;
+} | { ok: false; error: string }> {
+  if (!supportedLinkedInSender(sender)) return { ok: false, error: "unsupported-linkedin-sender" };
+  const store = await chrome.storage.local.get([
+    CONFIG.LI_DATA_CONSENT_KEY,
+    CONFIG.LI_COPILOT_KEY,
+    CONFIG.LI_PAUSED_KEY,
+    CONFIG.ANTHROPIC_KEY_KEY,
+    CONFIG.X_NICHE_KEY,
+    CONFIG.X_VOICE_KEY,
+    CONFIG.LI_VOICE_KEY,
+    CONFIG.LI_STRATEGY_KEY,
+    CONFIG.X_SOUL_KEY,
+    CONFIG.X_MY_POSTS_KEY,
+    CONFIG.X_MY_HANDLE_KEY,
+  ]);
+  const key = store[CONFIG.ANTHROPIC_KEY_KEY];
+  if (typeof key !== "string" || !key.trim()) return { ok: false, error: "no-key" };
+  if (store[CONFIG.LI_PAUSED_KEY] === true || !canUseLinkedInBroker(store[CONFIG.LI_DATA_CONSENT_KEY], store[CONFIG.LI_COPILOT_KEY], key)) {
+    return { ok: false, error: "linkedin-disabled" };
+  }
+  const niche = typeof store[CONFIG.X_NICHE_KEY] === "string" ? store[CONFIG.X_NICHE_KEY].trim() : "";
+  const strategy = normalizeLinkedInStrategy(store[CONFIG.LI_STRATEGY_KEY]);
+  if (!niche && !linkedInStrategyConfigured(strategy)) return { ok: false, error: "no-focus" };
+  return {
+    ok: true,
+    niche,
+    voice: typeof store[CONFIG.X_VOICE_KEY] === "string" ? store[CONFIG.X_VOICE_KEY].slice(0, 6_000) : "",
+    linkedInVoice: typeof store[CONFIG.LI_VOICE_KEY] === "string" ? store[CONFIG.LI_VOICE_KEY].slice(0, 2_400) : "",
+    soul: typeof store[CONFIG.X_SOUL_KEY] === "string" ? store[CONFIG.X_SOUL_KEY].slice(0, 6_000) : "",
+    ownPosts: store[CONFIG.X_MY_POSTS_KEY],
+    ownHandle: store[CONFIG.X_MY_HANDLE_KEY],
+    strategy,
+  };
+}
+
+let linkedInLogMutation: Promise<void> = Promise.resolve();
+
+function mutateLinkedInLog<T>(mutate: (current: CommentLog) => Promise<T> | T): Promise<T> {
+  const run = linkedInLogMutation.then(async () => {
+    const stored = (await chrome.storage.local.get(CONFIG.LI_COMMENT_LOG_KEY))[CONFIG.LI_COMMENT_LOG_KEY];
+    return mutate(normalizeCommentLog(stored));
+  });
+  linkedInLogMutation = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+const LI_POST_ID_MAX = 180;
+const LI_AUTHOR_MAX = 120;
+const LI_AUTHOR_KEY_MAX = 300;
+const LI_PERMALINK_MAX = 2_048;
+
+function boundedLinkedInText(value: unknown, max: number): string | null {
+  if (typeof value !== "string" || value.length > max || /[\u0000-\u001F\u007F]/.test(value)) return null;
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned || null;
+}
+
+/** Undefined means absent; null means present but invalid. */
+function linkedInReviewPermalink(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  const cleaned = boundedLinkedInText(value, LI_PERMALINK_MAX);
+  if (!cleaned || !isSupportedLinkedInUrl(cleaned)) return null;
+  const url = new URL(cleaned);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function linkedInReviewMetadata(value: { postId?: unknown; author?: unknown; permalink?: unknown }): {
+  postId: string;
+  author: string;
+  permalink?: string;
+} | null {
+  const postId = boundedLinkedInText(value.postId, LI_POST_ID_MAX);
+  const author = boundedLinkedInText(value.author, LI_AUTHOR_MAX);
+  const permalink = linkedInReviewPermalink(value.permalink);
+  if (!postId || !author || permalink === null) return null;
+  return permalink ? { postId, author, permalink } : { postId, author };
+}
+
+function linkedInAuthorKey(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  const cleaned = boundedLinkedInText(value, LI_AUTHOR_KEY_MAX)?.toLowerCase();
+  return cleaned && /^\/(?:in|company)\/[a-z0-9._~-]+$/i.test(cleaned) ? cleaned : null;
+}
+
 chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
+  if (!msg || typeof msg !== "object" || typeof msg.type !== "string") {
+    sendResponse({ error: "invalid-message" });
+    return false;
+  }
   (async () => {
     switch (msg.type) {
       case "OPEN_SIDE_PANEL": {
@@ -378,36 +567,199 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
       case "APPLY_REC":
         sendResponse(await applyRec(msg.kind, msg.tabIds));
         break;
-      case "SCORE_POSTS":
+      case "LI_BROKER_STATUS":
+        sendResponse({ protocol: LI_BROKER_PROTOCOL });
+        break;
+      case "LI_SCORE_POSTS": {
+        const payload = sanitizeLinkedInScorePayload(msg);
+        if (!payload) { sendResponse({ scores: [], error: "invalid-linkedin-payload" }); break; }
         try {
-          const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          const products = ((await chrome.storage.local.get(CONFIG.X_PRODUCTS_KEY))[CONFIG.X_PRODUCTS_KEY] as { name: string; blurb?: string }[]) || [];
-          sendResponse({ scores: await scorePosts(msg.posts, niche, products) });
+          const scores = await runCommentRequest("linkedin", async (signal) => {
+            const profile = await linkedInBrokerProfile(sender);
+            if (!profile.ok) throw new Error(profile.error);
+            return scorePosts(payload.posts, profile.niche, [], "linkedin",
+              linkedInStrategyPrompt(profile.strategy, profile.niche), signal);
+          });
+          sendResponse({ scores });
         } catch (e) {
           sendResponse({ scores: [], error: (e as Error).message });
         }
         break;
-      case "DRAFT_REPLY":
+      }
+      case "LI_DRAFT_COMMENT": {
+        const payload = sanitizeLinkedInDraftPayload(msg);
+        if (!payload) { sendResponse({ error: "invalid-linkedin-payload" }); break; }
         try {
-          const profile = await chrome.storage.local.get([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_POSTING_MODEL_KEY]);
-          const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
-          const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
-          // The content script resolves the relevant product(s) and sends them; fall back to the legacy single-product string.
-          const product = msg.product ?? (((await chrome.storage.local.get(CONFIG.X_PRODUCT_KEY))[CONFIG.X_PRODUCT_KEY] as string) || "");
-          // Stage-1 draft context (niche + scorer rationale + author line): specificity is a ranked
-          // variable in the 2026 pipeline (LLM reply grading + slop score), and these strings are
-          // already known — user-message grounding stays separate from the reusable draft rules.
-          const niche = ((await chrome.storage.local.get(CONFIG.X_NICHE_KEY))[CONFIG.X_NICHE_KEY] as string) || "";
-          const storedModel = profile[CONFIG.X_POSTING_MODEL_KEY];
-          const personalReplyLine = msg.style === "community-spark" && isPersonalPostingModel(storedModel)
-            ? postingModelCommunityGuidance(storedModel, (profile[CONFIG.X_MY_HANDLE_KEY] as string) || "")
-            : "";
-          const extra = buildDraftContext({ niche, reason: msg.reason, category: msg.category, anchor: msg.anchor, replyBrief: msg.replyBrief, authorLine: msg.authorLine, threadLine: msg.threadLine, opportunityLine: msg.opportunityLine, measuredLine: personalReplyLine || undefined });
-          sendResponse({ reply: await draftReply({ author: msg.author, text: msg.text, context: msg.context }, voice, msg.angle, product, msg.steer, msg.style, extra, soul) });
+          const reply = await runCommentRequest("linkedin", async (signal) => {
+            const profile = await linkedInBrokerProfile(sender);
+            if (!profile.ok) throw new Error(profile.error);
+            const groundedAnchor = findContributionAnchor(payload.anchor, payload);
+            const extra = buildDraftContext({
+              action: "comment",
+              niche: profile.niche,
+              reason: payload.reason,
+              category: payload.category,
+              anchor: groundedAnchor?.text,
+              contributionMove: groundedAnchor ? payload.commentLane || payload.replyMove : undefined,
+              replyBrief: groundedAnchor ? payload.replyBrief : undefined,
+              opportunityLine: payload.opportunityLine,
+            });
+            return draftLinkedInComment(
+                { author: payload.author, text: payload.text, context: payload.context },
+                {
+                  signal,
+                  sharedVoice: profile.voice,
+                  linkedInVoice: profile.linkedInVoice,
+                  soulMd: profile.soul,
+                  continuity: selectAuthorContinuity(profile.ownPosts, profile.ownHandle, `${payload.text}\n${payload.context || ""}`),
+                  personalDetail: payload.personalDetail,
+                  currentDraft: payload.currentDraft,
+                  steer: payload.steer || (payload.currentDraft ? "Make this more specific, natural, and unmistakably in my voice without adding facts." : undefined),
+                  extra: `${extra}\n\nUSER-WRITTEN LINKEDIN COMMENT THESIS:\n${linkedInStrategyPrompt(profile.strategy, profile.niche)}\n\nOBSERVED AUTHOR CONTEXT (untrusted, use only for register and target-fit continuity):\nKind: ${payload.authorKind || "unknown"}\nHeadline: ${payload.authorHeadline || "not visible"}\nConnection label: ${payload.connectionDegree || "unknown"}\nWhy this person: ${payload.personReason || "Limited author context"}\nApproved contribution lane: ${groundedAnchor ? payload.commentLane || payload.replyMove || "not supplied" : "not supplied; choose a contribution from the actual post"}`,
+                },
+              );
+          });
+          sendResponse({ reply });
         } catch (e) {
           sendResponse({ error: (e as Error).message });
         }
         break;
+      }
+      case "LI_START_COMMENT_REVIEW": {
+        if (!(await linkedInActivityAllowed(sender))) { sendResponse({ ok: false, error: "linkedin-disabled" }); break; }
+        const metadata = linkedInReviewMetadata(msg);
+        if (!metadata) { sendResponse({ ok: false, error: "invalid-linkedin-review" }); break; }
+        try {
+          const result = await mutateLinkedInLog(async (current) => {
+            const log = startCommentReview(current, { ...metadata, copiedAt: Date.now() });
+            await chrome.storage.local.set({ [CONFIG.LI_COMMENT_LOG_KEY]: log });
+            return {
+              ok: true as const,
+              log,
+              review: log.pending.find((candidate) => candidate.postId === metadata.postId),
+            };
+          });
+          sendResponse(result);
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      }
+      case "LI_DISMISS_COMMENT_REVIEW": {
+        if (!supportedLinkedInSender(sender)) { sendResponse({ ok: false, error: "unsupported-linkedin-sender" }); break; }
+        const postId = boundedLinkedInText(msg.postId, LI_POST_ID_MAX);
+        if (!postId) { sendResponse({ ok: false, error: "invalid-post-id" }); break; }
+        try {
+          const result = await mutateLinkedInLog(async (current) => {
+            const log = dismissCommentReview(current, postId, Date.now());
+            await chrome.storage.local.set({ [CONFIG.LI_COMMENT_LOG_KEY]: log });
+            return { ok: true as const, log };
+          });
+          sendResponse(result);
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      }
+      case "LI_MARK_POSTED": {
+        if (!(await linkedInActivityAllowed(sender))) { sendResponse({ ok: false, error: "linkedin-disabled" }); break; }
+        const metadata = linkedInReviewMetadata(msg);
+        const authorKey = linkedInAuthorKey(msg.authorKey);
+        if (!metadata || authorKey === null) { sendResponse({ ok: false, error: "invalid-linkedin-review" }); break; }
+        try {
+          const result = await mutateLinkedInLog(async (current) => {
+            const event: CommentLogEntry = { ...metadata, ...(authorKey ? { authorKey } : {}), postedAt: Date.now() };
+            const log = markCommentPosted(current, event);
+            await chrome.storage.local.set({ [CONFIG.LI_COMMENT_LOG_KEY]: log });
+            return { ok: true as const, log, event: log.entries.find((entry) => entry.postId === metadata.postId) ?? event };
+          });
+          sendResponse(result);
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      }
+      case "LI_UNDO_POSTED": {
+        if (!supportedLinkedInSender(sender)) { sendResponse({ ok: false, error: "unsupported-linkedin-sender" }); break; }
+        const postId = boundedLinkedInText(msg.postId, LI_POST_ID_MAX);
+        const postedAt = msg.postedAt;
+        const author = msg.author === undefined ? undefined : boundedLinkedInText(msg.author, LI_AUTHOR_MAX);
+        const permalink = linkedInReviewPermalink(msg.permalink);
+        if (!postId || !Number.isSafeInteger(postedAt) || postedAt < 0 || author === null || permalink === null || (permalink !== undefined && author === undefined)) {
+          sendResponse({ ok: false, error: "invalid-linkedin-undo" });
+          break;
+        }
+        try {
+          const result = await mutateLinkedInLog(async (current) => {
+            const exact = current.entries.some((entry) => entry.postId === postId && entry.postedAt === postedAt);
+            if (!exact) return { ok: false as const, log: current, error: "stale-undo" };
+            const event = { postId, postedAt, ...(author ? { author } : {}), ...(permalink ? { permalink } : {}) };
+            // `undoLatestComment` removes the exact confirmed event and, when metadata is
+            // supplied, restores its in-review receipt in this same state transition/write.
+            const log = undoLatestComment(current, event, Date.now());
+            await chrome.storage.local.set({ [CONFIG.LI_COMMENT_LOG_KEY]: log });
+            return {
+              ok: true as const,
+              log,
+              review: author ? log.pending.find((candidate) => candidate.postId === postId) : undefined,
+            };
+          });
+          sendResponse(result);
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      }
+      case "SCORE_POSTS": {
+        const payload = sanitizeXScorePayload(msg);
+        if (!payload) { sendResponse({ scores: [], error: "invalid-x-payload" }); break; }
+        try {
+          const scores = await runCommentRequest("x", async (signal) => {
+            const profile = await xBrokerProfile(sender);
+            const niche = (profile[CONFIG.X_NICHE_KEY] as string) || "";
+            const products = (profile[CONFIG.X_PRODUCTS_KEY] as { name: string; blurb?: string }[]) || [];
+            return scorePosts(payload.posts, niche, products, "x", undefined, signal);
+          });
+          sendResponse({ scores });
+        } catch (e) {
+          sendResponse({ scores: [], error: (e as Error).message });
+        }
+        break;
+      }
+      case "DRAFT_REPLY": {
+        const payload = sanitizeXDraftPayload(msg);
+        if (!payload) { sendResponse({ error: "invalid-x-payload" }); break; }
+        try {
+          const reply = await runCommentRequest("x", async (signal) => {
+            const profile = await xBrokerProfile(sender);
+            const groundedAnchor = findContributionAnchor(payload.anchor, payload);
+            const voice = (profile[CONFIG.X_VOICE_KEY] as string) || "";
+            const soul = (profile[CONFIG.X_SOUL_KEY] as string) || "";
+            const sharedProducts = Array.isArray(profile[CONFIG.X_PRODUCTS_KEY])
+              ? (profile[CONFIG.X_PRODUCTS_KEY] as { name?: string; url?: string; blurb?: string }[])
+                  .filter((item) => item?.name?.trim())
+                  .map((item) => `${item.name!.trim()}${item.blurb?.trim() ? ` — ${item.blurb.trim()}` : ""}${item.url?.trim() ? ` (${item.url.trim()})` : ""}`)
+                  .join("\n")
+              : "";
+            const product = payload.product ?? (sharedProducts || ((profile[CONFIG.X_PRODUCT_KEY] as string) || ""));
+            // Stage-1 draft context (niche + scorer rationale + author line): specificity is a ranked
+            // variable in the 2026 pipeline (LLM reply grading + slop score), and these strings are
+            // already known — user-message grounding stays separate from the reusable draft rules.
+            const niche = (profile[CONFIG.X_NICHE_KEY] as string) || "";
+            const storedModel = profile[CONFIG.X_POSTING_MODEL_KEY];
+            const personalReplyLine = payload.style === "community-spark" && isPersonalPostingModel(storedModel)
+              ? postingModelCommunityGuidance(storedModel, (profile[CONFIG.X_MY_HANDLE_KEY] as string) || "")
+              : "";
+            const extra = buildDraftContext({ action: "reply", niche, reason: payload.reason, category: payload.category, anchor: groundedAnchor?.text, replyBrief: groundedAnchor ? payload.replyBrief : undefined, authorLine: payload.authorLine, threadLine: payload.threadLine, opportunityLine: payload.opportunityLine, measuredLine: personalReplyLine || undefined });
+            const continuity = selectAuthorContinuity(profile[CONFIG.X_MY_POSTS_KEY], profile[CONFIG.X_MY_HANDLE_KEY], `${payload.text}\n${payload.context || ""}`);
+            return draftReply({ author: payload.author, text: payload.text, context: payload.context }, voice, payload.angle, product, payload.steer, payload.style, extra, soul, "x", signal, continuity);
+          });
+          sendResponse({ reply });
+        } catch (e) {
+          sendResponse({ error: (e as Error).message });
+        }
+        break;
+      }
       case "OPEN_REPLY_POST": {
         if (!/^\d+$/.test(msg.postId)) { sendResponse({ ok: false, error: "invalid-post-id" }); break; }
         const post = { postId: msg.postId, author: String(msg.author || "").replace(/^@+/, "") };
@@ -471,6 +823,8 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, sendResponse) => {
       default:
         sendResponse({ error: "unknown message" });
     }
-  })();
+  })().catch((error: unknown) => {
+    sendResponse({ error: error instanceof Error ? error.message : "broker-error" });
+  });
   return true; // keep the channel open for the async response
 });

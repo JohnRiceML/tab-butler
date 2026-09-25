@@ -1,4 +1,5 @@
 import { CONFIG } from "../lib/config";
+import { opportunityPresentation, replyPriorityTone, replyConversationLabel } from "../lib/opportunity-presentation";
 import { REPLY_ANGLES, REPLY_STYLES, type ReplyStyleId } from "../lib/prompts";
 import { parseTimelineTweets, parseUser, pickDiscoveryTweets, pickOwnPostsWithStats, nicheSearchQuery, freshReachExplorationQueries, nicheTopics, type OwnPost, type TwttrTweet } from "../lib/twttr";
 import { computeMomentum, dailyShape } from "../lib/momentum";
@@ -27,6 +28,9 @@ import { DM_INTENT_LABEL, DM_STAGE_LABEL, addDmCandidate, appendDmContext, canDr
 import { candidateDmSignal, deriveDmMetrics, rankDmNextActions } from "../lib/dm-intelligence";
 import { DEFAULT_DAILY_GOALS, dailyGoalPercent, normalizeDailyGoals, type DailyGoals } from "../lib/daily-goals";
 import type { Message, ProductItem } from "../lib/types";
+import { assessXContribution } from "../lib/x-contribution";
+import { hasCompleteXScores } from "../lib/x-score-contract";
+import { canUseXBroker, X_PAYLOAD_LIMITS } from "../lib/x-policy";
 
 /**
  * Goobi — X (Twitter) reply copilot. Runs only on x.com/twitter.com.
@@ -167,7 +171,7 @@ interface FreshReachWatchEntry {
 interface FreshReachWatchStore { ownerHandle: string; entries: FreshReachWatchEntry[]; }
 
 /** status id -> last result. Authoritative dedup + instant re-badge on remount. */
-const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; isReplyToOwnPost?: boolean }>();
+const seen = new Map<string, { score: number; reason: string; category?: string; products?: ProductItem[]; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; isReplyToOwnPost?: boolean; inputKey?: string }>();
 
 /** Collected reply-worthy posts, surfaced in the always-on dock. */
 interface Opp { id: string; author: string; text: string; score: number; reason: string; context?: string; postedAt?: number; likes?: number; replies?: number; views?: number; reposts?: number; quotes?: number; avatar?: string; category?: string; products?: ProductItem[]; name?: string; followers?: number; source?: "feed" | "search" | "target" | "fresh-reach"; freshReach?: FreshReachEvidence; anchor?: string; replyMove?: ReplyMove; replyBrief?: string; risk?: ReplyRisk; verified?: boolean; manual?: boolean; isReplyToOwnPost?: boolean; }
@@ -188,6 +192,30 @@ const queue: Queued[] = [];
 /** Posts sent to Claude and awaiting a score — guards against re-queueing the
  *  same post during the request window (e.g. a Rescan mid-flight). */
 const inFlight = new Set<string>();
+let scoreGeneration = 0;
+let flushBusy = false;
+let scoreRetryAt = 0;
+let scanErrorNotified = false;
+const scoreFailures = new Map<string, { inputKey: string; attempts: number }>();
+
+/** Auto scanning and manual Add must read exactly the same bounded content. */
+function readFeedPost(el: HTMLElement): Omit<Queued, "el"> | null {
+  const info = statusInfo(el);
+  const text = outerText(el).slice(0, 400);
+  if (!info || !text) return null;
+  return { ...info, text, context: quotedText(el)?.slice(0, 320), isReplyToOwnPost: isReplyToOwnPost(el) };
+}
+
+function feedInputKey(post: Omit<Queued, "el">): string {
+  return JSON.stringify([post.id, post.author.toLowerCase(), post.text, post.context || "", post.isReplyToOwnPost]);
+}
+
+/** Unmounted snapshots remain valid; a recycled or expanded live row does not. */
+function feedPostMatches(post: Queued): boolean {
+  if (!post.el.isConnected) return true;
+  const live = readFeedPost(post.el);
+  return !!live && feedInputKey(live) === feedInputKey(post);
+}
 
 function getLocal(key: string): Promise<unknown> {
   return new Promise((res) => {
@@ -493,23 +521,26 @@ function scan() {
   // and Find spots doesn't route through here at all. The pace chip/momentum strip show why.
   if (currentReplyPace().level === "easeoff" && Date.now() > manualScanUntil) return;
   if (scoreCalls >= MAX_SCORE_CALLS) {
-    if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — hit ⟳ Rescan in the dock to keep finding spots."); }
+    if (!scanCapNotified) { scanCapNotified = true; toast("Scanned a lot this session — use Scan this page in the dock to keep finding spots."); }
     return;
   }
   if (!selfHandle) selfHandle = getSelf();
   document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]').forEach((el) => {
-    const info = statusInfo(el);
+    const info = readFeedPost(el);
     if (!info) return;
     if (inFlight.has(info.id)) return; // sent to Claude, awaiting its score
-    const cached = seen.get(info.id);
+    const inputKey = feedInputKey(info);
+    let cached = seen.get(info.id);
+    // X paints text, quoted context and reply context in separate updates. A score
+    // of an earlier partial read must not permanently decide the completed post.
+    if (cached && ((cached.inputKey && cached.inputKey !== inputKey) ||
+        (!cached.isReplyToOwnPost && info.isReplyToOwnPost))) {
+      seen.delete(info.id);
+      cached = undefined;
+      clearPostOverlay(el);
+    }
     if (cached) {
       const o = opps.get(info.id);
-      // X sometimes paints the lightweight reply-context row after the tweet text. Upgrade a
-      // cached item as soon as that evidence appears so virtualization cannot freeze a cold read.
-      if (!cached.isReplyToOwnPost && isReplyToOwnPost(el)) {
-        cached.isReplyToOwnPost = true;
-        if (o) o.isReplyToOwnPost = true;
-      }
       if (commentedIds.has(info.id)) badge(el, cached.reason, cached.category, o ? effectiveScore(o) : cached.score); // replied → green badge, not in the dock
       else if (o) {
         // Surfaced — refresh counts from the LIVE node X just re-rendered, so pileup/buried and the
@@ -527,35 +558,44 @@ function scan() {
       else addButton(el); // scored but didn't make the cut → offer a manual "+ Add"
       return;
     }
-    if (el.dataset.tbx === "q") return; // this node already queued
+    if (queue.some((post) => post.id === info.id)) return;
     if (isPromoted(el)) return;
     if (selfHandle && info.author.toLowerCase() === selfHandle) return;
-    const text = outerText(el);
-    if (!text) return; // media-only / not painted yet — re-evaluated next pass
-    el.dataset.tbx = "q";
-    queue.push({
-      id: info.id,
-      author: info.author,
-      text: text.slice(0, 400),
-      context: quotedText(el)?.slice(0, 320),
-      el,
-      isReplyToOwnPost: isReplyToOwnPost(el),
-    });
+    const failure = scoreFailures.get(info.id);
+    if (failure?.inputKey === inputKey && failure.attempts >= 2) return;
+    queue.push({ ...info, el });
   });
   scheduleFlush();
 }
 
 let flushTimer: number | undefined;
 function scheduleFlush() {
-  if (flushTimer) clearTimeout(flushTimer);
-  flushTimer = setTimeout(flush, 900) as unknown as number;
+  // Continuous feed mutations must not keep pushing the scoring timer back.
+  if (flushTimer !== undefined || flushBusy || !queue.length) return;
+  flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, Math.max(900, scoreRetryAt - Date.now())) as unknown as number;
 }
 
 async function flush() {
   if (invalidated || !contextOK()) { teardown(); return; }
-  if (!enabled || paused || scoreCalls >= MAX_SCORE_CALLS) return;
-  const batch = queue.splice(0, BATCH).filter((q) => q.el.isConnected && !seen.has(q.id));
-  if (!batch.length) return;
+  if (!enabled || paused || flushBusy || scoreCalls >= MAX_SCORE_CALLS) return;
+  const batch: Queued[] = [];
+  const ids = new Set<string>();
+  while (queue.length && batch.length < BATCH) {
+    const queued = queue.shift()!;
+    if (!queued.el.isConnected) continue;
+    const live = readFeedPost(queued.el);
+    if (!live || live.id !== queued.id || ids.has(live.id) || seen.has(live.id) || inFlight.has(live.id) ||
+        isPromoted(queued.el) || live.author.toLowerCase() === selfHandle) continue;
+    const failure = scoreFailures.get(live.id);
+    if (failure?.inputKey === feedInputKey(live) && failure.attempts >= 2) continue;
+    // Capture after the batching delay, when X has had time to finish painting.
+    batch.push({ ...live, el: queued.el });
+    ids.add(live.id);
+  }
+  if (!batch.length) { requestScan(); return; }
+  flushBusy = true;
+  const generation = scoreGeneration;
+  const account = getSelf();
   scoreCalls++;
   const snap = batch.map((b) => ({ ...snapStats(b.el), avatar: b.el.isConnected ? avatarUrl(b.el) : undefined, name: b.el.isConnected ? displayName(b.el) : undefined, verified: b.el.isConnected ? isVerified(b.el) : undefined }));
   const posts = batch.map((b, i) => ({
@@ -566,58 +606,81 @@ async function flush() {
   }));
   batch.forEach((b) => inFlight.add(b.id));
   refreshGoobi(); // Goobi concentrates while Claude analyzes the batch
-  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({
-    type: "SCORE_POSTS",
-    posts,
-  });
-  batch.forEach((b) => inFlight.delete(b.id));
-  refreshGoobi();
-  if (resp?.error === "no-key") {
-    if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Goobi panel to enable reply suggestions."); }
-    enabled = false; // stop hammering until reload
-    return;
-  }
-  if (!resp || resp.error) return; // transient error — back off; the cap bounds retries
-  let changed = false;
-  for (const s of resp.scores ?? []) {
-    const b = batch[s.i];
-    if (!b) continue;
-    const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
-    const category = catId(s.category);
-    // The scorer returns product NAMES (resolved SW-side); map them to objects by
-    // identity so a reorder/edit can't mis-point. Snapshot the objects on the opp.
-    const products = category === "promote" && Array.isArray(s.products)
-      ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
-      : undefined;
-    const stat = snap[s.i] ?? {};
-    seen.set(b.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, isReplyToOwnPost: b.isReplyToOwnPost || undefined });
-    if (commentedIds.has(b.id)) {
-      // Already replied to it — never surface it in the dock; keep only the green "✓ Commented" badge.
-      if (opps.delete(b.id)) changed = true;
-      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
-    } else if (s.score >= (b.isReplyToOwnPost ? 0.4 : THRESHOLD)) {
-      opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, context: b.context, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, source: "feed", isReplyToOwnPost: b.isReplyToOwnPost || undefined });
-      changed = true;
-      if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
-    } else {
-      const ex = opps.get(b.id);
-      if (ex?.manual) {
-        // You pinned this one with "+ Add" — keep it, just refresh its real score/tag.
-        ex.score = s.score; ex.reason = reason; ex.category = category; ex.anchor = s.anchor; ex.replyMove = s.replyMove; ex.replyBrief = s.replyBrief; ex.risk = s.risk;
-        changed = true;
-        if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(ex));
-      } else {
-        // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
+  try {
+    const resp = await send<{ scores?: ScoredPost[]; error?: string }>({
+      type: "SCORE_POSTS",
+      posts,
+    });
+    if (generation !== scoreGeneration || account !== getSelf() || invalidated || !enabled || paused) return;
+    if (resp?.error === "no-key") {
+      if (!noKeyNotified) { noKeyNotified = true; toast("Add your Anthropic key in the Goobi panel to enable reply suggestions."); }
+      enabled = false; // stop hammering until reload
+      return;
+    }
+    if (!resp || resp.error || !hasCompleteXScores(resp.scores, posts.map((post) => post.i))) {
+      scoreRetryAt = Date.now() + 5_000;
+      for (const b of batch) {
+        const inputKey = feedInputKey(b);
+        const old = scoreFailures.get(b.id);
+        scoreFailures.set(b.id, { inputKey, attempts: (old?.inputKey === inputKey ? old.attempts : 0) + 1 });
+      }
+      if (!scanErrorNotified) {
+        scanErrorNotified = true;
+        toast(resp?.error?.startsWith("jev-")
+          ? `Could not scan: ${friendlyErr(resp.error)}.`
+          : "Some posts couldn't be scored. Goobi will retry once; use Scan this page if needed.");
+      }
+      return;
+    }
+    scoreRetryAt = 0;
+    let changed = false;
+    for (const s of resp.scores ?? []) {
+      const b = batch[s.i];
+      if (!b || !feedPostMatches(b)) continue;
+      const contribution = assessXContribution({ ...s, text: b.text, context: b.context, isReplyToOwnPost: b.isReplyToOwnPost });
+      const reason = contribution.eligible ? (s.reason || "").split(/\s+/).slice(0, 6).join(" ") : contribution.reason;
+      const category = catId(s.category);
+      // The scorer returns product NAMES (resolved SW-side); map them to objects by
+      // identity so a reorder/edit can't mis-point. Snapshot the objects on the opp.
+      const products = category === "promote" && Array.isArray(s.products)
+        ? s.products.map((n) => xProducts.find((p) => p.name === n)).filter((p): p is ProductItem => !!p).slice(0, 2)
+        : undefined;
+      const stat = snap[s.i] ?? {};
+      scoreFailures.delete(b.id);
+      seen.set(b.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, isReplyToOwnPost: b.isReplyToOwnPost || undefined, inputKey: feedInputKey(b) });
+      if (commentedIds.has(b.id)) {
+        // Already replied to it — never surface it in the dock; keep only the green "✓ Commented" badge.
         if (opps.delete(b.id)) changed = true;
-        if (b.el.isConnected) {
-          clearPostOverlay(b.el);
-          addButton(b.el);
+        if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, s.score);
+      } else if (contribution.eligible) {
+        opps.set(b.id, { id: b.id, author: b.author, text: b.text, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk, context: b.context, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts, avatar: stat.avatar, name: stat.name, verified: stat.verified, source: "feed", isReplyToOwnPost: b.isReplyToOwnPost || undefined, manual: opps.get(b.id)?.manual });
+        changed = true;
+        if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(opps.get(b.id)!));
+      } else {
+        const ex = opps.get(b.id);
+        if (ex?.manual) {
+          // You pinned this one with "+ Add" — keep it, just refresh its real score/tag.
+          Object.assign(ex, { text: b.text, context: b.context, isReplyToOwnPost: b.isReplyToOwnPost, score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
+          changed = true;
+          if (statusInfo(b.el)?.id === b.id) badge(b.el, reason, category, effectiveScore(ex));
+        } else {
+          // Re-scored below threshold (e.g. after a Rescan): prune the stale spot + badge.
+          if (opps.delete(b.id)) changed = true;
+          if (b.el.isConnected && statusInfo(b.el)?.id === b.id) {
+            clearPostOverlay(b.el);
+            addButton(b.el);
+          }
         }
       }
     }
+    if (changed) renderDock();
+  } finally {
+    batch.forEach((b) => inFlight.delete(b.id));
+    flushBusy = false;
+    refreshGoobi();
+    requestScan();
+    if (queue.length) scheduleFlush();
   }
-  if (changed) renderDock();
-  if (queue.length) scheduleFlush();
 }
 
 /** Manual rescan (dock button). Lifts the per-session cost cap and forgets prior
@@ -627,11 +690,23 @@ async function flush() {
  *  dock goes quiet until resumed. Persisted so it survives navigation + reload. */
 function setPaused(v: boolean): void {
   paused = v;
+  if (v) scoreGeneration++; // discard assessments and target drafts that finish after pausing
   safeSet({ [CONFIG.X_PAUSED_KEY]: v });
   if (v) { dismissPanel(); if (dockPlayOpen) resetPlay(); } // close any open draft + collapse the playground while paused
   renderDock();
   if (v) { toast("Paused — the copilot is quiet until you resume."); }
   else { toast("Resumed — finding reply spots again."); rescan(); }
+}
+
+function resetFeedScores(): void {
+  scoreGeneration++;
+  seen.clear();
+  scoreFailures.clear();
+  queue.length = 0;
+  scoreRetryAt = 0;
+  scanErrorNotified = false;
+  if (flushTimer !== undefined) { clearTimeout(flushTimer); flushTimer = undefined; }
+  for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) clearPostOverlay(el);
 }
 
 function rescan() {
@@ -640,9 +715,7 @@ function rescan() {
   scoreCalls = 0;        // user explicitly asked for more — reset the guard
   scanCapNotified = false;
   manualScanUntil = Date.now() + 2 * 60_000; // an explicit ask overrides the ease-off scan pause for one short window
-  seen.clear();          // re-evaluate the visible feed from scratch
-  queue.length = 0;      // drop anything half-queued
-  for (const el of document.querySelectorAll<HTMLElement>('article[data-testid="tweet"]')) delete el.dataset.tbx;
+  resetFeedScores();     // re-evaluate the visible feed; discard older in-flight results
   toast("Rescanning the page for reply spots…");
   touchGoobi();
   goobiSearchUntil = Date.now() + 2200; // Goobi perks up + looks around
@@ -987,7 +1060,10 @@ async function fetchFreshReachAuthorPosts(accounts: readonly FreshReachAccount[]
  *  the dock. These are OFF the current page, so copy-only review opens the exact
  *  post without touching its Reply control or composer. */
 async function findSpots(mode: FindSpotsMode = "niche") {
-  if (findingSpots) return;
+  if (findingSpots || paused || invalidated || !contextOK()) return;
+  const generation = scoreGeneration;
+  const account = getSelf();
+  const current = () => generation === scoreGeneration && account === getSelf() && enabled && !paused && !invalidated && contextOK();
   if (!enabled) { toast("Add your Anthropic key in the Goobi panel to score posts."); return; }
   const q = xNiche.trim();
   if (!q) { toast("Set your niche in the Goobi panel so it knows what to search for."); return; }
@@ -1202,18 +1278,20 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       return;
     }
     if (mode === "fresh-reach" && lastFreshReachRun?.id === runId) lastFreshReachRun.contentScored = found.length;
+    if (!current()) return;
     const posts = found.map((t, i) => ({ i, author: t.author, text: t.text.slice(0, 400), context: t.context?.slice(0, 320) }));
     // Bounded 12-row model calls preserve response completeness at the 36-post deep-scan ceiling;
     // one 1,536-token JSON response can truncate before returning every row. Indices stay global.
     const scoreBatches = Array.from({ length: Math.ceil(posts.length / 12) }, (_, i) => posts.slice(i * 12, i * 12 + 12));
     const scoreResponses = await Promise.all(scoreBatches.map((batch) =>
       send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: batch })));
+    if (!current()) return;
     if (scoreResponses.some((response) => response?.error === "no-key")) {
       failFreshReachRun(runId, "The data search completed, but an Anthropic key is needed to score the candidate posts.");
       toast("Add your Anthropic key in the Goobi panel to score posts.");
       return;
     }
-    if (scoreResponses.some((response) => !response || response.error)) {
+    if (scoreResponses.some((response, index) => !response || response.error || !hasCompleteXScores(response.scores, scoreBatches[index].map((post) => post.i)))) {
       failFreshReachRun(runId, "The data search completed, but content scoring did not complete. Try again.");
       toast("Couldn't score the posts — try again.");
       return;
@@ -1227,7 +1305,7 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       for (const s of scores) {
         const t = found[s.i];
         const evidence = t ? evidenceById.get(t.id) : undefined;
-        if (!t || !evidence || !freshReachContentEligible(s)
+        if (!t || !evidence || !assessXContribution({ ...s, text: t.text.slice(0, 400), context: t.context?.slice(0, 320) }).eligible || !freshReachContentEligible(s)
           || !freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()])) continue;
         const opening = freshReachOpeningScore({ contentFit: s.score, observedOpportunity: evidence.observedOpportunity, momentum: opportunityMomentum(t.id)?.score });
         const handle = t.author.toLowerCase();
@@ -1249,7 +1327,8 @@ async function findSpots(mode: FindSpotsMode = "niche") {
       seen.set(t.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
       const stillEligible = mode !== "fresh-reach"
         || !!freshReachCandidate(t, myFollowers, Date.now(), replyLog.authors[t.author.toLowerCase()]);
-      const contentEligible = mode === "fresh-reach" ? freshReachContentEligible(s) : s.score >= THRESHOLD;
+      const contribution = assessXContribution({ ...s, text: t.text.slice(0, 400), context: t.context?.slice(0, 320) });
+      const contentEligible = contribution.eligible && (mode !== "fresh-reach" || freshReachContentEligible(s));
       if (contentEligible && stillEligible && (mode !== "fresh-reach" || freshChosenIds.has(t.id))) {
         const evidence = evidenceById.get(t.id);
         if (evidence) {
@@ -1408,27 +1487,23 @@ function clearPostOverlay(el: HTMLElement): void {
 
 function postOverlayColor(model: PostOverlayModel): { bg: string; fg: string; border: string } {
   if (model.done) return { bg: DONE, fg: DONE_INK, border: DONE };
-  if (model.kind === "passed") return { bg: "rgba(29,24,18,.94)", fg: "#b6a892", border: "rgba(214,154,92,.38)" };
-  if (model.recommendation?.authorRepeat) return { bg: "#e89a3c", fg: "#211406", border: "#e89a3c" };
-  if (model.recommendation?.lane === "inbound" || model.recommendation?.lane === "continue") return { bg: "#6fcf7f", fg: "#102016", border: "#6fcf7f" };
-  if (model.recommendation?.lane === "community") return { bg: "#5dcaa5", fg: "#0c2119", border: "#5dcaa5" };
-  return { bg: ACCENT, fg: INK, border: ACCENT };
+  if (model.kind === "passed" || (model.opp?.manual && !assessXContribution(model.opp).eligible)) return opportunityPresentation("low");
+  if (model.recommendation?.authorRepeat) return opportunityPresentation("attention");
+  return opportunityPresentation(replyPriorityTone(model.recommendation?.strength));
 }
 
 function shortStrength(rec?: ReplyRecommendation): string {
-  return rec?.strength === "best next" ? "best" : rec?.strength === "good option" ? "good" : "later";
+  return opportunityPresentation(replyPriorityTone(rec?.strength)).label;
 }
 
 function postOverlayLabel(model: PostOverlayModel): string {
   if (model.done) return "✓ Replied";
-  if (model.isReplyToOwnPost) return model.kind === "passed"
-    ? "↩ Your post · passed"
-    : `↩ They replied to your post · ${shortStrength(model.recommendation)}`;
-  if (model.kind === "passed") return "Goobi passed";
+  if (model.opp?.manual && !assessXContribution(model.opp).eligible) return "＋ Your pick";
+  if (model.kind === "passed") return "Not a match";
   if (model.recommendation?.authorRepeat) return `↻ Replied ${model.recommendation.authorRepeat.label} · ${shortStrength(model.recommendation)}`;
   return model.recommendation
-    ? `✦ ${model.recommendation.laneLabel} · ${shortStrength(model.recommendation)}`
-    : `✦ ${catLabel(model.category)}`;
+    ? `${shortStrength(model.recommendation)} · ${replyConversationLabel(model.recommendation.lane)}`
+    : `Review this post · ${catLabel(model.category)}`;
 }
 
 function postOverlayAction(label: string, primary: boolean, run: () => void): HTMLButtonElement {
@@ -1469,7 +1544,7 @@ function renderPostOverlayDetails(el: HTMLElement, host: HTMLElement, model: Pos
   Object.assign(header.style, { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" });
   const heading = document.createElement("div");
   const title = document.createElement("div");
-  title.textContent = model.done ? "Reply recorded" : model.isReplyToOwnPost ? `They replied to your post · ${model.recommendation?.strength || (model.kind === "passed" ? "passed" : "recommended")}` : model.kind === "passed" ? "Not in your reply queue" : model.recommendation?.authorRepeat ? `Spread your replies · ${model.recommendation.strength}` : `${model.recommendation?.laneLabel || catLabel(model.category)} · ${model.recommendation?.strength || "recommended"}`;
+  title.textContent = postOverlayLabel(model);
   Object.assign(title.style, { color: "#f7efe2", fontSize: "13px", fontWeight: "700", lineHeight: "1.3" });
   const sub = postOverlayText(`@${model.author} · ${catLabel(model.category)}`, "#8c7d68", "11px");
   sub.style.marginTop = "2px"; heading.append(title, sub);
@@ -1497,9 +1572,15 @@ function renderPostOverlayDetails(el: HTMLElement, host: HTMLElement, model: Pos
     }
     const why = document.createElement("div"); why.style.marginTop = "11px";
     const whyLabel = postOverlayText("WHY NOW", "#d69a5c", "10px"); whyLabel.style.fontWeight = "800"; whyLabel.style.letterSpacing = ".7px";
-    const uniqueReasons = [...new Set([model.reason, ...rec.reasons].filter(Boolean))];
+    const contribution = model.opp ? assessXContribution(model.opp) : undefined;
+    const uniqueReasons = contribution && !contribution.eligible ? [contribution.reason] : [...new Set([model.reason, ...rec.reasons].filter(Boolean))];
     const whyText = postOverlayText(uniqueReasons.join(" · ") || "Relevant conversation with room for a useful reply.", "#f3ead9"); whyText.style.marginTop = "3px";
     why.append(whyLabel, whyText); pop.append(why);
+    if (model.opp) {
+      const contribution = assessXContribution(model.opp);
+      const contributionText = contribution.ready ? `Reply direction: ${model.opp.replyBrief} · Grounded in: ${model.opp.anchor}` : `Added by you: ${contribution.reason}.`;
+      const direction = postOverlayText(contributionText, "#f3ead9"); direction.style.marginTop = "8px"; pop.append(direction);
+    }
 
     const signals = document.createElement("div");
     signals.title = "Decision signals, not predicted probabilities.";
@@ -1567,7 +1648,7 @@ function ensurePostOverlay(el: HTMLElement, model: PostOverlayModel): HTMLElemen
     host = document.createElement("div"); host.setAttribute(desired, "1");
     Object.assign(host.style, { position: "absolute", top: "10px", right: "60px", zIndex: "2147483600", fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif" } as Partial<CSSStyleDeclaration>);
     const pill = document.createElement("button"); pill.type = "button"; pill.setAttribute("data-tbx-pill", "1"); pill.setAttribute("aria-expanded", "false");
-    Object.assign(pill.style, { borderRadius: "999px", padding: "4px 10px", cursor: "pointer", font: "700 11px -apple-system, BlinkMacSystemFont, system-ui, sans-serif", boxShadow: "0 2px 10px rgba(0,0,0,.18)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    Object.assign(pill.style, { borderRadius: "999px", padding: "4px 10px", cursor: "pointer", font: "700 11px -apple-system, BlinkMacSystemFont, system-ui, sans-serif", boxShadow: "0 2px 10px rgba(0,0,0,.18)", whiteSpace: "normal", maxWidth: "calc(100vw - 100px)", lineHeight: "1.4", textAlign: "left" } as Partial<CSSStyleDeclaration>);
     const pop = document.createElement("div"); pop.setAttribute("data-tbx-pop", "1"); pop.hidden = true; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Goobi post recommendation details");
     Object.assign(pop.style, { position: "absolute", top: "calc(100% + 7px)", right: "0", zIndex: "2147483647", width: "292px", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", padding: "12px", borderRadius: "12px", background: "#1d1812", color: "#f3ead9", border: "1px solid rgba(214,154,92,.24)", boxShadow: "0 14px 38px rgba(0,0,0,.48)", textAlign: "left" } as Partial<CSSStyleDeclaration>);
     pill.addEventListener("click", (e) => {
@@ -1601,7 +1682,7 @@ function paintPostOverlay(el: HTMLElement, model: PostOverlayModel): void {
   if (pill.style.background !== colors.bg) pill.style.background = colors.bg;
   if (pill.style.color !== colors.fg) pill.style.color = colors.fg;
   if (pill.style.border !== `1px solid ${colors.border}`) pill.style.border = `1px solid ${colors.border}`;
-  const opacity = model.kind === "passed" ? "0.72" : "1";
+  const opacity = "1"; // tone communicates priority without reducing text contrast
   if (pill.style.opacity !== opacity) pill.style.opacity = opacity;
   if (model.kind === "surfaced") {
     if (!postOriginalBorders.has(el)) postOriginalBorders.set(el, { left: el.style.borderLeft, topRadius: el.style.borderTopLeftRadius, bottomRadius: el.style.borderBottomLeftRadius });
@@ -1627,40 +1708,63 @@ function addButton(el: HTMLElement) {
   paintPostOverlay(el, { kind: "passed", id: info.id, author: info.author, reason: cached?.reason || "Lower fit for your current priorities", category: cached?.category, score: cached?.score, done: false, isReplyToOwnPost: cached?.isReplyToOwnPost });
 }
 
-/** Pin a post into the dock by hand (from "+ Add"), then score it for real so it
- *  gets a proper tag/angle. Manual opps are never pruned, even if they score low. */
+/** Pin a post without rerolling an unchanged assessment. Only unread/changed
+ * content needs scoring. Manual opps are never pruned, even if they score low. */
 async function addManual(el: HTMLElement) {
-  const info = statusInfo(el);
-  const text = outerText(el);
-  if (!info || !text) { toast("Couldn't read that post."); return; }
+  const info = readFeedPost(el);
+  if (!info) { toast("Couldn't read that post."); return; }
+  if (paused || !enabled || invalidated || !contextOK()) return;
   clearPostOverlay(el);
   if (opps.has(info.id)) { dockOpen = true; renderDock(); toast("That post is already in your list."); return; }
   const stat = snapStats(el);
-  const cached = seen.get(info.id);
-  const ownReply = cached?.isReplyToOwnPost || isReplyToOwnPost(el);
+  const inputKey = feedInputKey(info);
+  const previous = seen.get(info.id);
+  const cached = previous?.inputKey === inputKey ? previous : undefined;
+  const ownReply = info.isReplyToOwnPost;
   const opp: Opp = {
-    id: info.id, author: info.author, text: text.slice(0, 400), manual: true,
+    id: info.id, author: info.author, text: info.text, manual: true,
     score: cached?.score ?? 0.5, reason: cached?.reason || "Added by you", category: cached?.category,
     anchor: cached?.anchor, replyMove: cached?.replyMove, replyBrief: cached?.replyBrief, risk: cached?.risk,
-    context: quotedText(el)?.slice(0, 320), postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies,
+    products: cached?.products, context: info.context, postedAt: stat.postedAt, likes: stat.likes, replies: stat.replies, views: stat.views, reposts: stat.reposts,
     avatar: avatarUrl(el), name: displayName(el), verified: isVerified(el), isReplyToOwnPost: ownReply || undefined,
     source: "feed",
   };
   opps.set(info.id, opp);
-  seen.set(info.id, { score: opp.score, reason: opp.reason, category: opp.category, anchor: opp.anchor, replyMove: opp.replyMove, replyBrief: opp.replyBrief, risk: opp.risk, isReplyToOwnPost: opp.isReplyToOwnPost });
   badge(el, opp.reason, opp.category, effectiveScore(opp));
   dockOpen = true; renderDock();
+  if (cached) { toast("Added to your reply list — keeping Goobi's assessment."); return; }
+  seen.delete(info.id); // an unscored manual pin is not a successful assessment
+  if (inFlight.has(info.id)) { toast("Added to your reply list — the current scan will finish scoring it."); return; }
   toast("Added to your reply list — scoring it…");
-  // Score it for real (one call, bypasses the per-session cap) to fill in the tag/angle.
-  const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, context: opp.context, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
-  const s = resp?.scores?.[0];
-  const cur = opps.get(info.id);
-  if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
-    cur.score = s.score; cur.reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ") || cur.reason; cur.category = catId(s.category) ?? cur.category;
-    cur.anchor = s.anchor; cur.replyMove = s.replyMove; cur.replyBrief = s.replyBrief; cur.risk = s.risk;
-    seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category, anchor: cur.anchor, replyMove: cur.replyMove, replyBrief: cur.replyBrief, risk: cur.risk, isReplyToOwnPost: cur.isReplyToOwnPost });
-    if (statusInfo(el)?.id === info.id) badge(el, cur.reason, cur.category, effectiveScore(cur));
-    renderDock();
+  const generation = scoreGeneration;
+  const account = getSelf();
+  inFlight.add(info.id);
+  try {
+    // No current assessment: score once, bypassing the per-session ambient cap.
+    const resp = await send<{ scores?: ScoredPost[]; error?: string }>({ type: "SCORE_POSTS", posts: [{ i: 0, author: info.author, text: opp.text, context: opp.context, meta: ownReply ? "DIRECT COMMENT ON THE USER'S OWN POST" : undefined }] });
+    if (generation !== scoreGeneration || account !== getSelf() || invalidated || !enabled || paused || !feedPostMatches({ ...info, el })) return;
+    if (resp?.error || !hasCompleteXScores(resp?.scores, [0])) {
+      scoreFailures.set(info.id, { inputKey, attempts: 2 });
+      toast("Added to your reply list, but scoring failed. Use ⟳ Rescan to retry.");
+      return;
+    }
+    const s = resp?.scores?.[0];
+    const cur = opps.get(info.id);
+    if (s && cur?.manual) { // keep it pinned; just adopt the real score/tag
+      cur.score = s.score; cur.reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ") || cur.reason; cur.category = catId(s.category) ?? cur.category;
+      cur.anchor = s.anchor; cur.replyMove = s.replyMove; cur.replyBrief = s.replyBrief; cur.risk = s.risk;
+      cur.products = cur.category === "promote" && Array.isArray(s.products)
+        ? s.products.map((name) => xProducts.find((product) => product.name === name)).filter((product): product is ProductItem => !!product).slice(0, 2)
+        : undefined;
+      scoreFailures.delete(info.id);
+      seen.set(info.id, { score: cur.score, reason: cur.reason, category: cur.category, products: cur.products, anchor: cur.anchor, replyMove: cur.replyMove, replyBrief: cur.replyBrief, risk: cur.risk, isReplyToOwnPost: cur.isReplyToOwnPost, inputKey });
+      if (statusInfo(el)?.id === info.id) badge(el, cur.reason, cur.category, effectiveScore(cur));
+      renderDock();
+    }
+  } finally {
+    inFlight.delete(info.id);
+    refreshGoobi();
+    requestScan();
   }
 }
 
@@ -1758,6 +1862,8 @@ function dismissPanel(force = false) {
   // Reply completion is intentionally a return-state, not a toast. Keep it on
   // screen until the user explicitly confirms or cancels it.
   if (pendingManualReply && !force) { renderPendingManualReplyCard(); return; }
+  draftRequestSeq++; // closing a panel also retires its pending generation
+  goobiDrafting = false;
   panelHost?.remove(); panelHost = null; panelRoot = null;
   if (panelReturnFocus?.isConnected) panelReturnFocus.focus();
   panelReturnFocus = null;
@@ -2293,7 +2399,11 @@ function highlightReplyTarget(postEl: HTMLElement): void {
 }
 
 async function draftFor(req: DraftReq) {
+  if (!enabled || paused || invalidated || !contextOK()) return;
+  const generation = scoreGeneration;
+  const account = getSelf();
   if (pendingManualReply) { renderPendingManualReplyCard(); toast("Finish or cancel the reply waiting for confirmation first."); return; }
+  req = { ...req, text: req.text.slice(0, X_PAYLOAD_LIMITS.text), context: req.context?.slice(0, X_PAYLOAD_LIMITS.context) };
   const { author, text, context, oppId, angle, style, avatar, name, steer, isReplyToOwnPost: reqOwnReply } = req;
   draftOppId = oppId ?? null;
   draftOppAuthor = author;
@@ -2320,6 +2430,8 @@ async function draftFor(req: DraftReq) {
   goobiDrafting = true; refreshGoobi(); // Goobi thinks while Claude writes the reply
   // Ground the drafter in what we already know about this opp (specificity = ranked variable).
   const dOpp = oppId ? opps.get(oppId) : undefined;
+  const contribution = dOpp ? assessXContribution(dOpp) : undefined;
+  const groundedGuidance = contribution?.ready ? dOpp : undefined;
   const ownReply = dOpp?.isReplyToOwnPost || reqOwnReply;
   const authorLine = dOpp ? [
     `@${dOpp.author}`,
@@ -2335,8 +2447,11 @@ async function draftFor(req: DraftReq) {
       ? `Goobi currently classifies this as ${freshReachKindLabel(liveFresh.kind)} from these public observations: ${freshReachMetricFacts(dOpp, liveFresh).join(", ")}. These are product heuristics, not an X ranking guarantee. Write one self contained contribution for surrounding readers, not flattery for the author. Never mention targeting, timing, account size, Premium, a blue check, reach, views, engagement, or impressions in the reply.`
       : "This post was found by Fresh reach but has since left Goobi's strict timing, competition, or audience window. Do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution that remains worthwhile for surrounding readers."
     : undefined;
-  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, style, product, steer, reason: dOpp?.reason, category: dOpp?.category, anchor: dOpp?.anchor, replyBrief: dOpp?.replyBrief, authorLine, threadLine, opportunityLine });
-  if (requestSeq !== draftRequestSeq) return; // a newer angle/style/steer choice owns the panel
+  const resp = await send<{ reply?: string; error?: string }>({ type: "DRAFT_REPLY", author, text, context, angle, style, product: product?.slice(0, X_PAYLOAD_LIMITS.product), steer: steer?.slice(0, X_PAYLOAD_LIMITS.steer), reason: groundedGuidance?.reason?.slice(0, X_PAYLOAD_LIMITS.reason), category: groundedGuidance?.category, anchor: groundedGuidance?.anchor, replyBrief: groundedGuidance?.replyBrief, authorLine, threadLine, opportunityLine });
+  if (requestSeq !== draftRequestSeq) return; // a newer choice or dismissal owns the panel
+  if (generation !== scoreGeneration || account !== getSelf() || invalidated || !contextOK() || !enabled || paused || panelRoot !== root) {
+    goobiDrafting = false; refreshGoobi(); return;
+  }
   goobiDrafting = false; refreshGoobi();
   if (resp?.error === "no-key") paintPanel(root, author, text, { note: "Add your Anthropic key in the Goobi panel to draft replies.", ...ui });
   else if (!resp || resp.error) paintPanel(root, author, text, { note: resp?.error ? `Couldn't draft: ${friendlyErr(resp.error)}` : "Couldn't draft — the background didn't respond. Try again.", ...ui });
@@ -2457,7 +2572,7 @@ function paintPanel(root: ShadowRoot, author: string, text: string, opts: { load
     insert.style.width = "100%"; insert.style.marginTop = "10px"; insert.style.boxSizing = "border-box";
     insert.onclick = () => void runReplyDraftAction(ta.value);
     // Steering: type how to nudge the reply, then Regenerate (or Enter) re-drafts with it.
-    const steer = document.createElement("input"); steer.className = "steer"; steer.type = "text";
+    const steer = document.createElement("input"); steer.className = "steer"; steer.type = "text"; steer.maxLength = X_PAYLOAD_LIMITS.steer;
     steer.placeholder = opts.style === "community-spark" ? "Steer the spark — drier, warmer, sharper…" : "Steer it — e.g. punchier, ask a question, less formal…";
     steer.value = opts.steer ?? "";
     const row = document.createElement("div"); row.className = "row";
@@ -2585,10 +2700,12 @@ const DOCK_CSS = `
 .ins-rel-mut { color:#6fcf7f; }
 .ins-rel-fan { color:#c9a25a; }
 .da { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
-.discovery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; padding:0 14px 9px; flex:0 0 auto; }
+.discovery { display:grid; grid-template-columns:minmax(0,1fr); gap:7px; padding:0 14px 9px; flex:0 0 auto; }
 .discovery .findb { width:100%; min-width:0; }
 .fresh-receipt { grid-column:1/-1; min-width:0; padding:6px 8px; border-radius:8px; background:rgba(214,154,92,.07); color:#a99a83; font-size:10px; line-height:1.35; }
 .fresh-receipt strong { color:#e0a45c; font-weight:750; }
+.fresh-receipt summary { cursor:pointer; }
+.fresh-receipt[open] summary { margin-bottom:5px; }
 .scanb { background:none; border:.5px solid rgba(214,154,92,.32); color:${ACCENT}; border-radius:999px;
          font:500 12px -apple-system,system-ui,sans-serif; padding:6px 12px; cursor:pointer; white-space:nowrap; }
 .scanb:hover { background:rgba(214,154,92,.10); } .scanb:disabled { opacity:.6; cursor:default; }
@@ -2600,9 +2717,11 @@ const DOCK_CSS = `
 .iconb { background:none; border:1px solid var(--g-border); color:var(--g-subtle); border-radius:9px;
          width:34px; height:34px; cursor:pointer; font-size:15px; line-height:1; flex:0 0 auto; }
 .iconb:hover { background:#221c15; }
+.iconb.more { width:auto; padding:0 10px; font:600 11px -apple-system,system-ui,sans-serif; }
 .kback { position:absolute; inset:0; z-index:5; }
 .kmenu { position:absolute; top:50px; right:14px; z-index:6; background:#221c15; border:.5px solid rgba(214,154,92,.22);
-         border-radius:11px; padding:5px; display:flex; flex-direction:column; gap:2px; min-width:152px; box-shadow:0 12px 32px rgba(0,0,0,.5); }
+         border-radius:11px; padding:5px; display:flex; flex-direction:column; gap:2px; min-width:152px; max-height:calc(100vh - 160px); overflow-y:auto; box-shadow:0 12px 32px rgba(0,0,0,.5); }
+.klabel { padding:8px 10px 3px; color:#8c7d68; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
 .kitem { background:none; border:0; color:#f3ead9; text-align:left; font:500 12.5px -apple-system,system-ui,sans-serif;
          padding:8px 10px; border-radius:7px; cursor:pointer; }
 .kitem:hover { background:#2c241d; } .kitem:disabled { opacity:.5; cursor:default; }
@@ -2917,7 +3036,7 @@ const DOCK_CSS = `
 .reply-id .nm { min-width:0; }
 .reply-compact-meta { display:flex; align-items:center; min-width:0; gap:6px; margin-top:4px; color:#8c7d68; font-size:10.5px; white-space:nowrap; }
 .reply-lane { min-width:0; max-width:180px; overflow:hidden; text-overflow:ellipsis; color:#f3ead9; font-weight:700; }
-.reply-strength { flex:0 0 auto; padding:1px 6px; border-radius:999px; font-size:9.5px; font-weight:750; text-transform:uppercase; letter-spacing:.28px; }
+.reply-strength { flex:0 0 auto; padding:1px 6px; border-radius:999px; font-size:10px; font-weight:750; line-height:1.5; white-space:nowrap; }
 .reply-repeat { flex:0 0 auto; padding:1px 6px; border-radius:999px; color:#f0b66f; background:rgba(232,154,60,.13); font-size:9.5px; font-weight:700; }
 .reply-age { flex:0 0 auto; }
 .reply-compact-text { min-width:0; margin-top:4px; color:#b6a892; font-size:11.5px; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -3104,6 +3223,19 @@ function dockInputFocused(): boolean {
 function friendlyErr(raw?: string): string {
   const s = (raw || "").toLowerCase();
   if (/no-key/.test(s)) return "add your Anthropic key in the side panel first";
+  if (/author-continuity/.test(s)) return "the draft made an unsupported claim about your experience; add your current take and try again";
+  if (/ungrounded-contribution/.test(s)) return "the draft needs a more grounded contribution; add a real detail or try another angle";
+  if (/jev-key-required|jev-analysis-consent-required/.test(s)) return "set up Jev fast analysis in Goobi settings, or switch analysis back to Claude";
+  if (/jev-http-40[13]/.test(s)) return "check your TypeSafe key in Goobi settings";
+  if (/jev-http-429|jev-cooldown/.test(s)) return "Jev is rate limited; wait a minute before scanning again";
+  if (/^jev-/.test(s)) return "Jev analysis is unavailable. Retry or switch to Claude in Goobi settings";
+  if (/anthropic-(?:queue-timeout|busy)/.test(s)) return "other drafts are still running, try again shortly";
+  if (/anthropic-timeout/.test(s)) return "the model took too long, try again";
+  if (/anthropic-cancelled/.test(s)) return "this request was cancelled after your settings changed";
+  if (/anthropic-output-truncated/.test(s)) return "the draft was incomplete, try generating it again";
+  if (/anthropic-output-refused/.test(s)) return "the model could not draft a response to this post";
+  if (/x-disabled/.test(s)) return "enable the X copilot and review data use in the side panel";
+  if (/x-paused/.test(s)) return "resume the X copilot before drafting";
   if (/40[13]/.test(s)) return "your Anthropic key looks invalid or expired, check it in the side panel";
   if (/429/.test(s)) return "rate limited, give it a minute and try again";
   if (/insufficient|credit|billing|402/.test(s)) return "your Anthropic account looks out of credit";
@@ -3149,7 +3281,7 @@ function watchSetupGate(): void {
   setupGateListener = (changes, area) => {
     if (area !== "local" || (!changes[CONFIG.X_DATA_CONSENT_KEY] && !changes[CONFIG.ANTHROPIC_KEY_KEY] && !changes[CONFIG.X_COPILOT_KEY])) return;
     void (async () => {
-      const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
+      let requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
       const consent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
       const hasKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
       if (!requestedOn) {
@@ -3307,9 +3439,12 @@ function recommendationFor(o: Opp, now = Date.now()): ReplyRecommendation {
   const handle = o.author.replace(/^@+/, "").toLowerCase();
   const reach = authorReach.get(handle);
   const history = authorSignals(now)[handle];
+  const contribution = assessXContribution(o);
   return recommendReply({
     authorHandle: o.author,
     modelFit: o.score,
+    contributionEligible: contribution.eligible,
+    contributionReason: contribution.reason,
     postedAt: o.postedAt,
     replies: o.replies,
     authorFollowers: knownFollowers(o),
@@ -3355,6 +3490,7 @@ function scoreVerdict(s: number): { label: string; color: string } {
 /** "Easy replies" ranking — short, answerable posts you can reply to fast and
  *  early: favors short text, a genuine question, few existing replies, freshness. */
 function easyScore(o: Opp): number {
+  if (!assessXContribution(o).eligible) return 0;
   const len = o.text.length;
   const short = len < 120 ? 1 : len < 220 ? 0.6 : 0.3;
   const question = /\?\s*$|\b(how|what|why|which|who|when|where|anyone|recommend|thoughts|favou?rite)\b/i.test(o.text) ? 1 : 0.4;
@@ -3366,7 +3502,7 @@ function easyScore(o: Opp): number {
 
 type DockSort = "best" | "recent" | "reach" | "easy";
 let dockSort: DockSort = "best";
-type DockView = "replies" | "comments" | "ideas" | "targets" | "dms" | "growth"; // targets is a secondary drill-in; the other five are primary workspaces
+type DockView = "replies" | "comments" | "ideas" | "targets" | "dms" | "growth"; // replies/comments are primary; the rest open through More
 let dockView: DockView = "replies";
 let growthStrategyChoice: GrowthStrategyId | undefined;
 let growthOwnerProblem = "";
@@ -3660,7 +3796,7 @@ function goobiStatus(): { mood: GoobiMood; line: string; sub: string } {
 
 function topOpps(): Opp[] {
   const f = dockFilter.toLowerCase();
-  const list = [...opps.values()].filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
+  const list = [...opps.values()].filter((o) => o.manual || assessXContribution(o).eligible).filter((o) => !f || o.author.toLowerCase().includes(f) || o.text.toLowerCase().includes(f) || (o.name || "").toLowerCase().includes(f));
   const now = Date.now();
   const freshScores = new Map(list.map((o) => [o.id, currentFreshOpeningScore(o, now)]));
   const key = (o: Opp): number =>
@@ -3747,15 +3883,16 @@ function renderList(list: HTMLElement) {
   for (const o of items) {
     maybeFetchReach(o.author); // enrich with the author's real follower count (best-effort)
     const rec = recommendationFor(o);
+    const contribution = assessXContribution(o);
     const liveFresh = currentFreshReach(o);
     const open = expandedReplyCards.has(o.id);
     const isFreshHero = hero?.opp.id === o.id;
     const card = document.createElement("div"); card.className = "it reply-card" + (open ? " open" : "") + (isFreshHero ? " fresh-hero" : "") + (o.isReplyToOwnPost ? " inbound-own-post" : "");
     const toggle = () => { const wasOpen = expandedReplyCards.has(o.id); expandedReplyCards.clear(); if (!wasOpen) expandedReplyCards.add(o.id); renderDock(); };
     const draftNow = () => void draftFor({ author: o.author, text: o.text, context: o.context, oppId: o.id, angle: initialAngle(o.category), style: preferredReplyStyle(), avatar: o.avatar, products: o.products, name: o.name, isReplyToOwnPost: o.isReplyToOwnPost });
-    const laneColor = rec.lane === "inbound" || rec.lane === "continue" ? "#6fcf7f" : rec.lane === "community" ? "#5dcaa5" : ACCENT;
+    const priority = opportunityPresentation(!contribution.eligible ? "manual" : replyPriorityTone(rec.strength));
     const age = fmtAge(o.postedAt);
-    const strength = rec.strength === "best next" ? "Best next" : rec.strength === "good option" ? "Good" : "Later";
+    const strength = priority.label;
 
     if (o.isReplyToOwnPost) {
       const inboundHead = document.createElement("div"); inboundHead.className = "reply-inbound-banner";
@@ -3801,9 +3938,9 @@ function renderList(list: HTMLElement) {
     const fc = knownFollowers(o); if (fc) { const fcs = document.createElement("span"); fcs.className = "fc"; fcs.textContent = `${fmtCount(fc)} followers`; nm.append(fcs); }
     identity.append(nm); copy.append(identity);
     const compactMeta = document.createElement("div"); compactMeta.className = "reply-compact-meta";
-    const lane = document.createElement("span"); lane.className = "reply-lane"; lane.style.color = laneColor; lane.textContent = rec.laneLabel;
-    const strengthEl = document.createElement("span"); strengthEl.className = "reply-strength"; strengthEl.style.color = laneColor; strengthEl.style.background = `${laneColor}1f`; strengthEl.textContent = strength;
-    compactMeta.append(lane, strengthEl);
+    const lane = document.createElement("span"); lane.className = "reply-lane"; lane.style.color = "#c3b8a7"; lane.textContent = replyConversationLabel(rec.lane);
+    const strengthEl = document.createElement("span"); strengthEl.className = "reply-strength"; strengthEl.style.color = priority.fg; strengthEl.style.background = priority.bg; strengthEl.style.border = `1px solid ${priority.border}`; strengthEl.textContent = strength; strengthEl.title = priority.description;
+    compactMeta.append(strengthEl, lane);
     if (rec.authorRepeat) { const repeat = document.createElement("span"); repeat.className = "reply-repeat"; repeat.textContent = `↻ replied ${rec.authorRepeat.label}`; repeat.title = rec.cautions[0] || "Recent reply to this author lowers all recommendation scores."; compactMeta.append(repeat); }
     if (age) { const ageEl = document.createElement("span"); ageEl.className = "reply-age"; ageEl.textContent = `· ${age}`; compactMeta.append(ageEl); }
     if (o.source === "fresh-reach") {
@@ -3842,7 +3979,7 @@ function renderList(list: HTMLElement) {
       if (meta.childNodes.length) detail.append(meta);
 
       const post = document.createElement("div"); post.className = "reply-post"; post.textContent = o.text; if (meta.childNodes.length) post.style.marginTop = "8px"; detail.append(post);
-      if (o.replyBrief) {
+      if (contribution.ready && o.replyBrief) {
         const move = document.createElement("div"); move.className = "reply-why-card";
         const moveLabel = document.createElement("div"); moveLabel.className = "reply-section-label"; moveLabel.textContent = "Best contribution";
         const moveText = document.createElement("div"); moveText.className = "reply-why-line"; moveText.textContent = o.replyBrief;
@@ -3850,12 +3987,13 @@ function renderList(list: HTMLElement) {
         if (o.anchor) { const anchor = document.createElement("div"); anchor.className = "reply-evidence"; anchor.textContent = `Engage this exact detail: ${o.anchor}`; move.append(anchor); }
         detail.append(move);
       }
+      if (!contribution.eligible) { const warning = document.createElement("div"); warning.className = "reply-repeat-warning"; warning.textContent = `Added by you: ${contribution.reason}. Goobi is not recommending this reply.`; detail.append(warning); }
       if (rec.authorRepeat) { const warning = document.createElement("div"); warning.className = "reply-repeat-warning"; warning.textContent = o.isReplyToOwnPost
         ? `Already replied to @${o.author} ${rec.authorRepeat.label}. This is a direct comment on your post, so Goobi kept it important as an ongoing conversation. Reply only if you have something useful to add.`
         : `Already replied to @${o.author} ${rec.authorRepeat.label}. Goobi lowered all three scores to encourage account spread; continue only for a real ongoing conversation.`; detail.append(warning); }
       const why = document.createElement("div"); why.className = "reply-why-card";
-      const whyLabel = document.createElement("div"); whyLabel.className = "reply-section-label"; whyLabel.textContent = "Why this is worth your time"; why.append(whyLabel);
-      const reasons = [...new Set([...rec.reasons, o.reason].filter(Boolean))].slice(0, 3);
+      const whyLabel = document.createElement("div"); whyLabel.className = "reply-section-label"; whyLabel.textContent = contribution.eligible ? "Why this is worth your time" : "Your selected post"; why.append(whyLabel);
+      const reasons = [...new Set([...rec.reasons, ...(contribution.eligible ? [o.reason] : [])].filter(Boolean))].slice(0, 3);
       for (const reason of reasons) { const line = document.createElement("div"); line.className = "reply-why-line"; const dot = document.createElement("span"); dot.className = "reply-why-dot"; dot.textContent = "◆"; const text = document.createElement("span"); text.textContent = reason; line.append(dot, text); why.append(line); }
       detail.append(why);
       if (o.source === "fresh-reach") {
@@ -5582,6 +5720,10 @@ async function pollTargets(): Promise<void> {
 }
 
 async function draftTargetReply(handle: string): Promise<void> {
+  if (!enabled || paused || invalidated || !contextOK()) return;
+  const generation = scoreGeneration;
+  const account = getSelf();
+  const current = () => generation === scoreGeneration && account === getSelf() && !invalidated && contextOK() && enabled && !paused && targetPosts.get(handle) === post;
   const post = targetPosts.get(handle);
   if (!post?.text || targetBusy.has(handle)) return;
   targetBusy.add(handle); goobiDrafting = true; refreshGoobi(); renderDock();
@@ -5595,9 +5737,10 @@ async function draftTargetReply(handle: string): Promise<void> {
       const scored = await send<{ scores?: ScoredPost[]; error?: string }>({
         type: "SCORE_POSTS", posts: [{ i: 0, author: post.author, text: post.text.slice(0, 400), context: post.context?.slice(0, 320) }],
       });
+      if (!current()) return;
       if (scored?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to score and draft replies."); return; }
       const s = scored?.scores?.[0];
-      if (!s) { toast("Couldn't score that post before drafting — try again."); return; }
+      if (!hasCompleteXScores(scored?.scores, [0]) || !s) { toast("Couldn't score that post before drafting — try again."); return; }
       const reason = (s.reason || "").split(/\s+/).slice(0, 6).join(" ");
       const category = catId(s.category);
       const products = category === "promote" && Array.isArray(s.products)
@@ -5606,7 +5749,8 @@ async function draftTargetReply(handle: string): Promise<void> {
       const freshCandidate = pickFreshReachCandidates([{
         ...post, followers: target?.followers, isReply: false,
       }], myFollowers, Date.now(), replyLog.authors, 1)[0];
-      const isFreshReach = freshReachContentEligible(s) && !!freshCandidate;
+      const contribution = assessXContribution({ ...s, text: post.text.slice(0, 400), context: post.context?.slice(0, 320) });
+      const isFreshReach = contribution.eligible && freshReachContentEligible(s) && !!freshCandidate;
       const targetFreshEvidence: FreshReachEvidence | undefined = isFreshReach && freshCandidate ? {
         runId: `target.${Date.now().toString(36)}`, discoveredAt: Date.now(), observedAt: post.observedAt ?? Date.now(),
         expiresAt: (post.postedAt ?? Date.now()) + FRESH_REACH_MAX_AGE_MS,
@@ -5624,12 +5768,15 @@ async function draftTargetReply(handle: string): Promise<void> {
         reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk,
         postedAt: post.postedAt, likes: post.likes, replies: post.replies,
         reposts: post.reposts, quotes: post.quotes, views: post.views, followers: target?.followers,
-        source: isFreshReach ? "fresh-reach" : "target", freshReach: targetFreshEvidence,
+        source: isFreshReach ? "fresh-reach" : "target", freshReach: targetFreshEvidence, manual: !contribution.eligible,
       };
       opps.set(post.id, opp);
       seen.set(post.id, { score: s.score, reason, category, products, anchor: s.anchor, replyMove: s.replyMove, replyBrief: s.replyBrief, risk: s.risk });
     }
-    const angle = initialAngle(opp.category);
+    const contribution = assessXContribution(opp);
+    if (!contribution.eligible) toast(`Your selected post: ${contribution.reason.toLowerCase()}. Review the draft carefully.`);
+    const groundedGuidance = contribution.ready ? opp : undefined;
+    const angle = initialAngle(groundedGuidance?.category);
     const authorLine = [
       `@${opp.author}`,
       knownFollowers(opp) != null ? `~${fmtCount(knownFollowers(opp))} followers` : "",
@@ -5642,11 +5789,12 @@ async function draftTargetReply(handle: string): Promise<void> {
         : "This tracked post was originally a Fresh reach opening but has since cooled or filled. Do not imply urgency; draft only a contribution that remains specifically worthwhile."
       : "This is a user selected target account. The post is not inside the strict fresh reach window, so do not imply urgency or manufacture a reason to reply. Draft only a specific, self contained contribution.";
     const resp = await send<{ reply?: string; error?: string }>({
-      type: "DRAFT_REPLY", author: post.author, text: post.text, context: post.context, angle, style: preferredReplyStyle(),
-      product: productContext(opp.products?.[0]), reason: opp.reason, category: opp.category, anchor: opp.anchor, replyBrief: opp.replyBrief,
+      type: "DRAFT_REPLY", author: post.author, text: post.text.slice(0, X_PAYLOAD_LIMITS.text), context: post.context?.slice(0, X_PAYLOAD_LIMITS.context), angle, style: preferredReplyStyle(),
+      product: productContext(opp.products?.[0])?.slice(0, X_PAYLOAD_LIMITS.product), reason: groundedGuidance?.reason?.slice(0, X_PAYLOAD_LIMITS.reason), category: groundedGuidance?.category, anchor: groundedGuidance?.anchor, replyBrief: groundedGuidance?.replyBrief,
       authorLine, opportunityLine,
     });
     if (resp?.error === "no-key") { toast("Add your Anthropic key in the Goobi panel to draft replies."); return; }
+    if (!current()) return;
     if (resp?.reply) targetDrafts.set(handle, resp.reply); else toast("Couldn't draft a reply — try again.");
   } finally { targetBusy.delete(handle); goobiDrafting = false; refreshGoobi(); renderDock(); }
 }
@@ -6732,7 +6880,7 @@ function renderDock() {
     const { mood, line, sub } = goobiStatus();
     const l = document.createElement("div"); l.className = "l"; l.setAttribute("role", "button"); // div, not button — the pill hosts nested control buttons
     l.tabIndex = 0; // keep keyboard access (it was a <button> before the nested controls)
-    l.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); l.click(); } };
+    l.onkeydown = (e) => { if (e.target === l && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); l.click(); } };
     l.title = `${line} — open Goobi`;
     l.onclick = () => {
       dockOpen = true;
@@ -6755,24 +6903,19 @@ function renderDock() {
     if (summary) { const l2 = document.createElement("span"); l2.className = "ll2"; l2.textContent = summary; txt.append(l2); }
     l.append(txt);
     if (n) { const avs = launcherAvatars(); if (avs) l.append(avs); } // overlapping faces of who to reply to
-    // Minimized controls: pause/resume + manual search, without expanding the dock.
+    // Minimized controls stay useful with only the core analysis setup.
     const ctl = document.createElement("span"); ctl.className = "lctl";
     const pb = document.createElement("button"); pb.className = "lbtn";
     pb.textContent = paused ? "▶" : "⏸";
     pb.title = paused ? "Resume — start finding reply spots again" : "Pause — no scanning, surfacing, or API calls";
     pb.setAttribute("aria-label", paused ? "Resume the copilot" : "Pause the copilot"); // icon glyphs read poorly in screen readers
     pb.onclick = (e) => { e.stopPropagation(); setPaused(!paused); };
-    const sb = document.createElement("button"); sb.className = "lbtn"; sb.textContent = "✦";
-    sb.setAttribute("aria-label", "Find reply spots in your niche");
-    sb.disabled = paused || findingSpots;
-    sb.title = paused ? "Paused — resume to search" : findingSpots ? "Searching…" : "Find spots — search X for fresh posts in your niche";
-    sb.onclick = (e) => { e.stopPropagation(); void findSpots(); };
-    const rb = document.createElement("button"); rb.className = "lbtn"; rb.textContent = "⚡";
-    rb.setAttribute("aria-label", "Find measured breakout and major-account early reply openings");
-    rb.disabled = paused || findingSpots || !myFollowers;
-    rb.title = paused ? "Paused — resume to search" : !myFollowers ? "Set your X handle first" : findingSpots ? "Searching…" : "Fresh Reach — find proven breakout distribution and unusually early openings on practical or massive accounts";
-    rb.onclick = (e) => { e.stopPropagation(); void findSpots("fresh-reach"); };
-    ctl.append(pb, sb, rb); l.append(ctl);
+    const sb = document.createElement("button"); sb.className = "lbtn"; sb.textContent = "↻";
+    sb.setAttribute("aria-label", "Scan this page for reply spots");
+    sb.disabled = paused;
+    sb.title = paused ? "Paused — resume to scan" : "Scan the posts on this page for worthwhile replies";
+    sb.onclick = (e) => { e.stopPropagation(); rescan(); };
+    ctl.append(pb, sb); l.append(ctl);
     root.appendChild(l);
     goobiDockHandle = mountGoobi(gh, { cell: 3 }); goobiDockHandle.setMood(mood);
     return;
@@ -6832,7 +6975,9 @@ function renderDock() {
   sub.append(chip, document.createTextNode(" · "), cnt);
   if (dockView === "replies") {
     sub.setAttribute("role", "button"); sub.tabIndex = 0; sub.setAttribute("aria-expanded", String(todayOpen));
-    sub.title += todayOpen ? " Hide pace details." : " Show pace details.";
+    sub.title += todayOpen ? " Hide today's goals and pace details." : " Show today's goals and pace details.";
+    sub.setAttribute("aria-label", `${chip.textContent}. ${cnt.textContent}. ${todayOpen ? "Hide" : "Show"} today's goals and pace details`);
+    sub.append(document.createTextNode(todayOpen ? " · Today ▴" : " · Today ▾"));
     const toggleHealth = () => { todayOpen = !todayOpen; renderDock(); };
     sub.onclick = toggleHealth; sub.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleHealth(); } };
   }
@@ -6840,8 +6985,8 @@ function renderDock() {
   const dhl = document.createElement("div"); dhl.className = "dhl"; dhl.append(gh, t); // Goobi sits left of the title
 
   const acts = document.createElement("div"); acts.className = "da";
-  const kb = document.createElement("button"); kb.className = "iconb"; kb.textContent = "⋮"; kb.title = "More — pause, rescan, reset local pace, clear"; kb.setAttribute("aria-label", "More actions");
-  kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); };
+  const kb = document.createElement("button"); kb.className = "iconb more"; kb.textContent = "More tools"; kb.title = "More tools and settings"; kb.setAttribute("aria-label", "More tools and actions"); kb.setAttribute("aria-expanded", String(kebabOpen)); kb.setAttribute("aria-controls", "goobi-more-tools");
+  kb.onclick = () => { kebabOpen = !kebabOpen; renderDock(); if (kebabOpen) queueMicrotask(() => root.querySelector<HTMLButtonElement>(".kitem:not(:disabled)")?.focus()); };
   acts.append(kb);
   const x = document.createElement("button"); x.className = "iconb"; x.textContent = "–"; x.title = "Minimize"; x.setAttribute("aria-label", "Minimize the dock"); // collapses to the launcher pill — it minimizes, it doesn't close
   x.onclick = () => { kebabOpen = false; if (dockPlayOpen) resetPlay(); dockOpen = false; renderDock(); };
@@ -6851,18 +6996,13 @@ function renderDock() {
 
   if (!paused && !dockPlayOpen && dockView === "replies") {
     const discovery = document.createElement("div"); discovery.className = "discovery"; discovery.setAttribute("aria-label", "Find reply opportunities");
-    const find = document.createElement("button"); find.className = "findb secondary"; find.textContent = findingSpots ? "Searching…" : "✦ Find spots";
-    find.title = xNiche.trim() ? "Search X for fresh posts in your niche" : "Set your niche in the Goobi panel first";
-    find.disabled = findingSpots || !xNiche.trim();
-    find.onclick = () => void findSpots();
-    const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = findingSpots ? "Searching…" : "⚡ Fresh reach";
-    reach.title = !myFollowers ? "Set your X handle first so Goobi can compare account size" : "Use focused and broad Top results to find proven distribution, then scan practical and massive accounts for breakout or unusually early openings";
-    reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
-    reach.onclick = () => void findSpots("fresh-reach");
-    discovery.append(find, reach);
+    const find = document.createElement("button"); find.className = "findb"; find.textContent = "↻ Scan this page";
+    find.title = "Find worthwhile replies among the posts on this page. No X-data API key needed.";
+    find.onclick = () => rescan();
+    discovery.append(find);
     if (lastFreshReachRun) {
-      const receipt = document.createElement("div"); receipt.className = "fresh-receipt";
-      const lead = document.createElement("strong"); lead.textContent = lastFreshReachRun.state === "searching" ? "⚡ Hunting now" : lastFreshReachRun.state === "failed" ? "⚡ Hunt paused" : "⚡ Last hunt";
+      const receipt = document.createElement("details"); receipt.className = "fresh-receipt";
+      const lead = document.createElement("summary"); lead.textContent = lastFreshReachRun.state === "searching" ? "Fresh reach search in progress" : lastFreshReachRun.state === "failed" ? "Fresh reach search paused · details" : `Fresh reach · ${lastFreshReachRun.added} recommended · details`;
       const detail = document.createElement("span");
       detail.textContent = lastFreshReachRun.state === "searching"
         ? " · building the account pool and checking fresh originals"
@@ -6878,7 +7018,7 @@ function renderDock() {
   // else is contextual to the selected workspace.
   const modes = document.createElement("div"); modes.className = "modes"; modes.setAttribute("role", "tablist"); modes.setAttribute("aria-label", "Goobi workspace");
   const mkMode = (id: DockView, label: string, count?: number) => {
-    const selected = dockView === id || (id === "replies" && dockView === "targets");
+    const selected = dockView === id;
     const b = document.createElement("button"); b.className = "mode" + (selected ? " on" : "");
     const l = document.createElement("span"); l.textContent = label; b.append(l);
     if (count != null && count > 0) { const badge = document.createElement("span"); badge.className = "mode-count"; badge.textContent = String(count); b.append(badge); }
@@ -6886,10 +7026,13 @@ function renderDock() {
     b.onclick = () => { if (dockView !== id) { dockView = id; relationshipsOpen = false; replyToolsOpen = false; renderDock(); } };
     return b;
   };
-  modes.append(mkMode("replies", "Replies", n), mkMode("comments", "Comments", commentQueue.untended), mkMode("ideas", "Post ideas"), mkMode("dms", "DMs", dueFollowUps(dmStore, Date.now()).length), mkMode("growth", "Growth"));
+  const secondaryView = dockView !== "replies" && dockView !== "comments";
+  modes.append(mkMode("replies", secondaryView ? "← Replies" : "Replies", n), mkMode("comments", "Comments", commentQueue.untended));
+  if (secondaryView) {
+    const labels: Partial<Record<DockView, string>> = { ideas: "Post ideas", targets: "Target accounts", dms: "DMs", growth: "Growth" };
+    modes.append(mkMode(dockView, labels[dockView] || "More tools"));
+  }
   d.append(modes);
-  const postProgress = Math.max(postedToday(), ownStats !== undefined ? ownViewsToday().posts : 0);
-  d.append(dailyGoalTracker({ replies: verifiedToday.confirmed + verifiedToday.pending, posts: postProgress, dms: dmPeopleToday() }));
 
   // Today strip — the same data the old six-line stack showed, TIERED so it stops burying the work
   // queue: one compact summary row (momentum bar + state + today's facts), ONE "next best move"
@@ -6898,6 +7041,8 @@ function renderDock() {
   // caution the safety message owns the line, so the honesty keystone is front and center even
   // collapsed (the pace chip + red state label agree with it, same stt).
   if (dockView === "replies" && todayOpen) {
+    const postProgress = Math.max(postedToday(), ownStats !== undefined ? ownViewsToday().posts : 0);
+    d.append(dailyGoalTracker({ replies: verifiedToday.confirmed + verifiedToday.pending, posts: postProgress, dms: dmPeopleToday() }));
     const lastReply = replyLog.times.length ? Math.max(...replyLog.times) : 0;
     const lastPost = ideaQueue.reduce((mx, i) => (i.postedAt && i.postedAt > mx ? i.postedAt : mx), 0);
     const lastAt = Math.max(lastReply, lastPost);
@@ -6998,14 +7143,26 @@ function renderDock() {
   // ⋮ overflow menu + click-away backdrop.
   if (kebabOpen) {
     const back = document.createElement("div"); back.className = "kback"; back.onclick = () => { kebabOpen = false; renderDock(); };
-    const menu = document.createElement("div"); menu.className = "kmenu";
+    const menu = document.createElement("div"); menu.className = "kmenu"; menu.id = "goobi-more-tools"; menu.setAttribute("role", "region"); menu.setAttribute("aria-label", "More tools");
+    menu.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); kebabOpen = false; renderDock(); root.querySelector<HTMLButtonElement>(".iconb.more")?.focus(); } };
     const item = (label: string, fn: () => void, disabled = false) => {
       const b = document.createElement("button"); b.className = "kitem"; b.textContent = label; b.disabled = disabled;
       b.onclick = () => { kebabOpen = false; renderDock(); fn(); };
       menu.append(b);
     };
+    const section = (label: string) => { const el = document.createElement("div"); el.className = "klabel"; el.textContent = label; menu.append(el); };
+    const openView = (view: DockView) => { dockView = view; relationshipsOpen = false; replyToolsOpen = false; renderDock(); };
+    section("Workspaces");
+    item("Post ideas", () => openView("ideas"));
+    item("DM workspace", () => openView("dms"));
+    item("Growth", () => openView("growth"));
+    item("Target accounts", () => openView("targets"));
+    section("Optional search · X-data API");
+    item(findingSpots ? "Searching…" : "Search my niche", () => void findSpots(), paused || findingSpots || !xNiche.trim());
+    item("Fresh reach", () => void findSpots("fresh-reach"), paused || findingSpots || !xNiche.trim() || !myFollowers);
+    section("Controls");
     item(paused ? "▶ Resume" : "⏸ Pause", () => setPaused(!paused));
-    if (!paused && dockView === "replies") item("↻ Rescan this page", () => rescan());
+    item("Settings", () => { void send({ type: "OPEN_SIDE_PANEL" }); });
     if (dockView === "replies" && (stt.repliesThisHour > 0 || stt.resetAt)) item("↺ Reset local pace meter", resetReplyPace);
     if (n) item("🗑 Clear all", () => { opps.clear(); toast("Cleared all reply spots."); renderDock(); });
     d.append(back, menu);
@@ -7085,11 +7242,7 @@ function renderDock() {
   toolButton.textContent = `${sortNames[dockSort]}${dockFilter ? " · filtered" : ""} ${replyToolsOpen ? "▴" : "▾"}`;
   toolButton.setAttribute("aria-expanded", String(replyToolsOpen));
   toolButton.onclick = () => { replyToolsOpen = !replyToolsOpen; renderDock(); };
-  const secondary = document.createElement("div"); secondary.style.cssText = "display:flex;gap:6px;align-items:center";
-  const targets = document.createElement("button"); targets.className = "reply-tools-btn"; targets.textContent = "Find people";
-  targets.title = "Secondary discovery: track larger relevant accounts after warm comments and strong reply spots are handled.";
-  targets.onclick = () => { dockView = "targets"; renderDock(); };
-  secondary.append(targets, toolButton); toolrow.append(toolLabel, secondary); d.append(toolrow);
+  toolrow.append(toolLabel, toolButton); d.append(toolrow);
 
   const tabs = document.createElement("div"); tabs.className = "tabs"; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Sort reply spots");
   const TABS: { id: DockSort; label: string; title: string }[] = [
@@ -7115,16 +7268,9 @@ function renderDock() {
   const f1 = document.createElement("div"); f1.className = "foot1";
   const f2 = document.createElement("div"); f2.className = "foot2";
   if (!n) { // no spots surfaced — the genuine "nothing to do" / watching state
-    f1.textContent = "✦ You're all caught up";
-    f2.textContent = "New reply spots appear as you scroll. Search your niche, or hunt fresh posts from larger reachable accounts.";
-    const find = document.createElement("button"); find.className = "findb"; find.textContent = findingSpots ? "Searching X…" : "Find spots in my niche";
-    find.disabled = findingSpots || !xNiche.trim(); find.title = xNiche.trim() ? "Search X for fresh, high-fit reply spots" : "Set your niche in the Goobi panel first";
-    find.onclick = () => void findSpots();
-    const reach = document.createElement("button"); reach.className = "findb"; reach.textContent = "⚡ Fresh reach";
-    reach.disabled = findingSpots || !xNiche.trim() || !myFollowers;
-    reach.title = !myFollowers ? "Set your X handle first" : "Measure proven breakout distribution and scan practical plus massive accounts for unusually early openings";
-    reach.onclick = () => void findSpots("fresh-reach");
-    foot.append(f1, f2, find, reach); d.append(foot);
+    f1.textContent = "No reply spots yet";
+    f2.textContent = "Scroll your feed or scan this page. Goobi collects worthwhile conversations here; you choose what to draft.";
+    foot.append(f1, f2); d.append(foot);
   }
 
   root.appendChild(d);
@@ -7164,9 +7310,9 @@ function installDebugHook(): void {
 /* ---------- boot + SPA route handling ---------- */
 
 async function boot() {
-  const xDataConsent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
-  const hasAnthropicKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
-  const requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
+  let xDataConsent = (await getLocal(CONFIG.X_DATA_CONSENT_KEY)) === "v1";
+  let hasAnthropicKey = Boolean(await getLocal(CONFIG.ANTHROPIC_KEY_KEY));
+  let requestedOn = (await getLocal(CONFIG.X_COPILOT_KEY)) !== false;
   if (!requestedOn) return;
   if (!xDataConsent || !hasAnthropicKey) {
     renderSetupGate(!xDataConsent ? "Review data use in the side panel" : "Add your Anthropic key in the side panel");
@@ -7257,6 +7403,23 @@ async function boot() {
   void loadFavicons();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
+    if (changes[CONFIG.X_DATA_CONSENT_KEY]) xDataConsent = changes[CONFIG.X_DATA_CONSENT_KEY].newValue === "v1";
+    if (changes[CONFIG.ANTHROPIC_KEY_KEY]) hasAnthropicKey = typeof changes[CONFIG.ANTHROPIC_KEY_KEY].newValue === "string" && !!changes[CONFIG.ANTHROPIC_KEY_KEY].newValue.trim();
+    if (changes[CONFIG.X_COPILOT_KEY]) requestedOn = changes[CONFIG.X_COPILOT_KEY].newValue === undefined || changes[CONFIG.X_COPILOT_KEY].newValue === true;
+    if (changes[CONFIG.X_DATA_CONSENT_KEY] || changes[CONFIG.ANTHROPIC_KEY_KEY] || changes[CONFIG.X_COPILOT_KEY]) {
+      enabled = canUseXBroker(xDataConsent ? "v1" : undefined, requestedOn, hasAnthropicKey ? "configured" : "");
+      resetFeedScores(); dismissPanel(); targetDrafts.clear();
+      noKeyNotified = false;
+      renderDock(); if (enabled) requestScan();
+    }
+    if ([CONFIG.X_VOICE_KEY, CONFIG.X_SOUL_KEY, CONFIG.X_NICHE_KEY, CONFIG.X_PRODUCTS_KEY, CONFIG.X_PRODUCT_KEY, CONFIG.X_MY_HANDLE_KEY, CONFIG.X_MY_POSTS_KEY].some((key) => changes[key])) {
+      scoreGeneration++; dismissPanel(); targetDrafts.clear();
+    }
+
+    if ([CONFIG.ANALYSIS_PROVIDER_KEY, CONFIG.JEV_ANALYSIS_CONSENT_KEY, CONFIG.TYPESAFE_KEY_KEY].some(key => changes[key])) {
+      resetFeedScores(); opps.clear(); dismissPanel(); targetDrafts.clear(); scoreCalls = 0; scanCapNotified = false;
+      renderDock(); if (enabled && !paused) requestScan();
+    }
     if (changes[CONFIG.X_PRODUCTS_KEY]) { xProducts = (changes[CONFIG.X_PRODUCTS_KEY].newValue as ProductItem[]) || []; void loadFavicons(); renderDock(); }
     if (changes[CONFIG.X_PRODUCT_KEY]) legacyProduct = (changes[CONFIG.X_PRODUCT_KEY].newValue as string) || "";
     if (changes[CONFIG.X_DEFAULT_ANGLE_KEY]) xDefaultAngle = (changes[CONFIG.X_DEFAULT_ANGLE_KEY].newValue as string) || "";
@@ -7274,6 +7437,10 @@ async function boot() {
       xNiche = (changes[CONFIG.X_NICHE_KEY].newValue as string) || "";
       heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false; // the radar is tied to the active scoring context; re-discover when that context changes
       syncFreshReachShortlistIntoRadar(); // measured winners survive a niche change; every new post is still content-gated against the new niche
+    }
+    if (changes[CONFIG.X_NICHE_KEY] || changes[CONFIG.X_PRODUCTS_KEY]) {
+      resetFeedScores();
+      requestScan();
     }
     if (changes[CONFIG.X_HEAVY_HITTERS_KEY]) {
       const incoming = changes[CONFIG.X_HEAVY_HITTERS_KEY].newValue as HeavyHitterStore | undefined;
@@ -7299,9 +7466,10 @@ async function boot() {
         if (changed) renderDock();
       });
     }
-    if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p && dockPlayOpen) resetPlay(); renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
+    if (changes[CONFIG.X_PAUSED_KEY]) { const p = changes[CONFIG.X_PAUSED_KEY].newValue === true; if (p !== paused) { paused = p; if (p) { scoreGeneration++; dismissPanel(); targetDrafts.clear(); if (dockPlayOpen) resetPlay(); } renderDock(); if (!p) rescan(); } } // synced from the popup / another tab
     if (changes[CONFIG.X_MY_FOLLOWERS_KEY]) { myFollowers = Number(changes[CONFIG.X_MY_FOLLOWERS_KEY].newValue) || 0; syncFreshReachShortlistIntoRadar(); captureGrowthData(); renderDock(); }
     if (changes[CONFIG.X_MY_HANDLE_KEY]) {
+      resetFeedScores(); opps.clear();
       selfHandle = ""; ownStats = undefined; growthOwnerProblem = "";
       heavyHitters = new Map(); heavyTried = false; showAllFreshRadar = false;
       replyLog = freshReplyLog(normalizeWatchHandle(String(changes[CONFIG.X_MY_HANDLE_KEY].newValue || getSelf())));
@@ -7379,7 +7547,7 @@ async function boot() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
     dismissPanel();
-    if (seen.size > 600) { seen.clear(); opps.clear(); authorReach.clear(); } // bound memory across long sessions
+    if (seen.size > 600 || scoreFailures.size > 600) { resetFeedScores(); opps.clear(); authorReach.clear(); } // bound memory across long sessions
     selfHandle = "";
     requestScan();
     renderDock();

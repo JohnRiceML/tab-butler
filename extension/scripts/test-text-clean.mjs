@@ -52,5 +52,15 @@ eq(m.cleanDraft('"just ship it — then talk to users"'), "just ship it, then ta
 eq(m.cleanDraft("built 4 features. 2 got used. the 'invisible' one won."), "built 4 features. 2 got used. the invisible one won.", "inline emphasis quote removed, numbers intact");
 eq(m.cleanDraft("  spaced  out   draft  "), "spaced out draft", "trims + collapses whitespace");
 
+// ---- cleanLinkedInComment (strict no dash / no quotation-mark preference) ----
+eq(m.cleanLinkedInComment("A well-designed go-to-market loop — with one owner."), "A well designed go to market loop with one owner.", "LinkedIn cleanup removes every long and compound dash");
+eq(m.cleanLinkedInComment("```text\nFirst thought.\n\nSecond thought.\n```"), "First thought.\n\nSecond thought.", "LinkedIn cleanup unwraps one whole output fence and preserves paragraphs");
+eq(m.cleanLinkedInComment('"This is concise."'), "This is concise.", "LinkedIn cleanup unwraps whole-output quotes");
+eq(m.cleanLinkedInComment('The memo said: "ship it"'), "The memo said: ship it", "LinkedIn cleanup removes genuine inline quotation marks too");
+eq(m.cleanLinkedInComment("The ‘hard part’ is cross-team ownership."), "The hard part is cross team ownership.", "LinkedIn cleanup unwraps curly quotes and removes hyphens");
+eq(m.cleanLinkedInComment("it's specific and users' needs stay visible"), "it's specific and users' needs stay visible", "LinkedIn cleanup preserves contraction and possessive apostrophes");
+eq(m.cleanLinkedInComment("Call it ‘specific and move on."), "Call it specific and move on.", "LinkedIn cleanup removes an unmatched quotation mark");
+ok(!/[-‐‑‒–—―"“”]/.test(m.cleanLinkedInComment('"A well-designed system — usually."')), "cleaned LinkedIn comments contain no dash or double quotation glyph");
+
 console.log(fail === 0 ? `\n✓ text-clean: ${pass} assertions passed` : `\n✗ text-clean: ${fail} failed, ${pass} passed`);
 process.exit(fail === 0 ? 0 : 1);

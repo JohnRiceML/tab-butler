@@ -2,7 +2,7 @@
   "name": "goobi-workspace",
   "version": "0.1.0",
   "private": true,
-  "description": "Goobi X reply copilot and local-first tab manager workspace",
+  "description": "Goobi X reply and LinkedIn comment copilots with a local-first tab manager",
   "engines": {
     "node": ">=20"
   },

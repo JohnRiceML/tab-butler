@@ -32,6 +32,9 @@ export interface AuthorHistoryInput {
 export interface ReplyRecommendationInput {
   authorHandle?: string;
   modelFit: number;
+  /** An explicit user pin remains available without becoming an automatic recommendation. */
+  contributionEligible?: boolean;
+  contributionReason?: string;
   postedAt?: number;
   replies?: number;
   authorFollowers?: number;
@@ -230,5 +233,10 @@ export function recommendReply(input: ReplyRecommendationInput, now: number): Re
   if (input.isReplyToOwnPost) evidence++;
   const confidence: EvidenceConfidence = evidence >= 4 ? "strong evidence" : evidence >= 2 ? "some evidence" : "limited evidence";
 
+  if (input.contributionEligible === false) {
+    return { priority: 0, lane, laneLabel, strength: "later", confidence, discovery: 0, relationship: 0, community: 0,
+      reasons: [input.contributionReason || "Added by you; a useful contribution has not been established"],
+      cautions: ["Your choice to reply; Goobi is not recommending this post", ...cautions].slice(0, 3), authorRepeat };
+  }
   return { priority, lane, laneLabel, strength, confidence, discovery, relationship: relationshipWithInbound, community, reasons: reasons.slice(0, 3), cautions: cautions.slice(0, 3), authorRepeat };
 }

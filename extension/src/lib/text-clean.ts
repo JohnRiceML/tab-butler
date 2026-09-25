@@ -69,3 +69,41 @@ export function cleanDraft(s: string): string {
   }
   return stripDashes(stripEmphasisQuotes(t));
 }
+
+/**
+ * LinkedIn comments use the user's strict punctuation preference: no dash glyph
+ * of any kind and no quotation marks. Ordinary apostrophes in contractions and
+ * possessives survive. We deliberately do not regex-rewrite clichés or factual
+ * claims; those still require a model retry.
+ */
+export function cleanLinkedInComment(s: string): string {
+  let text = (s || "").replace(/\r\n?/g, "\n").trim();
+  const fenced = text.match(/^```(?:text)?\s*\n([\s\S]*?)\n```$/i);
+  if (fenced) text = fenced[1].trim();
+  const isQ = (char: string) => DQUOTE.includes(char) || SQUOTE.includes(char);
+  if (text.length >= 2 && isQ(text[0]) && isQ(text[text.length - 1])) {
+    const inner = text.slice(1, -1);
+    if (![...inner].some(isQ)) text = inner.trim();
+  }
+  const stripQuotesAndDashes = (line: string): string => line
+    .replace(/["“”]/g, "")
+    .replace(/(^|[\s(\[])['‘’]([^'‘’\n]{1,120}?)['‘’](?=$|[\s).,!?;:\]])/g, (_match, prefix: string, inner: string) => `${prefix}${inner}`)
+    .replace(/['‘’]/g, (mark, offset: number, whole: string) => {
+      const before = whole[offset - 1] ?? "";
+      const after = whole[offset + 1] ?? "";
+      const insideWord = /[\p{L}\p{N}]/u.test(before) && /[\p{L}\p{N}]/u.test(after);
+      const pluralPossessive = /s/i.test(before) && (!after || /[\s,.;:!?)]/.test(after));
+      return insideWord || pluralPossessive ? mark : "";
+    })
+    .replace(/[-‐‑‒–—―]+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([([{])\s+/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return text
+    .split("\n")
+    .map(stripQuotesAndDashes)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

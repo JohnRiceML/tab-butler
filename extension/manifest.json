@@ -2,10 +2,11 @@
   "manifest_version": 3,
   "name": "Goobi",
   "version": "0.1.0",
-  "description": "A cute blob that tidies your tabs and helps you reply on X — made smart by Claude. Local-first; draft-only; Claude is opt-in.",
+  "description": "A cute blob that tidies your tabs and helps you join good conversations on X and LinkedIn. Local-first, draft-only, and opt-in.",
   "permissions": ["tabs", "tabGroups", "alarms", "idle", "storage", "sessions", "bookmarks", "system.memory", "history", "favicon", "sidePanel"],
   "host_permissions": [
     "https://api.anthropic.com/*",
+    "https://api.typesafe.ai/*",
     "https://twitter241.p.rapidapi.com/*"
   ],
   "background": {
@@ -22,6 +23,12 @@
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
       "js": ["x-copilot.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["linkedin-copilot.js"],
       "run_at": "document_idle",
       "all_frames": false
     }

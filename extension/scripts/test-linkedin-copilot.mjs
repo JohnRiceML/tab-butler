@@ -1,0 +1,83 @@
+/** Static trust-boundary regression guard for the focused LinkedIn content script. */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const source = readFileSync(join(here, "../src/content/linkedin-copilot.ts"), "utf8");
+const worker = readFileSync(join(here, "../src/background/service-worker.ts"), "utf8");
+const policy = readFileSync(join(here, "../src/lib/linkedin-policy.ts"), "utf8");
+const client = readFileSync(join(here, "../src/lib/claude-client.ts"), "utf8");
+const popup = readFileSync(join(here, "../src/popup/popup.ts"), "utf8");
+const goobi = readFileSync(join(here, "../src/lib/goobi.ts"), "utf8");
+const manifest = JSON.parse(readFileSync(join(here, "../manifest.json"), "utf8"));
+const build = readFileSync(join(here, "../build.mjs"), "utf8");
+
+let pass = 0, fail = 0;
+const ok = (condition, label) => {
+  if (condition) pass += 1;
+  else { fail += 1; console.error("  FAIL:", label); }
+};
+
+const liEntry = manifest.content_scripts?.find((entry) => entry.js?.includes("linkedin-copilot.js"));
+ok(liEntry && JSON.stringify(liEntry.matches) === JSON.stringify(["https://www.linkedin.com/*"]), "manifest scopes the LinkedIn script to www.linkedin.com");
+ok(liEntry?.all_frames === false, "LinkedIn script stays in the top frame");
+ok(build.includes('"linkedin-copilot": "src/content/linkedin-copilot.ts"'), "production build emits the LinkedIn IIFE");
+ok(source.includes('type: "LI_SCORE_POSTS"') && source.includes('type: "LI_DRAFT_COMMENT"') && !source.includes('platform: PLATFORM'), "score and draft use dedicated LinkedIn broker messages");
+ok(source.includes("const SCORE_BATCH_SIZE = 5") && client.includes('platform === "linkedin" ? 4096 :'), "richer LinkedIn score responses use small batches and a safe output budget");
+ok(client.includes('const CLAUDE_MODEL = "claude-sonnet-5"') && client.includes('const CLAUDE_FALLBACK_MODEL = "claude-sonnet-4-6"'), "production uses current Sonnet with one stable compatibility fallback");
+ok(client.includes("shouldUseClaudeFallback") && client.includes("activeClaudeModel = CLAUDE_FALLBACK_MODEL"), "one model compatibility failure switches the worker to the fallback instead of dropping posts");
+ok(!client.includes("thinking:") && !client.includes("temperature:"), "production requests omit optional thinking and sampling settings that can trigger provider compatibility errors");
+ok(source.includes('error === "bad-output"') && source.includes('error === "linkedin-broker-timeout"') && source.includes('/^anthropic 429\\b/'), "scoring failures explain the recovery action instead of collapsing into one generic alert");
+ok(source.includes('console.debug("[goobi linkedin] scoring broker error"') && !source.includes('console.warn("[goobi linkedin] scoring broker error"'), "handled broker failures stay out of Chrome's extension error collector");
+ok(client.includes("async function anthropicHttpError") && client.includes('code = "billing"') && client.includes('code = "model-access"'), "Anthropic response bodies become bounded diagnostic codes without forwarding provider text");
+ok(source.includes('/^anthropic 400 billing\\b/') && source.includes('/^anthropic 400 model-access\\b/') && source.includes('/^anthropic 400\\b/'), "HTTP 400 scoring failures distinguish credits, model access, and other rejected requests");
+ok(source.includes("CONFIG.LI_DATA_CONSENT_KEY") && source.includes("CONFIG.LI_COPILOT_KEY"), "ambient reading is gated by separate LinkedIn consent and enablement");
+ok(source.includes("CONFIG.LI_COMMENT_LOG_KEY") && !source.includes("CONFIG.X_REPLY_LOG_KEY"), "comment completion uses a LinkedIn-only ledger");
+ok(source.includes("navigator.clipboard.writeText") && source.includes("scrollIntoView"), "handoff is copy plus exact-post review");
+ok(source.includes("steer: normalizedSteer || undefined") && source.includes("currentDraft: rewriteBase || undefined") && source.includes("Redraft with instruction"), "redrafting uses the edited draft and explicit steer");
+ok(source.includes("Real detail from you (optional)") && source.includes("personalDetail: normalizedPersonalDetail || undefined") && source.includes("not stored"), "a transient real-detail field can ground personal claims without entering local history");
+ok(source.includes("text: text.slice(0, 1_200)") && client.includes('platform === "linkedin" ? 1_000 : 400'), "LinkedIn retains enough of longer posts for anchored scoring and drafting");
+ok(source.includes("evaluateLinkedInOpportunity({ ...normalized, text: post.text, context: post.context })") && source.includes("commentLane: opportunity.commentLane"), "source-grounded person/post/contribution policy suppresses filler while the approved useful move reaches drafting");
+ok(source.includes('opportunity.decision === "needs_detail"') && source.includes("Add your detail") && source.includes("Needs your detail"), "valuable posts that need one user fact surface in a separate honest tier");
+ok(source.includes("Real detail from you (required)") && source.includes("Draft with detail") && source.includes("missingDetailPrompt"), "the needs-detail tier requires grounding before model drafting");
+ok(!source.includes("passed over"), "scan receipts no longer imply every non-ready post was a bad opportunity");
+ok(source.includes("authorHeadlineFrom") && source.includes("connectionDegreeFrom") && source.includes("canonicalAuthorPath"), "bounded visible author context supports person fit and stable local spacing");
+ok(source.includes("rankLinkedInOpportunities") && source.includes("relationshipNote"), "ready opportunities enforce repeat-author spacing with visible explanations");
+ok(client.includes("draftLinkedInComment") && client.includes("linkedinCommentIssues") && client.includes("QUALITY REVIEW") && client.includes("cleanLinkedInComment"), "LinkedIn uses a dedicated draft path with one diagnostic repair pass and a platform-safe cleaner");
+ok(popup.includes("LinkedIn comment voice") && popup.includes("CONFIG.LI_VOICE_KEY") && popup.includes("style evidence only"), "the profile exposes a LinkedIn-specific style layer with a factual-evidence boundary");
+ok(popup.includes("LinkedIn comment thesis") && popup.includes("CONFIG.LI_STRATEGY_KEY") && popup.includes("People or organizations worth meeting"), "the popup exposes an explicit LinkedIn person-and-post strategy");
+ok(worker.includes("linkedInStrategyConfigured(strategy)") && source.includes("linkedInStrategyConfigured(store[CONFIG.LI_STRATEGY_KEY])") && popup.includes("liProfileReady"), "a LinkedIn thesis is a first-class setup path and does not require an X focus");
+ok(worker.includes('case "LI_BROKER_STATUS"') && source.includes('type: "LI_BROKER_STATUS"') && source.includes("broker?.protocol === LI_BROKER_PROTOCOL"), "content script blocks scoring when Chrome is running a stale background worker");
+ok(source.includes('await markPosted(id, "copy")') && source.includes('source === "copy"') && source.includes("Commented · copied for review and removed from the list"), "Copy & review immediately records Commented and removes the opportunity");
+ok(source.includes('type: "LI_MARK_POSTED"') && source.includes('type: "LI_UNDO_POSTED"') && source.includes("Mark posted") && !source.includes("Confirm posted"), "commented activity supports exact undo and legacy/manual marks");
+ok(source.includes("isSupportedLinkedInUrl(location.href)") && policy.includes("FEED_ROUTE") && policy.includes("POSTS_DETAIL_ROUTE"), "scanning is synchronously restricted to supported feed/post routes");
+ok(worker.includes("supportedLinkedInSender(sender)") && worker.includes("canUseLinkedInBroker") && worker.includes("sanitizeLinkedInScorePayload"), "the worker independently gates sender, consent, enablement, and payload shape");
+ok(worker.includes("const frameUrl = typeof sender.url") && worker.includes("const tabUrl = typeof sender.tab.url") && worker.includes("hasSupportedLinkedInSenderUrl(frameUrl, tabUrl)"), "LinkedIn sender validation accepts either trusted Chrome URL snapshot without accepting unsupported surfaces");
+ok(worker.includes("linkedInActivityAllowed(sender)") && worker.includes("LI_CONSENT_VERSION"), "review and confirmation writes recheck current LinkedIn consent and enablement");
+ok(worker.includes("mutateLinkedInLog") && worker.includes("undoLatestComment"), "activity writes are serialized through canonical LinkedIn state");
+ok(source.includes("dataset.preserveFocus") && source.includes("priorScrollTop") && source.includes("setSelectionRange"), "dock refreshes preserve editor focus, caret, and scroll");
+ok((source.match(/attachShadow\(\{ mode: "closed" \}\)/g) || []).length >= 2, "dock and in-feed rail are isolated in closed Shadow DOM");
+ok(!/\.click\s*\(/.test(source), "content script never programmatically clicks LinkedIn controls");
+ok(!/execCommand|dispatchEvent|InputEvent|contenteditable|window\.open|chrome\.tabs/.test(source), "content script has no composer-write, synthetic-event, tab-open, or navigation primitive");
+ok(!/TWTTR_|OPEN_REPLY_POST|twitter241|rapidapi/i.test(source), "LinkedIn surface cannot reach X-only provider or handoff paths");
+ok(source.includes("promoted(post") && /promoted\|sponsored\|advertisement/i.test(source), "promoted feed content is explicitly filtered");
+ok(source.includes("[data-testid='mainFeed'] [role='listitem']") && source.includes("[data-testid='expandable-text-box']"), "current semantic LinkedIn feed hooks are covered alongside legacy selectors");
+ok(source.includes("isSelfPost(node)"), "the user's own personal-profile posts are excluded from comment opportunities");
+ok(source.includes("mountGoobi(stage") && source.includes('body: LI_BLUE') && !source.includes('textContent = "G"'), "the real Goobi creature uses the LinkedIn-blue palette instead of letter placeholders");
+ok(source.includes("reducedMotion:") && source.includes("prefers-reduced-motion"), "the LinkedIn creature honors reduced-motion preferences");
+ok(goobi.includes("opts?.palette?.body ?? CORAL") && goobi.includes("if (reducedMotion)"), "Goobi palette defaults preserve X while reduced motion suppresses creature timers");
+ok(goobi.includes("ctx?.setTransform(dpr, 0, 0, dpr, 0, 0)"), "Goobi paints at the intended logical size on high-DPI displays");
+ok(source.includes("image.currentSrc") && source.includes("data-delayed-url") && source.includes("data-view-name='feed-actor-image'"), "post avatars cover current, lazy, and legacy LinkedIn image hooks");
+ok(source.indexOf("for (const selector of ACTOR_IMAGE_SELECTORS)") < source.indexOf("const profileImages = Array.from"), "avatar extraction prefers actor-specific containers before profile-link fallbacks");
+ok(source.includes('image.loading = "lazy"') && source.includes('image.decoding = "async"') && source.includes('image.referrerPolicy = "no-referrer"'), "rendered author portraits use privacy-conscious lazy image settings");
+ok(source.includes("avatar: avatarFrom(node, author)") && !/posts:\s*batch\.map\([\s\S]{0,500}avatar/.test(source), "avatars stay local and never enter the scoring payload");
+ok(source.includes("pendingIds.size") && source.includes("in review") && source.includes("Copy & review marks Commented and removes the opportunity"), "new copies use the one-click Commented flow while legacy in-review receipts remain actionable");
+ok(source.includes("Clear all ready") && source.includes("clearAllReadyOpportunities") && source.includes("In-review and confirmed activity were not changed"), "one clear-all action removes ready opportunities without touching either activity state");
+ok(source.includes("Clear all in review") && source.includes("clearAllPendingReviews") && source.includes("Confirmed activity was not changed"), "a separate clear-all action dismisses copied receipts without erasing confirmed comments");
+ok(source.includes("renderOrphanedReviews(body)") && source.includes("pendingReviews.set"), "persisted in-review items remain actionable when their feed card is no longer surfaced");
+ok(source.includes("receipt.wasPending ?") && source.includes("No copied-comment receipt was created"), "undo restores in-review only when confirmation actually consumed a copied receipt");
+ok(source.includes('reducedMotionQuery.addEventListener("change"') && source.includes('reducedMotionQuery.removeEventListener("change"'), "live reduced-motion changes remount and clean up the LinkedIn creature");
+
+console.log(fail === 0 ? `\n✓ LinkedIn copilot: ${pass} assertions passed` : `\n✗ LinkedIn copilot: ${fail} failed, ${pass} passed`);
+process.exit(fail === 0 ? 0 : 1);

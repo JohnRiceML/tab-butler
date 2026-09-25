@@ -10,6 +10,13 @@
 export type GoobiMood = "idle" | "sleeping" | "searching" | "thinking" | "happy" | "worn" | "cheer" | "love" | "trick";
 
 export interface GoobiHandle { el: HTMLCanvasElement; setMood(m: GoobiMood): void; trick(): void; play(move: string): void; destroy(): void; }
+export interface GoobiPalette {
+  body?: string;
+  worn?: string;
+  love?: string;
+  eye?: string;
+  highlight?: string;
+}
 
 /** The happy-move pool — picked at random by trick(). Every class must exist in the CSS of
  *  BOTH surfaces that mount Goobi (DOCK_CSS in x-copilot + popup.html). 'g-dance' is weighted. */
@@ -69,12 +76,20 @@ function loveFace(): string[][] { // red heart eyes
   return g;
 }
 
-function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body: string): void {
+function paint(
+  ctx: CanvasRenderingContext2D,
+  g: string[][],
+  cell: number,
+  body: string,
+  love = LOVE_RED,
+  eye = EYE,
+  highlight = HILITE,
+): void {
   ctx.clearRect(0, 0, COLS * cell, ROWS * cell);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     const ch = g[r][c];
     if (ch === ".") continue;
-    ctx.fillStyle = ch === "E" ? EYE : ch === "H" ? HILITE : ch === "R" ? LOVE_RED : body;
+    ctx.fillStyle = ch === "E" ? eye : ch === "H" ? highlight : ch === "R" ? love : body;
     ctx.fillRect(c * cell, r * cell, cell + 0.5, cell + 0.5);
   }
 }
@@ -82,13 +97,13 @@ function paint(ctx: CanvasRenderingContext2D, g: string[][], cell: number, body:
 /** A few little hearts that float up + fade from Goobi — fired when he loves something.
  *  Positioned by the CANVAS box (not the host), so they line up with Goobi even when the
  *  host is much taller than him (e.g. the playground stage, where he sits at the bottom). */
-function emitHearts(host: HTMLElement, canvas: HTMLCanvasElement): void {
+function emitHearts(host: HTMLElement, canvas: HTMLCanvasElement, color = LOVE_RED): void {
   try { if (getComputedStyle(host).position === "static") host.style.position = "relative"; } catch { /* ignore */ }
   const cx = canvas.offsetLeft, cy = canvas.offsetTop, cw = canvas.offsetWidth || host.clientWidth;
   for (let i = 0; i < 3; i++) {
     const heart = document.createElement("span");
     heart.textContent = "♥";
-    heart.style.cssText = `position:absolute;left:${cx + cw * (0.26 + Math.random() * 0.48)}px;top:${cy + 4}px;color:${LOVE_RED};font-size:${11 + Math.round(Math.random() * 6)}px;pointer-events:none;z-index:6;opacity:0;`;
+    heart.style.cssText = `position:absolute;left:${cx + cw * (0.26 + Math.random() * 0.48)}px;top:${cy + 4}px;color:${color};font-size:${11 + Math.round(Math.random() * 6)}px;pointer-events:none;z-index:6;opacity:0;`;
     host.appendChild(heart);
     const rise = 26 + Math.random() * 22;
     heart.animate(
@@ -124,9 +139,15 @@ const ANIM: Record<GoobiMood, string> = { idle: "g-bob", sleeping: "g-snooze", s
 
 /** Render a small, mood-driven Goobi into `host` (replaces its contents). Returns a
  *  handle to drive his mood. Frame loops self-stop when the canvas detaches (no leak). */
-export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: boolean }): GoobiHandle {
+export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: boolean; reducedMotion?: boolean; palette?: GoobiPalette }): GoobiHandle {
   const cell = opts?.cell ?? 2;
   const playful = opts?.playful ?? false; // energetic idle (jumps/dances) for the playground
+  const bodyColor = opts?.palette?.body ?? CORAL;
+  const wornColor = opts?.palette?.worn ?? RED;
+  const loveColor = opts?.palette?.love ?? LOVE_RED;
+  const eyeColor = opts?.palette?.eye ?? EYE;
+  const highlightColor = opts?.palette?.highlight ?? HILITE;
+  const reducedMotion = opts?.reducedMotion ?? false;
   host.replaceChildren();
   const canvas = document.createElement("canvas");
   const dpr = window.devicePixelRatio || 1;
@@ -134,6 +155,7 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
   canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   canvas.style.width = w + "px"; canvas.style.height = h + "px";
   const ctx = canvas.getContext("2d");
+  ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
   host.appendChild(canvas);
 
   let mood: GoobiMood = "idle";
@@ -144,11 +166,26 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
   function run(m: GoobiMood): void {
     if (!ctx) return;
     mood = m;
-    canvas.className = "gcv " + ANIM[m];
+    canvas.className = reducedMotion ? "gcv" : "gcv " + ANIM[m];
     stop();
-    const body = m === "worn" ? RED : CORAL;
+    const body = m === "worn" ? wornColor : bodyColor;
+    const stillFace = m === "sleeping"
+      ? eyesClosed()
+      : m === "love"
+        ? loveFace()
+        : m === "happy" || m === "cheer" || m === "trick"
+          ? faceWith(HAPPY)
+          : m === "worn"
+            ? faceWith(XEYES)
+            : m === "thinking"
+              ? eyesUp()
+              : grid();
+    if (reducedMotion) {
+      paint(ctx, stillFace, cell, body, loveColor, eyeColor, highlightColor);
+      return;
+    }
     if (m === "sleeping") {
-      paint(ctx, eyesClosed(), cell, body); // shut eyes; the z's float up as their own elements
+      paint(ctx, eyesClosed(), cell, body, loveColor, eyeColor, highlightColor); // shut eyes; the z's float up as their own elements
       const tick = () => { if (!alive() || mood !== "sleeping") return; emitSleepZ(host); timer = window.setTimeout(tick, 1700 + Math.random() * 900); };
       timer = window.setTimeout(tick, 350);
     } else if (m === "searching") {
@@ -156,32 +193,32 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
       const frames = [eyesShift(1), grid(), eyesUp(), eyesShift(-1), grid()];
       const holds = [320, 190, 300, 320, 190];
       let i = 0;
-      const tick = () => { if (!alive() || mood !== "searching") return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
+      const tick = () => { if (!alive() || mood !== "searching") return; paint(ctx, frames[i % frames.length], cell, body, loveColor, eyeColor, highlightColor); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
       tick();
     } else if (m === "thinking") {
       // Eyes scan up-around while he concentrates (+ a gentle think-pulse css).
       const frames = [eyesUp(0), eyesUp(-1), eyesUp(0), eyesUp(1)];
       const holds = [560, 520, 560, 520];
       let i = 0;
-      const tick = () => { if (!alive() || mood !== "thinking") return; paint(ctx, frames[i % frames.length], cell, body); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
+      const tick = () => { if (!alive() || mood !== "thinking") return; paint(ctx, frames[i % frames.length], cell, body, loveColor, eyeColor, highlightColor); const hold = holds[i % holds.length]; i++; timer = window.setTimeout(tick, hold); };
       tick();
     } else if (m === "love") {
-      paint(ctx, loveFace(), cell, body); // red heart eyes + a smitten bounce (css)
-      emitHearts(host, canvas); // little hearts float up from Goobi himself
+      paint(ctx, loveFace(), cell, body, loveColor, eyeColor, highlightColor); // heart eyes + a smitten bounce (css)
+      emitHearts(host, canvas, loveColor); // little hearts float up from Goobi himself
 
     } else if (m === "happy" || m === "cheer" || m === "trick") {
-      paint(ctx, faceWith(HAPPY), cell, body); // held ^‿^ + bob/tada/spin (css); 'trick' adds the g-trick flip
+      paint(ctx, faceWith(HAPPY), cell, body, loveColor, eyeColor, highlightColor); // held ^‿^ + bob/tada/spin (css); 'trick' adds the g-trick flip
     } else if (m === "worn") {
-      paint(ctx, faceWith(XEYES), cell, body); // dizzy + red + wobble (css)
+      paint(ctx, faceWith(XEYES), cell, body, loveColor, eyeColor, highlightColor); // dizzy + alert color + wobble (css)
     } else { // idle — base bob + a varied, random rotation of little idle moves
-      const p = (g: string[][]) => { if (alive() && mood === "idle") paint(ctx, g, cell, body); };
-      paint(ctx, grid(), cell, body);
+      const p = (g: string[][]) => { if (alive() && mood === "idle") paint(ctx, g, cell, body, loveColor, eyeColor, highlightColor); };
+      paint(ctx, grid(), cell, body, loveColor, eyeColor, highlightColor);
       // Eye flourishes (keep the bob; just repaint the eyes):
       const blink = () => { p(eyesHalf()); window.setTimeout(() => p(eyesClosed()), 70); window.setTimeout(() => p(eyesHalf()), 160); window.setTimeout(() => p(grid()), 230); };
       const look  = () => { p(eyesShift(1)); window.setTimeout(() => p(grid()), 620); window.setTimeout(() => p(eyesShift(-1)), 920); window.setTimeout(() => p(grid()), 1540); };
       const wink  = () => { p(winkRight()); window.setTimeout(() => p(grid()), 340); };
       // Body flourishes (swap the CSS animation for one cycle, then back to the bob):
-      const base = () => { if (alive() && mood === "idle") { canvas.className = "gcv g-bob"; paint(ctx, grid(), cell, body); } };
+      const base = () => { if (alive() && mood === "idle") { canvas.className = "gcv g-bob"; paint(ctx, grid(), cell, body, loveColor, eyeColor, highlightColor); } };
       const css  = (cls: string, ms: number) => { if (alive() && mood === "idle") { canvas.className = "gcv " + cls; window.setTimeout(base, ms); } };
       const calm: Array<() => void> = [
         blink, blink, blink, look, wink,
@@ -208,7 +245,7 @@ export function mountGoobi(host: HTMLElement, opts?: { cell?: number; playful?: 
     if (!ctx) return;
     stop();
     canvas.className = "gcv " + m;
-    paint(ctx, faceWith(HAPPY), cell, CORAL);
+    paint(ctx, faceWith(HAPPY), cell, bodyColor, loveColor, eyeColor, highlightColor);
     timer = window.setTimeout(() => { if (alive()) run(mood); }, 1050);
   }
   /** A random happy move — used when Goobi's pumped (playground feed/pet). */

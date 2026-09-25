@@ -2,7 +2,7 @@
  * Layer B (live LLM-judge) eval for the reply DRAFTER — the product's paid action. OPT-IN and
  * costs money, so it is NOT part of the default gate. For each fixture it drafts a reply twice
  * with the REAL X_DRAFT_SYSTEM (Sonnet): BARE (today's minimal user message) and ENRICHED (with
- * the REAL buildDraftContext block) — then a Haiku judge scores both, so the context enrichment
+ * the REAL buildDraftContext block) — then a Sonnet judge scores both, so the context enrichment
  * is a measured before/after delta, not a hope.
  *
  * The judge's headline dimension is anchored to a mechanism X's published code shows it runs:
@@ -26,7 +26,7 @@ if (!LIVE || !KEY) {
   console.log(`Layer B — live draft-reply eval (opt-in, ~$0.25/run).
   Run:  ANTHROPIC_API_KEY=sk-... node scripts/eval-draft-reply-live.mjs --live
   Drafts each fixture BARE vs ENRICHED (the real buildDraftContext block) with the real
-  X_DRAFT_SYSTEM (Sonnet), then a Haiku judge scores both on a 0-3 rubric anchored to the
+  X_DRAFT_SYSTEM (Sonnet), then a Sonnet judge scores both on a 0-3 rubric anchored to the
   LLM reply-grading mechanism in X's published pipeline. No --live or no key -> no-op.`);
   process.exit(0);
 }
@@ -83,7 +83,7 @@ async function anthropic(model, system, user, maxTokens) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, thinking: { type: "disabled" }, system, messages: [{ role: "user", content: user }] }),
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const data = await res.json();
@@ -114,10 +114,10 @@ const DIMS = ["grade", "slopTells", "valueAdd", "voiceMatch", "profilePull"];
 const rows = [];
 for (const f of FIXTURES) {
   try {
-    const bare = (await anthropic("claude-sonnet-4-6", X_DRAFT_SYSTEM, draftUser(f, false), 400)).trim();
-    const rich = (await anthropic("claude-sonnet-4-6", X_DRAFT_SYSTEM, draftUser(f, true), 400)).trim();
-    const vBare = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SYSTEM, judgeUser(f, bare), 400));
-    const vRich = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SYSTEM, judgeUser(f, rich), 400));
+    const bare = (await anthropic("claude-sonnet-5", X_DRAFT_SYSTEM, draftUser(f, false), 400)).trim();
+    const rich = (await anthropic("claude-sonnet-5", X_DRAFT_SYSTEM, draftUser(f, true), 400)).trim();
+    const vBare = parseJson(await anthropic("claude-sonnet-5", JUDGE_SYSTEM, judgeUser(f, bare), 400));
+    const vRich = parseJson(await anthropic("claude-sonnet-5", JUDGE_SYSTEM, judgeUser(f, rich), 400));
     rows.push({ f, bare, rich, vBare, vRich });
     console.log(`\n● ${f.name}`);
     console.log(`  bare:     ${DIMS.map((d) => `${d} ${vBare[d] ?? "?"}`).join(" · ")}`);
@@ -134,7 +134,7 @@ if (rows.length) {
   // Judge stability: re-grade the same reply; deltas smaller than the observed drift are noise.
   try {
     const first = rows[0];
-    const v2 = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SYSTEM, judgeUser(first.f, first.bare), 400));
+    const v2 = parseJson(await anthropic("claude-sonnet-5", JUDGE_SYSTEM, judgeUser(first.f, first.bare), 400));
     const drift = Math.max(...DIMS.map((d) => Math.abs((Number(first.vBare[d]) || 0) - (Number(v2[d]) || 0))));
     console.log(`  judge stability (re-graded "${first.f.name}" bare): max drift ${drift} ${drift <= 1 ? "(stable)" : "(noisy — treat small deltas with caution)"}`);
   } catch { /* stability check is best-effort */ }

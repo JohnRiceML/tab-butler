@@ -1,7 +1,7 @@
 /**
  * Layer B (live) gate for the post-ideas SECOND PASS (reject-and-regenerate). Mirrors the product
  * path in claude-client.refinePostIdeas: generate with the real POST_IDEAS_SYSTEM (Sonnet) → a
- * Haiku POST_IDEAS_JUDGE flags swap-test failures → Sonnet POST_IDEAS_REGEN rewrites ONLY those →
+ * Sonnet POST_IDEAS_JUDGE flags swap-test failures → Sonnet POST_IDEAS_REGEN rewrites ONLY those →
  * re-judge. Reports pass-1 vs pass-2 so the lift the second pass adds is measured, not hoped.
  *
  *   ANTHROPIC_API_KEY=sk-... node scripts/eval-post-ideas-2pass.mjs --live
@@ -41,7 +41,7 @@ const FIXTURES = [
 async function anthropic(model, system, user, maxTokens) {
   const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
     headers: { "x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }) });
+    body: JSON.stringify({ model, max_tokens: maxTokens, thinking: { type: "disabled" }, system, messages: [{ role: "user", content: user }] }) });
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 160)}`);
   return ((await res.json()).content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
 }
@@ -64,19 +64,19 @@ const scoreUser = (f, ideas) => `User niche: ${f.niche}\nOwn posts:\n${f.ownPost
 const results = [];
 for (const f of FIXTURES) {
   try {
-    const gen = parseJson(await anthropic("claude-sonnet-4-6", POST_IDEAS_SYSTEM, buildUser(f), 2200));
+    const gen = parseJson(await anthropic("claude-sonnet-5", POST_IDEAS_SYSTEM, buildUser(f), 2200));
     let ideas = (gen.ideas || []).slice(0, 5).filter((d) => d.text);
-    const s1 = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SCORE, scoreUser(f, ideas), 400));
+    const s1 = parseJson(await anthropic("claude-sonnet-5", JUDGE_SCORE, scoreUser(f, ideas), 400));
     // the PRODUCT's second pass: a swap-test judge flags fails, Sonnet regenerates just those
-    const flags = parseJson(await anthropic("claude-haiku-4-5", POST_IDEAS_JUDGE_SYSTEM, `${buildUser(f)}\n\nThe 5 generated ideas to swap-test:\n${ideas.map((d, i) => `${i + 1}. ${d.text}`).join("\n\n")}`, 300));
+    const flags = parseJson(await anthropic("claude-sonnet-5", POST_IDEAS_JUDGE_SYSTEM, `${buildUser(f)}\n\nThe 5 generated ideas to swap-test:\n${ideas.map((d, i) => `${i + 1}. ${d.text}`).join("\n\n")}`, 300));
     const fails = (flags.swapTestFails || []).filter((n) => n >= 1 && n <= ideas.length);
     if (fails.length) {
       const flagged = fails.map((n) => ideas[n - 1].text);
-      const re = parseJson(await anthropic("claude-sonnet-4-6", POST_IDEAS_REGEN_SYSTEM, `${buildUser(f)}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, i) => `${i + 1}. ${t}`).join("\n\n")}`, 1600));
+      const re = parseJson(await anthropic("claude-sonnet-5", POST_IDEAS_REGEN_SYSTEM, `${buildUser(f)}\n\nThe drafts that failed the swap test (rewrite each into something only this user could post, in order):\n${flagged.map((t, i) => `${i + 1}. ${t}`).join("\n\n")}`, 1600));
       const repl = (re.ideas || []).map((d) => d.text).filter(Boolean);
       fails.forEach((n, k) => { if (repl[k]) ideas[n - 1] = { text: repl[k] }; });
     }
-    const s2 = parseJson(await anthropic("claude-haiku-4-5", JUDGE_SCORE, scoreUser(f, ideas), 400));
+    const s2 = parseJson(await anthropic("claude-sonnet-5", JUDGE_SCORE, scoreUser(f, ideas), 400));
     results.push({ name: f.name, s1, s2, regenerated: fails.length });
     console.log(`\n● ${f.name}: regenerated ${fails.length}/5`);
     console.log(`  pass1: slopFree ${s1.slopFree} · antiGeneric ${s1.antiGeneric} · swapFails ${(s1.swapTestFails || []).length}`);
